@@ -1,0 +1,5 @@
+.:53 {
+    log
+    errors
+    file /zones/internal.jerkytreats.dev.db internal.jerkytreats.dev
+}

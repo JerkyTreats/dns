@@ -1,0 +1,23 @@
+$TTL 1h
+@   IN  SOA ns.internal.jerkytreats.dev. admin.internal.jerkytreats.dev. (
+        2025061501 ; serial - update on changes (YYYYMMDDnn)
+        1h         ; refresh
+        15m        ; retry
+        30d        ; expire
+        2h )       ; minimum TTL
+
+    IN  NS  ns.internal.jerkytreats.dev.
+
+; === Core Devices ===
+ns              IN  A   100.65.225.93   ; omnitron (NAS, DNS host)
+omnitron        IN  A   100.65.225.93
+dns             IN  A   100.65.225.93
+
+macbook         IN  A   100.115.251.3   ; revenantor (MacBook)
+dev             IN  A   100.115.251.3
+
+; android         IN  A   100.114.128.76  ; google-pixel-6
+; pixel           IN  A   100.114.128.76
+
+; === Optional / Offline ===
+; windows         IN  A   100.90.168.49   ; antarus (Windows, currently offline)
