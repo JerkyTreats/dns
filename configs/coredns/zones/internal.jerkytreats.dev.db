@@ -1,13 +1,26 @@
 $ORIGIN internal.jerkytreats.dev.
 $TTL 3600
 
-@       IN      SOA     ns1.internal.jerkytreats.dev. admin.internal.jerkytreats.dev. (
-                        2024031501 ; serial
+@       IN      SOA     ns.internal.jerkytreats.dev. admin.internal.jerkytreats.dev. (
+                        2024031502 ; serial - incremented
                         3600       ; refresh
                         1800       ; retry
                         604800     ; expire
                         86400      ; minimum
                         )
 
-@       IN      NS      ns1.internal.jerkytreats.dev.
-ns1     IN      A       127.0.0.1
+@       IN      NS      ns.internal.jerkytreats.dev.
+
+; === Core Devices ===
+ns              IN  A   100.65.225.93   ; omnitron (NAS, DNS host)
+omnitron        IN  A   100.65.225.93
+dns             IN  A   100.65.225.93
+
+macbook         IN  A   100.115.251.3   ; revenantor (MacBook)
+dev             IN  A   100.115.251.3
+
+; android         IN  A   100.114.128.76  ; google-pixel-6
+; pixel           IN  A   100.114.128.76
+
+; === Optional / Offline ===
+; windows         IN  A   100.90.168.49   ; antarus (Windows, currently offline)
