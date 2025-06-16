@@ -22,7 +22,7 @@ func main() {
 	defer logger.Sync()
 
 	// Load configuration
-	viper.SetConfigName("config")
+	viper.SetConfigName("config.yaml")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath("./configs")
 	if err := viper.ReadInConfig(); err != nil {
