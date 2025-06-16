@@ -1,9 +1,9 @@
 # Use official CoreDNS image
-FROM coredns/coredns:latest
+FROM coredns/coredns:1.11.1
 
 # Copy Corefile and zone definitions
-COPY coredns/Corefile /Corefile
-COPY coredns/zones/ /zones/
+COPY configs/coredns/Corefile /etc/coredns/Corefile
+COPY configs/coredns/zones/ /zones/
 
 # Default command to run CoreDNS with the Corefile
-CMD ["-conf", "/Corefile"]
+CMD ["-conf", "/etc/coredns/Corefile"]

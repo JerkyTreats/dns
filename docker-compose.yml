@@ -9,7 +9,6 @@ services:
       - "8080:8080"
     volumes:
       - ./configs:/app/configs
-      - ./coredns:/app/coredns
     environment:
       - APP_ENV=development
     depends_on:
@@ -24,7 +23,7 @@ services:
       - "53:53/tcp"
     volumes:
       - ./configs/coredns:/etc/coredns
-      - ./coredns/zones:/zones
+      - ./configs/coredns/zones:/zones
     command: -conf /etc/coredns/Corefile
     networks:
       - dns-network

@@ -7,5 +7,5 @@
 internal.jerkytreats.dev:53 {
     errors
     log
-    file /zones/internal.jerkytreats.dev.zone
+    file /zones/internal.jerkytreats.dev.db internal.jerkytreats.dev
 }
