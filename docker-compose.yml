@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./configs:/app/configs
+      - ./coredns:/app/coredns
+    environment:
+      - APP_ENV=development
+    depends_on:
+      - coredns
+    networks:
+      - dns-network
+
+  coredns:
+    image: coredns/coredns:1.11.1
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    volumes:
+      - ./configs/coredns:/etc/coredns
+      - ./coredns/zones:/zones
+    command: -conf /etc/coredns/Corefile
+    networks:
+      - dns-network
+
+networks:
+  dns-network:
+    driver: bridge

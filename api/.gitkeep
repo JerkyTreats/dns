@@ -1,0 +1,3 @@
+# This file keeps the api/ directory in git
+# Place OpenAPI/Swagger specs, protocol definition files here
+# Example: api/openapi.yaml, api/proto files

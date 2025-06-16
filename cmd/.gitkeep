@@ -1,0 +1,3 @@
+# This file keeps the cmd/ directory in git
+# Place main application entrypoints here
+# Example: cmd/server/main.go, cmd/cli/main.go

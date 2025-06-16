@@ -1,0 +1,11 @@
+. {
+    errors
+    log
+    forward . /etc/resolv.conf
+}
+
+internal.jerkytreats.dev:53 {
+    errors
+    log
+    file /zones/internal.jerkytreats.dev.zone
+}

@@ -1,0 +1,16 @@
+swagger:
+  enabled: true
+  path: /swagger
+  spec_path: /docs/openapi.yaml
+  security:
+    enabled: true
+    type: basic
+  ui:
+    title: DNS Manager API Documentation
+    theme: dark
+    doc_expansion: list
+    default_models_expand_depth: 3
+    default_model_expand_depth: 3
+    display_request_duration: true
+    filter: true
+    try_it_out_enabled: true

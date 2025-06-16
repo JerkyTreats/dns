@@ -1,0 +1,139 @@
+openapi: 3.0.3
+info:
+  title: DNS Manager API
+  description: API for managing internal DNS records
+  version: 1.0.0
+servers:
+  - url: https://dns.internal.jerkytreats.dev
+    description: Production server
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the API and its dependencies
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /add-record:
+    post:
+      summary: Add a new internal DNS record
+      description: Creates a new DNS record for a service in the internal domain
+      operationId: addRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddRecordRequest'
+      responses:
+        '200':
+          description: Record added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddRecordResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - version
+        - components
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+          description: Overall health status
+        version:
+          type: string
+          description: API version
+        components:
+          type: object
+          properties:
+            api:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [healthy, unhealthy]
+                message:
+                  type: string
+            coredns:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [healthy, unhealthy]
+                message:
+                  type: string
+    AddRecordRequest:
+      type: object
+      required:
+        - service_name
+      properties:
+        service_name:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+          minLength: 1
+          maxLength: 63
+          description: Name of the service to add
+          example: "new-service"
+    AddRecordResponse:
+      type: object
+      required:
+        - status
+        - message
+        - data
+      properties:
+        status:
+          type: string
+          enum: [success, error]
+        message:
+          type: string
+          description: Operation result message
+        data:
+          type: object
+          properties:
+            hostname:
+              type: string
+              format: hostname
+              example: "new-service.internal.jerkytreats.dev"
+    ErrorResponse:
+      type: object
+      required:
+        - status
+        - message
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+          description: Error message
+        error_code:
+          type: string
+          description: Machine-readable error code
