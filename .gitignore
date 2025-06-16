@@ -67,8 +67,8 @@ coverage/
 # Air live reload tool
 tmp/
 
-# Application specific
-config.yaml
-config.json
-!configs/config.example.yaml
-!configs/config.example.json
+# # Application specific
+# config.yaml
+# config.json
+# !configs/config.example.yaml
+# !configs/config.example.json

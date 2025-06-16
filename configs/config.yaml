@@ -1,0 +1,23 @@
+app:
+  name: dns-manager
+  version: 1.0.0
+  environment: development
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 120s
+
+dns:
+  domain: internal.jerkytreats.dev
+  coredns:
+    config_path: /etc/coredns/Corefile
+    zones_path: /etc/coredns/zones
+    reload_command: ["kill", "-SIGUSR1", "1"]
+
+logging:
+  level: debug
+  format: json
+  output: stdout
