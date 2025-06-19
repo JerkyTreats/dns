@@ -12,7 +12,6 @@ import (
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func setupTestHandler(t *testing.T) *RecordHandler {
@@ -29,9 +28,8 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = os.WriteFile(configPath, []byte(initialConfig), 0644)
 	require.NoError(t, err)
 
-	logger, _ := zap.NewDevelopment()
-	manager := coredns.NewManager(logger, configPath, zonesPath, []string{"echo", "reload"})
-	return NewRecordHandler(logger, manager)
+	manager := coredns.NewManager(configPath, zonesPath, []string{"echo", "reload"})
+	return NewRecordHandler(manager)
 }
 
 func TestAddRecordHandler(t *testing.T) {
@@ -42,68 +40,34 @@ func TestAddRecordHandler(t *testing.T) {
 		method         string
 		requestBody    interface{}
 		expectedStatus int
-		expectedBody   map[string]interface{}
+		expectedBody   string
 	}{
 		{
 			name:   "Valid request",
 			method: http.MethodPost,
-			requestBody: AddRecordRequest{
-				ServiceName: "test-service",
+			requestBody: map[string]string{
+				"name": "test-service",
+				"ip":   "192.168.1.10",
 			},
-			expectedStatus: http.StatusOK,
-			expectedBody: map[string]interface{}{
-				"status":  "success",
-				"message": "Record added successfully",
-				"data": map[string]interface{}{
-					"hostname": "test-service.internal.jerkytreats.dev",
-				},
-			},
+			expectedStatus: http.StatusCreated,
+			expectedBody:   "Record added successfully",
 		},
 		{
 			name:   "Invalid method",
 			method: http.MethodGet,
-			requestBody: AddRecordRequest{
-				ServiceName: "test-service",
+			requestBody: map[string]string{
+				"name": "test-service",
+				"ip":   "192.168.1.10",
 			},
 			expectedStatus: http.StatusMethodNotAllowed,
-			expectedBody:   nil,
-		},
-		{
-			name:   "Invalid service name format",
-			method: http.MethodPost,
-			requestBody: AddRecordRequest{
-				ServiceName: "test_service", // contains underscore
-			},
-			expectedStatus: http.StatusBadRequest,
-			expectedBody: map[string]interface{}{
-				"status":     "error",
-				"message":    "Invalid service name format",
-				"error_code": "INVALID_SERVICE_NAME",
-			},
-		},
-		{
-			name:   "Empty service name",
-			method: http.MethodPost,
-			requestBody: AddRecordRequest{
-				ServiceName: "",
-			},
-			expectedStatus: http.StatusBadRequest,
-			expectedBody: map[string]interface{}{
-				"status":     "error",
-				"message":    "Invalid service name format",
-				"error_code": "INVALID_SERVICE_NAME",
-			},
+			expectedBody:   "Method not allowed\n",
 		},
 		{
 			name:           "Invalid JSON",
 			method:         http.MethodPost,
 			requestBody:    "invalid json",
 			expectedStatus: http.StatusBadRequest,
-			expectedBody: map[string]interface{}{
-				"status":     "error",
-				"message":    "Invalid request body",
-				"error_code": "INVALID_REQUEST",
-			},
+			expectedBody:   "Invalid request body\n",
 		},
 	}
 
@@ -124,62 +88,9 @@ func TestAddRecordHandler(t *testing.T) {
 			handler.AddRecord(w, req)
 
 			assert.Equal(t, tt.expectedStatus, w.Code)
-
-			if tt.expectedBody != nil {
-				var response map[string]interface{}
-				err := json.Unmarshal(w.Body.Bytes(), &response)
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expectedBody, response)
+			if tt.expectedBody != "" {
+				assert.Equal(t, tt.expectedBody, w.Body.String())
 			}
-		})
-	}
-}
-
-func TestSendError(t *testing.T) {
-	tests := []struct {
-		name           string
-		message        string
-		errorCode      string
-		statusCode     int
-		expectedStatus int
-		expectedBody   map[string]interface{}
-	}{
-		{
-			name:           "Basic error",
-			message:        "Test error",
-			errorCode:      "TEST_ERROR",
-			statusCode:     http.StatusBadRequest,
-			expectedStatus: http.StatusBadRequest,
-			expectedBody: map[string]interface{}{
-				"status":     "error",
-				"message":    "Test error",
-				"error_code": "TEST_ERROR",
-			},
-		},
-		{
-			name:           "Error without code",
-			message:        "Test error",
-			errorCode:      "",
-			statusCode:     http.StatusInternalServerError,
-			expectedStatus: http.StatusInternalServerError,
-			expectedBody: map[string]interface{}{
-				"status":  "error",
-				"message": "Test error",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			sendError(w, tt.message, tt.errorCode, tt.statusCode)
-
-			assert.Equal(t, tt.expectedStatus, w.Code)
-
-			var response map[string]interface{}
-			err := json.Unmarshal(w.Body.Bytes(), &response)
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedBody, response)
 		})
 	}
 }

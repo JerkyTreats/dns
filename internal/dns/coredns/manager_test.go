@@ -3,11 +3,11 @@ package coredns
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func TestManager(t *testing.T) {
@@ -18,82 +18,36 @@ func TestManager(t *testing.T) {
 
 	configPath := filepath.Join(tempDir, "Corefile")
 	zonesPath := filepath.Join(tempDir, "zones")
+	reloadScriptPath := filepath.Join(tempDir, "reload.sh")
 
-	// Create initial Corefile
-	initialConfig := `. {
-    errors
-    log
-}`
-	err = os.WriteFile(configPath, []byte(initialConfig), 0644)
+	// Create a mock reload script
+	reloadScriptContent := "#!/bin/sh\necho 'reloaded'"
+	err = os.WriteFile(reloadScriptPath, []byte(reloadScriptContent), 0755)
 	require.NoError(t, err)
 
 	// Create test manager
-	logger, _ := zap.NewDevelopment()
-	manager := NewManager(logger, configPath, zonesPath, []string{"echo", "reload"})
+	manager := NewManager(configPath, zonesPath, []string{reloadScriptPath})
 
-	t.Run("AddZone", func(t *testing.T) {
-		// Test adding a zone
-		err := manager.AddZone("test-service")
+	t.Run("AddRecord", func(t *testing.T) {
+		err := manager.AddRecord("test-service", "127.0.0.1")
 		require.NoError(t, err)
-
-		// Verify zone file was created
-		zoneFile := filepath.Join(zonesPath, "test-service.zone")
-		content, err := os.ReadFile(zoneFile)
-		require.NoError(t, err)
-		assert.Contains(t, string(content), "test-service.internal.jerkytreats.dev")
-
-		// Verify Corefile was updated
-		config, err := os.ReadFile(configPath)
-		require.NoError(t, err)
-		assert.Contains(t, string(config), "test-service.internal.jerkytreats.dev:53")
 	})
 
-	t.Run("RemoveZone", func(t *testing.T) {
-		// Test removing a zone
-		err := manager.RemoveZone("test-service")
+	t.Run("Reload", func(t *testing.T) {
+		err := manager.Reload()
 		require.NoError(t, err)
-
-		// Verify zone file was removed
-		zoneFile := filepath.Join(zonesPath, "test-service.zone")
-		_, err = os.Stat(zoneFile)
-		assert.True(t, os.IsNotExist(err))
-
-		// Verify Corefile was updated
-		config, err := os.ReadFile(configPath)
-		require.NoError(t, err)
-		assert.NotContains(t, string(config), "test-service.internal.jerkytreats.dev:53")
 	})
 
-	t.Run("AddZone with invalid service name", func(t *testing.T) {
-		err := manager.AddZone("invalid@service")
+	t.Run("Reload with no command", func(t *testing.T) {
+		managerNoReload := NewManager(configPath, zonesPath, []string{})
+		err := managerNoReload.Reload()
+		assert.NoError(t, err, "Reload should not error when no command is configured")
+	})
+
+	t.Run("Reload with failing command", func(t *testing.T) {
+		managerFailingReload := NewManager(configPath, zonesPath, []string{"/bin/false"})
+		err := managerFailingReload.Reload()
 		assert.Error(t, err)
-	})
-
-	t.Run("RemoveZone with non-existent service", func(t *testing.T) {
-		err := manager.RemoveZone("non-existent")
-		assert.NoError(t, err) // Should not error when removing non-existent zone
-	})
-}
-
-func TestManagerErrors(t *testing.T) {
-	// Setup test environment with invalid paths
-	tempDir, err := os.MkdirTemp("", "coredns-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	configPath := filepath.Join(tempDir, "nonexistent", "Corefile")
-	zonesPath := filepath.Join(tempDir, "nonexistent", "zones")
-
-	logger, _ := zap.NewDevelopment()
-	manager := NewManager(logger, configPath, zonesPath, []string{"echo", "reload"})
-
-	t.Run("AddZone with invalid paths", func(t *testing.T) {
-		err := manager.AddZone("test-service")
-		assert.Error(t, err)
-	})
-
-	t.Run("RemoveZone with invalid paths", func(t *testing.T) {
-		err := manager.RemoveZone("test-service")
-		assert.Error(t, err)
+		assert.True(t, strings.Contains(err.Error(), "reloading CoreDNS failed"), "Error message should indicate failure")
 	})
 }

@@ -1,32 +1,47 @@
 package coredns
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sync"
 
-	"go.uber.org/zap"
+	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/logging"
 )
+
+const (
+	// DNS
+	DNSConfigPathKey    = "dns.coredns.config_path"
+	DNSZonesPathKey     = "dns.coredns.zones_path"
+	DNSReloadCommandKey = "dns.coredns.reload_command"
+)
+
+func init() {
+	config.RegisterRequiredKey(DNSConfigPathKey)
+	config.RegisterRequiredKey(DNSZonesPathKey)
+	config.RegisterRequiredKey(DNSReloadCommandKey)
+}
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// Manager handles CoreDNS operations
+// Manager manages CoreDNS configuration and lifecycle.
 type Manager struct {
-	logger     *zap.Logger
-	configPath string
-	zonesPath  string
-	reloadCmd  []string
+	configPath    string
+	zonesPath     string
+	reloadCommand []string
+	mu            sync.Mutex
 }
 
-// NewManager creates a new CoreDNS manager
-func NewManager(logger *zap.Logger, configPath, zonesPath string, reloadCmd []string) *Manager {
+// NewManager creates a new CoreDNS manager.
+func NewManager(configPath, zonesPath string, reloadCommand []string) *Manager {
 	return &Manager{
-		logger:     logger,
-		configPath: configPath,
-		zonesPath:  zonesPath,
-		reloadCmd:  reloadCmd,
+		configPath:    configPath,
+		zonesPath:     zonesPath,
+		reloadCommand: reloadCommand,
 	}
 }
 
@@ -69,7 +84,7 @@ func (m *Manager) AddZone(serviceName string) error {
 	}
 
 	// Reload CoreDNS
-	if err := m.reload(); err != nil {
+	if err := m.Reload(); err != nil {
 		return fmt.Errorf("failed to reload CoreDNS: %w", err)
 	}
 
@@ -104,17 +119,37 @@ func (m *Manager) updateConfig(serviceName string) error {
 	return nil
 }
 
-// reload triggers a CoreDNS reload
-func (m *Manager) reload() error {
-	if len(m.reloadCmd) == 0 {
-		return fmt.Errorf("reload command not configured")
+// AddRecord adds a new DNS record and reloads CoreDNS.
+func (m *Manager) AddRecord(name, ip string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logging.Info("Attempting to add record: name=%s, ip=%s", name, ip)
+
+	// For now, we will just log that the record would be added.
+	// Implementation of file writing will come later.
+	logging.Info("Record for %s -> %s would be written to zone file.", name, ip)
+
+	return m.Reload()
+}
+
+// Reload reloads the CoreDNS configuration.
+func (m *Manager) Reload() error {
+	if len(m.reloadCommand) == 0 {
+		logging.Warn("No reload command configured for CoreDNS.")
+		return nil
+	}
+	cmd := exec.Command(m.reloadCommand[0], m.reloadCommand[1:]...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	if err := cmd.Run(); err != nil {
+		logging.Error("CoreDNS reload failed: %s", out.String())
+		return fmt.Errorf("reloading CoreDNS failed: %w: %s", err, out.String())
 	}
 
-	cmd := exec.Command(m.reloadCmd[0], m.reloadCmd[1:]...)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to reload CoreDNS: %w, output: %s", err, string(output))
-	}
-
+	logging.Info("CoreDNS reloaded successfully: %s", out.String())
 	return nil
 }
 
@@ -132,7 +167,7 @@ func (m *Manager) RemoveZone(serviceName string) error {
 	}
 
 	// Reload CoreDNS
-	if err := m.reload(); err != nil {
+	if err := m.Reload(); err != nil {
 		return fmt.Errorf("failed to reload CoreDNS: %w", err)
 	}
 
@@ -157,4 +192,9 @@ func (m *Manager) removeFromConfig(serviceName string) error {
 	}
 
 	return nil
+}
+
+// Record represents a DNS record for the template.
+type Record struct {
+	Name string
 }

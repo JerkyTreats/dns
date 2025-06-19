@@ -6,13 +6,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/spf13/viper"
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestHealthCheckHandler(t *testing.T) {
 	// Setup test configuration
-	viper.Set("app.version", "1.0.0")
+	config.SetForTest("app.version", "1.0.0")
+	t.Cleanup(config.ResetForTest)
 
 	tests := []struct {
 		name           string

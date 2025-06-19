@@ -11,39 +11,56 @@ import (
 	"time"
 
 	"github.com/jerkytreats/dns/internal/api/handler"
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
-	"github.com/spf13/viper"
-	"go.uber.org/zap"
+	"github.com/jerkytreats/dns/internal/logging"
 )
+
+const (
+	// App
+	AppVersionKey = "app.version"
+
+	// Server
+	ServerHostKey         = "server.host"
+	ServerPortKey         = "server.port"
+	ServerReadTimeoutKey  = "server.read_timeout"
+	ServerWriteTimeoutKey = "server.write_timeout"
+	ServerIdleTimeoutKey  = "server.idle_timeout"
+)
+
+func init() {
+	config.RegisterRequiredKey(AppVersionKey)
+	config.RegisterRequiredKey(ServerHostKey)
+	config.RegisterRequiredKey(ServerPortKey)
+	config.RegisterRequiredKey(ServerReadTimeoutKey)
+	config.RegisterRequiredKey(ServerWriteTimeoutKey)
+	config.RegisterRequiredKey(ServerIdleTimeoutKey)
+}
 
 func main() {
 	// Initialize logger
-	logger, _ := zap.NewProduction()
-	defer logger.Sync()
+	logging.Info("Application starting...")
+	defer logging.Sync()
 
 	// Load configuration
-	viper.SetConfigName("config.yaml")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath("./configs")
-	if err := viper.ReadInConfig(); err != nil {
-		logger.Fatal("Failed to read config", zap.Error(err))
-	}
+	// This is now handled by the config package's init functions
+	// We can directly use the config getters.
 
 	// Initialize CoreDNS manager from config
-	configPath := viper.GetString("dns.coredns.config_path")
-	zonesPath := viper.GetString("dns.coredns.zones_path")
-	reloadCmd := viper.GetStringSlice("dns.coredns.reload_command")
-	manager := coredns.NewManager(logger, configPath, zonesPath, reloadCmd)
+	configPath := config.GetString("dns.coredns.config_path")
+	zonesPath := config.GetString("dns.coredns.zones_path")
+	reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+	manager := coredns.NewManager(configPath, zonesPath, reloadCmd)
 
 	// Create record handler
-	recordHandler := handler.NewRecordHandler(logger, manager)
+	recordHandler := handler.NewRecordHandler(manager)
 
 	// Create server
 	server := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", viper.GetString("server.host"), viper.GetInt("server.port")),
-		ReadTimeout:  viper.GetDuration("server.read_timeout"),
-		WriteTimeout: viper.GetDuration("server.write_timeout"),
-		IdleTimeout:  viper.GetDuration("server.idle_timeout"),
+		Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
+		ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
+		WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
+		IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
 	}
 
 	// Setup routes
@@ -54,11 +71,12 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		logger.Info("Starting server",
-			zap.String("host", viper.GetString("server.host")),
-			zap.Int("port", viper.GetInt("server.port")))
+		logging.Info("Starting server at %s:%d",
+			config.GetString(ServerHostKey),
+			config.GetInt(ServerPortKey))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("Failed to start server", zap.Error(err))
+			logging.Error("Failed to start server: %v", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -68,15 +86,15 @@ func main() {
 	<-quit
 
 	// Graceful shutdown
-	logger.Info("Shutting down server...")
+	logging.Info("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Fatal("Server forced to shutdown", zap.Error(err))
+		logging.Error("Server forced to shutdown: %v", err)
 	}
 
-	logger.Info("Server exited properly")
+	logging.Info("Server exited properly")
 }
 
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +105,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]interface{}{
 		"status":  "healthy",
-		"version": viper.GetString("app.version"),
+		"version": config.GetString(AppVersionKey),
 		"components": map[string]interface{}{
 			"api": map[string]string{
 				"status":  "healthy",

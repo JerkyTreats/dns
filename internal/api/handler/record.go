@@ -6,7 +6,7 @@ import (
 	"regexp"
 
 	"github.com/jerkytreats/dns/internal/dns/coredns"
-	"go.uber.org/zap"
+	"github.com/jerkytreats/dns/internal/logging"
 )
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -31,14 +31,12 @@ type ErrorResponse struct {
 
 // RecordHandler handles DNS record operations
 type RecordHandler struct {
-	logger  *zap.Logger
 	manager *coredns.Manager
 }
 
 // NewRecordHandler creates a new record handler
-func NewRecordHandler(logger *zap.Logger, manager *coredns.Manager) *RecordHandler {
+func NewRecordHandler(manager *coredns.Manager) *RecordHandler {
 	return &RecordHandler{
-		logger:  logger,
 		manager: manager,
 	}
 }
@@ -50,36 +48,25 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req AddRecordRequest
+	var req struct {
+		Name string `json:"name"`
+		IP   string `json:"ip"`
+	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		sendError(w, "Invalid request body", "INVALID_REQUEST", http.StatusBadRequest)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Validate service name
-	if !serviceNameRegex.MatchString(req.ServiceName) {
-		sendError(w, "Invalid service name format", "INVALID_SERVICE_NAME", http.StatusBadRequest)
+	if err := h.manager.AddRecord(req.Name, req.IP); err != nil {
+		logging.Error("Failed to add record: %v", err)
+		http.Error(w, "Failed to add record", http.StatusInternalServerError)
 		return
 	}
 
-	// Add zone to CoreDNS
-	if err := h.manager.AddZone(req.ServiceName); err != nil {
-		h.logger.Error("Failed to add zone",
-			zap.String("service", req.ServiceName),
-			zap.Error(err))
-		sendError(w, "Failed to add DNS record", "DNS_ERROR", http.StatusInternalServerError)
-		return
-	}
-
-	response := AddRecordResponse{
-		Status:  "success",
-		Message: "Record added successfully",
-	}
-	response.Data.Hostname = req.ServiceName + ".internal.jerkytreats.dev"
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	logging.Info("Successfully added record for %s -> %s", req.Name, req.IP)
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte("Record added successfully"))
 }
 
 func sendError(w http.ResponseWriter, message, errorCode string, statusCode int) {

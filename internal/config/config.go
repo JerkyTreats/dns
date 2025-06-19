@@ -5,6 +5,7 @@ package config
 import (
 	"os" // Added for ToUpper
 	"sync"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -111,6 +112,24 @@ func GetStringMapString(key string) map[string]string {
 		return make(map[string]string) // Return empty map if config not loaded
 	}
 	return config.GetStringMapString(key)
+}
+
+// GetStringSlice returns a []string config value.
+func GetStringSlice(key string) []string {
+	_ = initConfig()
+	if config == nil {
+		return nil
+	}
+	return config.GetStringSlice(key)
+}
+
+// GetDuration returns a time.Duration config value.
+func GetDuration(key string) time.Duration {
+	_ = initConfig()
+	if config == nil {
+		return 0
+	}
+	return config.GetDuration(key)
 }
 
 // RegisterRequiredKey adds a key to the list of required configuration items.
