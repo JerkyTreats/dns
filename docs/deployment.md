@@ -1,42 +1,39 @@
 # Deployment Guide
 
-## Production Deployment
+This guide provides instructions for deploying the DNS Manager service to a production environment.
 
-### Prerequisites
+## Prerequisites
 
-- Docker and Docker Compose installed
-- Access to the target server
-- Proper network configuration
-- SSL certificates (if using HTTPS)
+- Docker and Docker Compose installed on the target server.
+- A domain name that you control.
+- Firewall rules configured to allow traffic on ports 80, 443, 53, and 853.
 
-### Deployment Steps
+## Deployment Steps
 
-1. **Clone Repository**
-   ```bash
-   git clone https://github.com/jerkytreats/dns.git
-   cd dns
-   ```
+1.  **Clone the Repository**
+    ```bash
+    git clone https://github.com/jerkytreats/dns.git
+    cd dns
+    ```
 
-2. **Configure Environment**
-   - Copy and edit configuration files:
-     ```bash
-     cp configs/config.yaml.example configs/config.yaml
-     ```
-   - Update production settings in `configs/config.yaml`
-   - Configure CoreDNS settings in `coredns/Corefile`
+2.  **Configure the Environment**
+    - Edit `configs/config.yaml` to set your production settings. You must update the `certificate.email` and `certificate.domain` fields.
+    - To use Let's Encrypt's production environment, change `certificate.ca_dir_url` to `https://acme-v02.api.letsencrypt.org/directory`.
+    - Enable TLS in production by setting `server.tls.enabled: true`.
 
-3. **Build and Deploy**
-   ```bash
-   # Build and start services
-   ./scripts/deploy.sh
-   ```
+3.  **Build and Deploy**
+    Use the `deploy.sh` script to build and start the services.
+    ```bash
+    ./scripts/deploy.sh
+    ```
+    This script will build the Docker images, create the network, and start the `api` and `coredns` containers in detached mode.
 
-### Production Configuration
+## Production Configuration
 
-#### API Server
+Your `configs/config.yaml` and `configs/coredns/Corefile` should be configured for your production environment.
 
+### API Server (`configs/config.yaml`)
 ```yaml
-# configs/config.yaml
 app:
   name: dns-manager
   version: 1.0.0
@@ -45,179 +42,89 @@ app:
 server:
   host: 0.0.0.0
   port: 8080
-  read_timeout: 10s
-  write_timeout: 20s
-  idle_timeout: 120s
+  tls:
+    enabled: true # Enable for production
+    port: 8443
 
 logging:
   level: info
   format: json
-  output: stdout
+
+certificate:
+  email: "your-email@yourdomain.com"
+  domain: "internal.yourdomain.com"
+  ca_dir_url: "https://acme-v02.api.letsencrypt.org/directory" # Production URL
 ```
 
-#### CoreDNS
-
-```yaml
-# coredns/Corefile
-.:53 {
+### CoreDNS (`configs/coredns/Corefile`)
+```corefile
+. {
     errors
-    health
     log
     forward . /etc/resolv.conf
 }
 
 internal.jerkytreats.dev:53 {
     errors
-    health
     log
-    file /zones/internal.jerkytreats.dev.zone
+    file /etc/coredns/zones/internal.jerkytreats.dev.db
+}
+
+internal.jerkytreats.dev:853 {
+    tls /etc/letsencrypt/live/internal.jerkytreats.dev/cert.pem /etc/letsencrypt/live/internal.jerkytreats.dev/privkey.pem
+    errors
+    log
+    file /etc/coredns/zones/internal.jerkytreats.dev.db
+}
+
+_acme-challenge.internal.jerkytreats.dev:53 {
+    errors
+    log
+    file /etc/coredns/zones/_acme-challenge.internal.jerkytreats.dev.zone
 }
 ```
 
-### Security Considerations
+## Security
 
-1. **Network Security**
-   - Use internal network for API-CoreDNS communication
-   - Restrict API access to trusted IPs
-   - Use HTTPS for API endpoints
+- **Network Security**: Ensure that the API server is not publicly exposed. If it must be, restrict access to trusted IP addresses.
+- **File Permissions**: The `ssl` directory contains your private keys. The `docker-compose.yml` file mounts this as read-only for the `coredns` service. Ensure the permissions on the host are secure.
 
-2. **Authentication**
-   - Enable basic auth for API endpoints
-   - Use secure credentials
-   - Rotate credentials regularly
+## Monitoring
 
-3. **File Permissions**
-   - Restrict access to configuration files
-   - Use non-root user for containers
-   - Secure zone file permissions
+- **Health Checks**: The `/health` endpoint provides the status of the API and certificate information. Monitor this endpoint to ensure the service is running correctly.
+- **Logging**: Both the `api` and `coredns` services log to `stdout`. Configure your Docker daemon to forward logs to a log aggregation service.
 
-### Monitoring
+## Backup and Recovery
 
-1. **Health Checks**
-   - Monitor `/health` endpoint
-   - Set up alerts for unhealthy status
-   - Monitor CoreDNS health
+- **Certificates**: The SSL certificates are stored in the `./ssl` directory. Back up this directory regularly.
+- **Zone Files**: The DNS zone files are in `configs/coredns/zones`. Since these are managed by the application, ensure your Git repository is backed up.
 
-2. **Logging**
-   - Configure log aggregation
-   - Set up log rotation
-   - Monitor error rates
+## Maintenance
 
-3. **Metrics**
-   - Track API request rates
-   - Monitor DNS query volumes
-   - Set up performance alerts
+- **Updates**: To update the application, pull the latest changes from the Git repository and re-run the deployment script:
+  ```bash
+  git pull origin main
+  ./scripts/deploy.sh
+  ```
+- **Cleanup**: To remove old containers and images, use the Docker `prune` commands:
+  ```bash
+  docker system prune -f
+  docker image prune -f
+  ```
 
-### Backup and Recovery
+## Troubleshooting
 
-1. **Zone Files**
-   ```bash
-   # Backup zone files
-   tar -czf zones-backup.tar.gz coredns/zones/
+- **API Issues**: Check the API logs with `docker-compose logs api`.
+- **DNS Issues**: Check the CoreDNS logs with `docker-compose logs coredns`.
+- **Test DNS Resolution**: Use `dig @localhost internal.yourdomain.com` to test DNS resolution.
 
-   # Restore zone files
-   tar -xzf zones-backup.tar.gz
-   ```
+## Rollback
 
-2. **Configuration**
-   ```bash
-   # Backup configuration
-   tar -czf config-backup.tar.gz configs/ coredns/Corefile
-
-   # Restore configuration
-   tar -xzf config-backup.tar.gz
-   ```
-
-### Scaling
-
-1. **API Server**
-   - Deploy multiple API instances
-   - Use load balancer
-   - Configure session management
-
-2. **CoreDNS**
-   - Deploy multiple CoreDNS instances
-   - Use DNS load balancing
-   - Configure zone synchronization
-
-### Maintenance
-
-1. **Updates**
-   ```bash
-   # Pull latest changes
-   git pull origin main
-
-   # Rebuild and restart
-   ./scripts/deploy.sh
-   ```
-
-2. **Log Rotation**
-   ```bash
-   # Configure log rotation
-   /var/log/dns-manager/*.log {
-       daily
-       rotate 7
-       compress
-       delaycompress
-       missingok
-       notifempty
-   }
-   ```
-
-3. **Cleanup**
-   ```bash
-   # Remove old containers
-   docker system prune -f
-
-   # Clean up old images
-   docker image prune -f
-   ```
-
-### Troubleshooting
-
-1. **API Issues**
-   ```bash
-   # Check API logs
-   docker-compose logs api
-
-   # Check API health
-   curl http://localhost:8080/health
-   ```
-
-2. **DNS Issues**
-   ```bash
-   # Check CoreDNS logs
-   docker-compose logs coredns
-
-   # Test DNS resolution
-   dig @localhost internal.jerkytreats.dev
-   ```
-
-3. **Container Issues**
-   ```bash
-   # Check container status
-   docker-compose ps
-
-   # Check container logs
-   docker-compose logs
-   ```
-
-### Rollback Procedure
-
-1. **API Rollback**
-   ```bash
-   # Revert to previous version
-   git checkout <previous-version>
-   ./scripts/deploy.sh
-   ```
-
-2. **Configuration Rollback**
-   ```bash
-   # Restore previous configuration
-   cp config-backup.tar.gz .
-   tar -xzf config-backup.tar.gz
-   docker-compose restart
-   ```
+To roll back to a previous version, check out the desired Git commit and re-run the deployment script.
+```bash
+git checkout <previous-commit-hash>
+./scripts/deploy.sh
+```
 
 ## Support
 

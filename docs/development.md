@@ -1,170 +1,71 @@
 # Development Guide
 
-## Development Environment Setup
+This guide provides instructions for setting up a local development environment for the DNS Manager service.
 
-1. **Prerequisites**
-   - Go 1.24 or later
-   - Docker and Docker Compose
-   - Git
+## Environment Setup
 
-2. **Local Setup**
-   ```bash
-   # Clone the repository
-   git clone https://github.com/jerkytreats/dns.git
-   cd dns
+1.  **Prerequisites**
+    - Go 1.24 or later
+    - Docker and Docker Compose
+    - Git
 
-   # Install dependencies
-   go mod download
-   ```
+2.  **Local Setup**
+    ```bash
+    git clone https://github.com/jerkytreats/dns.git
+    cd dns
+    go mod download
+    ```
 
-3. **Configuration**
-   - Copy `configs/config.yaml.example` to `configs/config.yaml`
-   - Update configuration values as needed
-   - Ensure CoreDNS paths are correctly set
+3.  **Configuration**
+    - The application is configured using `configs/config.yaml`.
+    - For local development, you can use the default settings, which use Let's Encrypt's staging environment.
+    - You must provide a valid email and a domain you control in the `certificate` section for the DNS-01 challenge to work.
 
 ## Running Locally
 
-### Using Docker Compose (Recommended)
+The recommended way to run the services for local development is with `docker-compose`.
 
 ```bash
-# Start all services
-docker-compose up -d
+# Build and start all services
+docker-compose up --build
 
-# View logs
+# To view logs
 docker-compose logs -f
 
-# Stop services
+# To stop services
 docker-compose down
 ```
-
-### Manual Development
-
-1. **Start CoreDNS**
-   ```bash
-   docker run -d \
-     --name coredns \
-     -p 53:53/udp \
-     -v $(pwd)/coredns:/etc/coredns \
-     coredns/coredns:1.11.1
-   ```
-
-2. **Run API Server**
-   ```bash
-   go run cmd/api/main.go
-   ```
+The API server will be available at `http://localhost:8080` (or `https://localhost:8443` if TLS is enabled).
 
 ## Testing
 
-### Running Tests
-
-```bash
-# Run all tests
-go test ./...
-
-# Run tests with coverage
-go test ./... -cover
-
-# Run specific package tests
-go test ./internal/api/handler/...
-```
-
-### Test Structure
-
-- Unit tests are co-located with the code they test
-- Integration tests are in `internal/tests`
-- End-to-end tests are in `tests/e2e`
+- **Run all tests:**
+  ```bash
+  go test ./...
+  ```
+- **Run tests with coverage:**
+  ```bash
+  go test ./... -cover
+  ```
+- **Test Structure**: Unit tests are co-located with the code they test (e.g., `manager_test.go` is in the same package as `manager.go`).
 
 ## API Development
 
-### Adding New Endpoints
-
-1. Update OpenAPI specification in `docs/api/openapi.yaml`
-2. Create handler in `internal/api/handler`
-3. Add tests in corresponding `_test.go` file
-4. Update main.go to wire up the new endpoint
-
-### Example: Adding a New Endpoint
-
-```go
-// internal/api/handler/example.go
-func NewExampleHandler(logger *zap.Logger) *ExampleHandler {
-    return &ExampleHandler{logger: logger}
-}
-
-func (h *ExampleHandler) Handle(w http.ResponseWriter, r *http.Request) {
-    // Implementation
-}
-
-// cmd/api/main.go
-mux.HandleFunc("/example", exampleHandler.Handle)
-```
+- **Handlers**: API handlers are located in `internal/api/handler`.
+- **Routing**: Routes are defined in `cmd/api/main.go`.
+- When adding a new endpoint, you will need to create a handler function and add it to the router in `main.go`.
 
 ## CoreDNS Integration
 
-### Zone Management
-
-- Zone files are stored in `coredns/zones/`
-- CoreDNS configuration is in `coredns/Corefile`
-- The API server manages zones through the CoreDNS manager
-
-### Adding a New Zone
-
-```go
-manager := coredns.NewManager(logger, configPath, zonesPath, reloadCmd)
-err := manager.AddZone("new-service")
-```
-
-## Deployment
-
-### Building for Production
-
-```bash
-# Build API server
-docker build -t dns-manager-api -f Dockerfile.api .
-
-# Build CoreDNS
-docker build -t dns-manager-coredns .
-```
-
-### Production Configuration
-
-1. Update `configs/config.yaml` for production
-2. Set appropriate environment variables
-3. Configure logging for production
-4. Set up monitoring and alerts
+- **Zone Files**: The DNS zone files are in `configs/coredns/zones/`. The main zone file is `internal.jerkytreats.dev.db`.
+- **Dynamic Zones**: Zone files for ACME challenges (e.g., `_acme-challenge.internal.jerkytreats.dev.zone`) are created dynamically by the application.
+- **CoreDNS Configuration**: The main CoreDNS configuration is in `configs/coredns/Corefile`.
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **CoreDNS not responding**
-   - Check CoreDNS logs: `docker-compose logs coredns`
-   - Verify zone files exist
-   - Check CoreDNS configuration
-
-2. **API server errors**
-   - Check API logs: `docker-compose logs api`
-   - Verify configuration
-   - Check CoreDNS connectivity
-
-### Debugging
-
-1. **Enable Debug Logging**
-   ```yaml
-   # configs/config.yaml
-   logging:
-     level: debug
-     format: json
-   ```
-
-2. **CoreDNS Debug Mode**
-   ```yaml
-   # coredns/Corefile
-   . {
-       debug
-       log
-   }
-   ```
+- **CoreDNS Errors**: Check the CoreDNS logs with `docker-compose logs coredns`. Ensure that the zone files have the correct permissions and that the `Corefile` syntax is valid.
+- **API Errors**: Check the API logs with `docker-compose logs api`.
+- **Enable Debug Logging**: To get more detailed logs, set `logging.level` to `debug` in `configs/config.yaml`.
 
 ## Contributing
 

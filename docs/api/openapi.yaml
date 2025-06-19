@@ -90,6 +90,21 @@ components:
                   enum: [healthy, unhealthy]
                 message:
                   type: string
+            certificate:
+              type: object
+              properties:
+                subject:
+                  type: string
+                issuer:
+                  type: string
+                not_before:
+                  type: string
+                  format: date-time
+                not_after:
+                  type: string
+                  format: date-time
+                expires_in:
+                  type: string
     AddRecordRequest:
       type: object
       required:

@@ -1,6 +1,6 @@
-# Tailscale Interal DNS Manager
+# Tailscale Internal DNS Manager
 
-A lightweight API for managing internal DNS records within a Tailscale network. This service provides a simple interface to manage DNS records for internal services, with CoreDNS integration for reliable DNS resolution and Let's Encrypt SSL/TLS certification.
+A lightweight API for managing internal DNS records. This service provides a simple interface to manage DNS records for internal services, with CoreDNS integration for reliable DNS resolution and automated Let's Encrypt SSL/TLS certification.
 
 ## The Point
 
@@ -40,70 +40,55 @@ It's all a bit nuts, but its been fun and I'm working _fast_.
 
 - RESTful API for DNS record management
 - CoreDNS integration for reliable DNS resolution
-- Let's Encrypt SSL/TLS certification with automated renewal
-- Docker-based deployment
+- Automated Let's Encrypt SSL/TLS certification using `go-acme/lego`
+- In-application certificate issuance and renewal (no `certbot` required)
+- Docker-based deployment for easy setup
 - OpenAPI/Swagger documentation
-- Health monitoring endpoints
+- Health monitoring endpoints with certificate status
 - Comprehensive test coverage
 
 ## Prerequisites
 
 - Go 1.24 or later
 - Docker and Docker Compose
-- Domain control for DNS-01 challenge validation
-- Make (optional, for using Makefile commands)
+- A domain you control for DNS-01 challenge validation
 
 ## Quick Start
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/jerkytreats/dns.git
-   cd dns
-   ```
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/jerkytreats/dns.git
+    cd dns
+    ```
 
-2. Configure your domain in `configs/config.yaml`:
-   ```yaml
-   certificate:
-     email: "admin@yourdomain.com"
-     domain: "yourdomain.com"
-   ```
+2.  **Configure your domain and email** in `configs/config.yaml`. The `server.tls.enabled` flag controls whether the server starts with HTTPS.
+    ```yaml
+    server:
+      tls:
+        enabled: true # Set to true to enable HTTPS
 
-3. Deploy using the provided script:
-   ```bash
-   ./scripts/deploy.sh
-   ```
+    certificate:
+      email: "your-email@example.com"
+      domain: "internal.yourdomain.com"
+    ```
 
-The API will be available at:
-- HTTP: `http://localhost:8080`
-- HTTPS: `https://localhost:8443`
-- CoreDNS: `localhost:53`
+3.  **Deploy the services:**
+    ```bash
+    docker-compose up --build
+    ```
+
+The application will start, obtain an SSL certificate from Let's Encrypt's staging environment, and serve traffic:
+- **HTTP:** `http://localhost:8080`
+- **HTTPS:** `https://localhost:8443`
+- **CoreDNS:** `localhost:53` (UDP/TCP) and `localhost:853` (DNS-over-TLS)
 
 ## SSL/TLS Configuration
 
-The service automatically obtains and manages Let's Encrypt certificates:
+Certificate management is handled directly within the Go application using the `go-acme/lego` library, removing the need for an external `certbot` container.
 
-### Certificate Management
-- **Automatic issuance**: Certbot handles certificate generation
-- **Direct mounting**: Certificates are mounted directly from certbot's output
-- **Auto-renewal**: Certificates renew automatically every 60-90 days
-- **Zero downtime**: Hot-reload capability for certificate updates
-
-### Certificate Locations
-Certificates are stored in the standard Let's Encrypt locations:
-```
-/etc/letsencrypt/live/yourdomain.com/
-├── cert.pem          # Your certificate
-├── privkey.pem       # Your private key
-├── chain.pem         # Let's Encrypt's certificate chain
-└── fullchain.pem     # Your cert + chain combined
-```
-
-### No Copy Process Required
-Unlike traditional setups, this implementation:
-- **Directly reads** certificates from certbot's output directory
-- **No file copying** or permission management needed
-- **Real-time updates** when certificates are renewed
-- **Simplified maintenance** with fewer moving parts
+- **Automated Issuance and Renewal**: The application obtains and renews certificates automatically. On the first run, it will generate a new certificate. A background process checks daily and renews the certificate if it is within the configured renewal window (default: 30 days).
+- **DNS-01 Challenge**: Wildcard certificates (`*.internal.yourdomain.com`) are supported using the DNS-01 challenge method. The application temporarily creates the required TXT records in a CoreDNS zone file to prove ownership of the domain.
+- **Staging and Production**: By default, the service uses Let's Encrypt's staging environment to avoid hitting rate limits during development. To use the production environment, update the `ca_dir_url` in `configs/config.yaml`.
 
 ## API Endpoints
 
@@ -111,7 +96,7 @@ Unlike traditional setups, this implementation:
 ```http
 GET /health
 ```
-Returns the health status of the API, CoreDNS services, and certificate information.
+Returns the health status of the API and CoreDNS services. If TLS is enabled, it also includes details about the current SSL certificate, such as its expiration date.
 
 ### Add DNS Record
 ```http
@@ -122,115 +107,61 @@ Content-Type: application/json
     "service_name": "my-service"
 }
 ```
-Creates a new DNS record for the specified service.
+Creates a new DNS `A` record for `<service_name>.internal.yourdomain.com`.
 
 ## Configuration
 
-The service is configured through `configs/config.yaml`. Key configuration options:
+The service is configured through `configs/config.yaml`. Key options include:
 
 ```yaml
-app:
-  name: dns-manager
-  version: 1.0.0
-  environment: development
-
 server:
   host: 0.0.0.0
   port: 8080
   tls:
     enabled: true
     port: 8443
-    cert_file: /etc/letsencrypt/live/yourdomain.com/cert.pem
-    key_file: /etc/letsencrypt/live/yourdomain.com/privkey.pem
-  read_timeout: 5s
-  write_timeout: 10s
-  idle_timeout: 120s
+    cert_file: /etc/letsencrypt/live/internal.jerkytreats.dev/cert.pem
+    key_file: /etc/letsencrypt/live/internal.jerkytreats.dev/privkey.pem
 
 dns:
-  domain: yourdomain.com
   coredns:
     config_path: /etc/coredns/Corefile
-    zones_path: /zones
-    reload_command: ["kill", "-SIGUSR1", "1"]
+    zones_path: /etc/coredns/zones
     tls:
       enabled: true
-      cert_file: /etc/letsencrypt/live/yourdomain.com/cert.pem
-      key_file: /etc/letsencrypt/live/yourdomain.com/privkey.pem
-      port: 443
+      port: 853
 
 certificate:
-  provider: "certbot"
-  email: "admin@yourdomain.com"
-  domain: "yourdomain.com"
+  email: "admin@jerkytreats.dev"
+  domain: "internal.jerkytreats.dev"
+  ca_dir_url: "https://acme-staging-v02.api.letsencrypt.org/directory" # Staging URL
   renewal:
     enabled: true
-    renew_before: 30d
-    check_interval: 24h
-  monitoring:
-    enabled: true
-    alert_threshold: 7d
+    renew_before: "720h" # 30 days
+    check_interval: "24h"
 ```
 
 ## Development
 
-### Local Development
-
-1. Install dependencies:
-   ```bash
-   go mod download
-   ```
-
-2. Run tests:
-   ```bash
-   go test ./...
-   ```
-
-3. Start services with hot-reload:
-   ```bash
-   docker-compose up
-   ```
-
-### Project Structure
-
+### Running Tests
+To run the test suite:
+```bash
+go test ./...
 ```
-.
-├── cmd/                    # Application entry points
-├── configs/               # Configuration files
-├── docs/                  # Documentation
-├── internal/              # Internal packages
-│   ├── api/              # API handlers and middleware
-│   └── dns/              # DNS management logic
-├── scripts/              # Utility scripts
-└── coredns/              # CoreDNS configuration
+
+### Local Environment
+To run the services locally for development:
+```bash
+docker-compose up --build
 ```
+The API server will start with hot-reloading enabled.
 
 ## Docker Deployment
 
-The service is containerized using Docker with integrated SSL/TLS support:
-
-- `Dockerfile.api`: Multi-stage build for the API server
-- `Dockerfile`: CoreDNS configuration
-- `docker-compose.yml`: Local development setup with certbot integration
-
-### Building Images
-
-```bash
-docker-compose build
-```
-
-### Running Services
-
-```bash
-docker-compose up -d
-```
-
-### Certificate Renewal
-
-Certificates are automatically renewed by certbot. The renewal process:
-1. Runs automatically every 60-90 days
-2. Uses DNS-01 challenge for wildcard certificates
-3. Updates certificates in-place without service interruption
-4. Triggers service reload to use new certificates
+The `docker-compose.yml` file orchestrates the `api` and `coredns` services.
+- The `api` service builds from `Dockerfile.api`.
+- A shared volume (`./ssl`) is used to store the SSL certificates, which are written by the `api` service and read by the `coredns` service.
+- DNS zone files are located in `configs/coredns/zones` and mounted into the `coredns` container.
 
 ## Security Features
 
