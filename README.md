@@ -1,6 +1,40 @@
-# DNS Manager API
+# Tailscale Interal DNS Manager
 
 A lightweight API for managing internal DNS records within a Tailscale network. This service provides a simple interface to manage DNS records for internal services, with CoreDNS integration for reliable DNS resolution and Let's Encrypt SSL/TLS certification.
+
+## The Point
+
+---
+
+I'm experimenting with AI, and want to run local LLM.
+
+It's compute intensive, so I want to use my gaming PC.
+
+---
+
+I want to run from mobile/laptop/etc, which means I need a Tailscale network.
+
+I don't like the `*.tailscale.ts.net` endpoints, I want to use `*.internal.jerkytreats.dev`
+
+---
+
+So I need a CoreDNS server that is the NS for internal.jerkytreats.dev.
+
+Then I can build an API in front of the LLM at `llm.internal.jerkytreats.dev`
+
+But I am NOT going to manually add an entry to the CoreDNS server. It's a moral imperative as a platform engineer to automate domain resolution.
+
+So I build an API around the CoreDNS server to `add-record/` that will start resolving against `llm.internal.jerkytreats.dev`
+
+---
+
+The best part is, the security is free because its all behind Tailscale. Only in-network devices can call thesee endpoints.
+
+And when I say "I built", I meant I "one-shot vibe coded it" over the course of an hour or two.
+
+So now the game is to build out as many of these little services as I can, create an "API Mesh" behind the TS network and see I can built a custom AI agent around it.
+
+It's all a bit nuts, but its been fun and I'm working _fast_.
 
 ## Features
 
