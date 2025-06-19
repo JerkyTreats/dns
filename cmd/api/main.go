@@ -56,7 +56,8 @@ func main() {
 	configPath := config.GetString("dns.coredns.config_path")
 	zonesPath := config.GetString("dns.coredns.zones_path")
 	reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
-	manager := coredns.NewManager(configPath, zonesPath, reloadCmd)
+	domain := config.GetString(coredns.DNSDomainKey)
+	manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
 
 	// Certificate management
 	if config.GetBool(certificate.CertRenewalEnabledKey) {

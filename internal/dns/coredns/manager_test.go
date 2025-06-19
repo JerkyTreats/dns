@@ -26,11 +26,24 @@ func TestManager(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create test manager
-	manager := NewManager(configPath, zonesPath, []string{reloadScriptPath})
+	manager := NewManager(configPath, zonesPath, []string{reloadScriptPath}, "test.local")
 
 	t.Run("AddRecord", func(t *testing.T) {
-		err := manager.AddRecord("test-service", "127.0.0.1")
+		// Before adding a record, we need a zone. Let's create a dummy zone file.
+		zoneFileName := filepath.Join(zonesPath, "test-service.zone")
+		err := os.MkdirAll(zonesPath, 0755)
 		require.NoError(t, err)
+		err = os.WriteFile(zoneFileName, []byte("$ORIGIN test-service.test.local.\n"), 0644)
+		require.NoError(t, err)
+
+		err = manager.AddRecord("test-service", "test-record", "127.0.0.1")
+		require.NoError(t, err)
+
+		// Verify the content of the zone file
+		content, err := os.ReadFile(zoneFileName)
+		require.NoError(t, err)
+		expectedRecord := "test-record\tIN\tA\t127.0.0.1"
+		assert.Contains(t, string(content), expectedRecord)
 	})
 
 	t.Run("Reload", func(t *testing.T) {
@@ -39,13 +52,13 @@ func TestManager(t *testing.T) {
 	})
 
 	t.Run("Reload with no command", func(t *testing.T) {
-		managerNoReload := NewManager(configPath, zonesPath, []string{})
+		managerNoReload := NewManager(configPath, zonesPath, []string{}, "test.local")
 		err := managerNoReload.Reload()
 		assert.NoError(t, err, "Reload should not error when no command is configured")
 	})
 
 	t.Run("Reload with failing command", func(t *testing.T) {
-		managerFailingReload := NewManager(configPath, zonesPath, []string{"/bin/false"})
+		managerFailingReload := NewManager(configPath, zonesPath, []string{"/bin/false"}, "test.local")
 		err := managerFailingReload.Reload()
 		assert.Error(t, err)
 		assert.True(t, strings.Contains(err.Error(), "reloading CoreDNS failed"), "Error message should indicate failure")

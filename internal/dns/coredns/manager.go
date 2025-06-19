@@ -18,12 +18,14 @@ const (
 	DNSConfigPathKey    = "dns.coredns.config_path"
 	DNSZonesPathKey     = "dns.coredns.zones_path"
 	DNSReloadCommandKey = "dns.coredns.reload_command"
+	DNSDomainKey        = "dns.domain"
 )
 
 func init() {
 	config.RegisterRequiredKey(DNSConfigPathKey)
 	config.RegisterRequiredKey(DNSZonesPathKey)
 	config.RegisterRequiredKey(DNSReloadCommandKey)
+	config.RegisterRequiredKey(DNSDomainKey)
 }
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -33,15 +35,17 @@ type Manager struct {
 	configPath    string
 	zonesPath     string
 	reloadCommand []string
+	domain        string
 	mu            sync.Mutex
 }
 
 // NewManager creates a new CoreDNS manager.
-func NewManager(configPath, zonesPath string, reloadCommand []string) *Manager {
+func NewManager(configPath, zonesPath string, reloadCommand []string, domain string) *Manager {
 	return &Manager{
 		configPath:    configPath,
 		zonesPath:     zonesPath,
 		reloadCommand: reloadCommand,
+		domain:        domain,
 	}
 }
 
@@ -52,18 +56,22 @@ func (m *Manager) AddZone(serviceName string) error {
 		return fmt.Errorf("invalid service name format")
 	}
 
+	zoneDomain := fmt.Sprintf("%s.%s.", serviceName, m.domain)
+	ns := fmt.Sprintf("ns1.%s.", m.domain)
+	admin := fmt.Sprintf("admin.%s.", m.domain)
+
 	// Create zone file content
-	zoneContent := fmt.Sprintf(`$ORIGIN %s.internal.jerkytreats.dev.
-@	3600 IN	SOA ns1.internal.jerkytreats.dev. admin.jerkytreats.dev. (
+	zoneContent := fmt.Sprintf(`$ORIGIN %s
+@	3600 IN	SOA %s %s (
 	2024061601 ; serial
 	7200       ; refresh
 	3600       ; retry
 	1209600    ; expire
 	3600       ; minimum
 )
-@	3600 IN	NS ns1.internal.jerkytreats.dev.
+@	3600 IN	NS %s
 @	3600 IN	A 100.64.0.1
-`, serviceName)
+`, zoneDomain, ns, admin, ns)
 
 	// Ensure zones directory exists
 	if err := os.MkdirAll(m.zonesPath, 0755); err != nil {
@@ -101,12 +109,12 @@ func (m *Manager) updateConfig(serviceName string) error {
 
 	// Add zone configuration
 	zoneConfig := fmt.Sprintf(`
-%s.internal.jerkytreats.dev:53 {
+%s.%s:53 {
     file %s/%s.zone
     errors
     log
 }
-`, serviceName, m.zonesPath, serviceName)
+`, serviceName, m.domain, m.zonesPath, serviceName)
 
 	// Append new zone config
 	newConfig := string(config) + zoneConfig
@@ -120,15 +128,34 @@ func (m *Manager) updateConfig(serviceName string) error {
 }
 
 // AddRecord adds a new DNS record and reloads CoreDNS.
-func (m *Manager) AddRecord(name, ip string) error {
+func (m *Manager) AddRecord(serviceName, name, ip string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logging.Info("Attempting to add record: name=%s, ip=%s", name, ip)
+	logging.Info("Attempting to add record: service=%s, name=%s, ip=%s", serviceName, name, ip)
 
-	// For now, we will just log that the record would be added.
-	// Implementation of file writing will come later.
-	logging.Info("Record for %s -> %s would be written to zone file.", name, ip)
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", serviceName))
+
+	// Check if zone file exists
+	if _, err := os.Stat(zoneFile); os.IsNotExist(err) {
+		return fmt.Errorf("zone file for service '%s' does not exist", serviceName)
+	}
+
+	// Create the record content
+	recordContent := fmt.Sprintf("%s\tIN\tA\t%s\n", name, ip)
+
+	// Append record to the zone file
+	f, err := os.OpenFile(zoneFile, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open zone file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(recordContent); err != nil {
+		return fmt.Errorf("failed to write record to zone file: %w", err)
+	}
+
+	logging.Info("Record for %s.%s.%s -> %s added to zone file.", name, serviceName, m.domain, ip)
 
 	return m.Reload()
 }
@@ -183,7 +210,7 @@ func (m *Manager) removeFromConfig(serviceName string) error {
 	}
 
 	// Remove zone configuration block using regex
-	zoneBlockPattern := regexp.MustCompile(fmt.Sprintf(`(?ms)\n%s\.internal\.jerkytreats\.dev:53 \{.*?\}\n`, regexp.QuoteMeta(serviceName)))
+	zoneBlockPattern := regexp.MustCompile(fmt.Sprintf(`(?ms)\n%s\.%s:53 \{.*?\}\n`, regexp.QuoteMeta(serviceName), regexp.QuoteMeta(m.domain)))
 	newConfig := zoneBlockPattern.ReplaceAllString(string(config), "\n")
 
 	// Write updated config

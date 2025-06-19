@@ -49,8 +49,9 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name string `json:"name"`
-		IP   string `json:"ip"`
+		ServiceName string `json:"service_name"`
+		Name        string `json:"name"`
+		IP          string `json:"ip"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -58,7 +59,7 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.manager.AddRecord(req.Name, req.IP); err != nil {
+	if err := h.manager.AddRecord(req.ServiceName, req.Name, req.IP); err != nil {
 		logging.Error("Failed to add record: %v", err)
 		http.Error(w, "Failed to add record", http.StatusInternalServerError)
 		return

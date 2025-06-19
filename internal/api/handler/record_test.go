@@ -28,7 +28,14 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = os.WriteFile(configPath, []byte(initialConfig), 0644)
 	require.NoError(t, err)
 
-	manager := coredns.NewManager(configPath, zonesPath, []string{"echo", "reload"})
+	// Create a dummy zone file for the test service
+	err = os.MkdirAll(zonesPath, 0755)
+	require.NoError(t, err)
+	zoneFileName := filepath.Join(zonesPath, "test-service.zone")
+	err = os.WriteFile(zoneFileName, []byte("$ORIGIN test-service.test.local."), 0644)
+	require.NoError(t, err)
+
+	manager := coredns.NewManager(configPath, zonesPath, []string{"echo", "reload"}, "test.local")
 	return NewRecordHandler(manager)
 }
 
@@ -46,8 +53,9 @@ func TestAddRecordHandler(t *testing.T) {
 			name:   "Valid request",
 			method: http.MethodPost,
 			requestBody: map[string]string{
-				"name": "test-service",
-				"ip":   "192.168.1.10",
+				"service_name": "test-service",
+				"name":         "test-record",
+				"ip":           "192.168.1.10",
 			},
 			expectedStatus: http.StatusCreated,
 			expectedBody:   "Record added successfully",
@@ -56,8 +64,9 @@ func TestAddRecordHandler(t *testing.T) {
 			name:   "Invalid method",
 			method: http.MethodGet,
 			requestBody: map[string]string{
-				"name": "test-service",
-				"ip":   "192.168.1.10",
+				"service_name": "test-service",
+				"name":         "test-record",
+				"ip":           "192.168.1.10",
 			},
 			expectedStatus: http.StatusMethodNotAllowed,
 			expectedBody:   "Method not allowed\n",

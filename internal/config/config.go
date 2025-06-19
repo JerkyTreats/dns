@@ -33,8 +33,9 @@ func SetConfigPath(path string) {
 // loadConfig initializes viper and loads config from file and env.
 func loadConfig() (*viper.Viper, error) {
 	v := viper.New()
-	v.SetConfigType("json")
+	v.SetConfigType("yaml")
 	v.SetConfigName("config")
+	v.AddConfigPath("./configs")
 	v.AddConfigPath(os.ExpandEnv("$HOME/.phite"))
 	if configPath != "" {
 		v.SetConfigFile(configPath)
