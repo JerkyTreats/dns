@@ -11,6 +11,14 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	LogLevelKey = "logging.level"
+)
+
+func init() {
+	config.RegisterRequiredKey(LogLevelKey)
+}
+
 var (
 	logger     *zap.SugaredLogger
 	loggerOnce sync.Once
@@ -19,7 +27,7 @@ var (
 // getZapLevel maps config log_level string to zapcore.Level.
 // Supports 'NONE' to silence all logs (for testing).
 func getZapLevel() zap.AtomicLevel {
-	levelStr := strings.ToUpper(config.GetString("log_level"))
+	levelStr := strings.ToUpper(config.GetString(LogLevelKey))
 	switch levelStr {
 	case "DEBUG":
 		return zap.NewAtomicLevelAt(zap.DebugLevel)

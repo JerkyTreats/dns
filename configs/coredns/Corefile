@@ -9,3 +9,16 @@ internal.jerkytreats.dev:53 {
     log
     file /zones/internal.jerkytreats.dev.db internal.jerkytreats.dev
 }
+
+internal.jerkytreats.dev:853 {
+    tls /etc/letsencrypt/live/internal.jerkytreats.dev/cert.pem /etc/letsencrypt/live/internal.jerkytreats.dev/privkey.pem
+    errors
+    log
+    file /zones/internal.jerkytreats.dev.db internal.jerkytreats.dev
+}
+
+_acme-challenge.internal.jerkytreats.dev:53 {
+    errors
+    log
+    file /zones/_acme-challenge.internal.jerkytreats.dev.zone
+}

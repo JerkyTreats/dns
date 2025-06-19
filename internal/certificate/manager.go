@@ -23,11 +23,14 @@ import (
 )
 
 const (
-	CertEmailKey    = "certificate.email"
-	CertDomainKey   = "certificate.domain"
-	CertCertFileKey = "server.tls.cert_file"
-	CertKeyFileKey  = "server.tls.key_file"
-	CertCADirURLKey = "certificate.ca_dir_url"
+	CertEmailKey                = "certificate.email"
+	CertDomainKey               = "certificate.domain"
+	CertCertFileKey             = "server.tls.cert_file"
+	CertKeyFileKey              = "server.tls.key_file"
+	CertCADirURLKey             = "certificate.ca_dir_url"
+	CertRenewalEnabledKey       = "certificate.renewal.enabled"
+	CertRenewalRenewBeforeKey   = "certificate.renewal.renew_before"
+	CertRenewalCheckIntervalKey = "certificate.renewal.check_interval"
 )
 
 func init() {
@@ -35,6 +38,10 @@ func init() {
 	config.RegisterRequiredKey(CertDomainKey)
 	config.RegisterRequiredKey(CertCertFileKey)
 	config.RegisterRequiredKey(CertKeyFileKey)
+	config.RegisterRequiredKey(CertCADirURLKey)
+	config.RegisterRequiredKey(CertRenewalEnabledKey)
+	config.RegisterRequiredKey(CertRenewalRenewBeforeKey)
+	config.RegisterRequiredKey(CertRenewalCheckIntervalKey)
 }
 
 // User implements acme.User
@@ -57,11 +64,11 @@ type Manager struct {
 }
 
 // NewManager creates a new certificate manager.
-func NewManager(cfg *viper.Viper) (*Manager, error) {
-	email := cfg.GetString(CertEmailKey)
-	certPath := cfg.GetString(CertCertFileKey)
-	keyPath := cfg.GetString(CertKeyFileKey)
-	zonesPath := cfg.GetString("dns.coredns.zones_path")
+func NewManager() (*Manager, error) {
+	email := config.GetString(CertEmailKey)
+	certPath := config.GetString(CertCertFileKey)
+	keyPath := config.GetString(CertKeyFileKey)
+	zonesPath := config.GetString("dns.coredns.zones_path")
 
 	dnsProvider := coredns.NewDNSProvider(zonesPath)
 
@@ -77,7 +84,6 @@ func NewManager(cfg *viper.Viper) (*Manager, error) {
 
 	config := lego.NewConfig(user)
 	config.Certificate.KeyType = certcrypto.RSA2048
-	config.CADirURL = cfg.GetString(CertCADirURLKey)
 
 	client, err := lego.NewClient(config)
 	if err != nil {
@@ -130,7 +136,11 @@ func (m *Manager) ObtainCertificate(domain string) error {
 }
 
 // StartRenewalLoop starts a ticker to periodically check and renew the certificate.
-func (m *Manager) StartRenewalLoop(domain string, renewalInterval, checkInterval time.Duration) {
+func (m *Manager) StartRenewalLoop(domain string) {
+	cfg := viper.GetViper()
+	renewalInterval := cfg.GetDuration(CertRenewalRenewBeforeKey)
+	checkInterval := cfg.GetDuration(CertRenewalCheckIntervalKey)
+
 	logging.Info("Starting certificate renewal loop")
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
@@ -168,7 +178,24 @@ func (m *Manager) checkAndRenew(domain string, renewalInterval time.Duration) {
 	}
 
 	logging.Info("Certificate for domain %s is due for renewal, expires in: %v", domain, expireIn)
-	// Implement renewal logic here
+
+	if err := os.Remove(m.certPath); err != nil {
+		logging.Error("Failed to remove old certificate file: %v", err)
+		return
+	}
+	if err := os.Remove(m.keyPath); err != nil {
+		logging.Error("Failed to remove old key file: %v", err)
+		return
+	}
+
+	logging.Info("Removed old certificate and key for domain: %s", domain)
+
+	if err := m.ObtainCertificate(domain); err != nil {
+		logging.Error("Failed to obtain new certificate for domain %s: %v", domain, err)
+		return
+	}
+
+	logging.Info("Successfully renewed certificate for domain: %s", domain)
 }
 
 func (m *Manager) saveCertificate(certs *certificate.Resource) error {
@@ -187,4 +214,23 @@ func (m *Manager) saveCertificate(certs *certificate.Resource) error {
 
 	logging.Info("Successfully saved certificate and key to %s and %s", m.certPath, m.keyPath)
 	return nil
+}
+
+func GetCertificateInfo(certPath string) (*x509.Certificate, error) {
+	certBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read certificate file: %w", err)
+	}
+
+	block, _ := pem.Decode(certBytes)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block from certificate")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	return cert, nil
 }

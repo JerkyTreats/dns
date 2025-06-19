@@ -7,8 +7,10 @@ services:
       dockerfile: Dockerfile.api
     ports:
       - "8080:8080"
+      - "8443:8443"
     volumes:
       - ./configs:/app/configs
+      - ./ssl:/etc/letsencrypt
     environment:
       - APP_ENV=development
     depends_on:
@@ -21,9 +23,11 @@ services:
     ports:
       - "53:53/udp"
       - "53:53/tcp"
+      - "853:853/tcp"
     volumes:
       - ./configs/coredns:/etc/coredns
-      - ./configs/coredns/zones:/zones
+      - ./configs/coredns/zones:/etc/coredns/zones
+      - ./ssl:/etc/letsencrypt:ro
     command: -conf /etc/coredns/Corefile
     networks:
       - dns-network

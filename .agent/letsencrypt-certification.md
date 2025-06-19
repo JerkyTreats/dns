@@ -359,3 +359,17 @@ The renewal script is no longer needed. The initial setup is handled by the appl
 ### Initial Setup
 
 The application will obtain a certificate on its first run if one doesn't exist. No script is needed.
+
+## Implementation Plan
+
+| Status      | Task                                                                | Component/File                                      |
+|-------------|---------------------------------------------------------------------|-----------------------------------------------------|
+| **Done**    | Create foundational certificate manager                             | `internal/certificate/manager.go`                   |
+| **Done**    | Implement DNS-01 challenge provider                                 | `internal/dns/coredns/provider.go`                  |
+| **Done** | Implement certificate renewal logic                               | `internal/certificate/manager.go`                   |
+| **Done**   | Add TLS and certificate configuration                               | `configs/config.yaml`                               |
+| **Done**   | Integrate certificate manager and TLS into the main application     | `cmd/api/main.go`                                   |
+| **Done**   | Update Docker environment for TLS and certificate volumes           | `docker-compose.yml`                                |
+| **Done**   | Configure CoreDNS for TLS and ACME challenges                       | `configs/coredns/Corefile`                          |
+| **Done**   | Enhance health check to include certificate status                  | `cmd/api/main.go`                                   |
+| **Done**   | Simplify automation scripts                                         | `scripts/`                                          |
