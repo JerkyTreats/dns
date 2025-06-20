@@ -19,7 +19,6 @@ import (
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/logging"
-	"github.com/spf13/viper"
 )
 
 const (
@@ -65,6 +64,8 @@ type Manager struct {
 
 // NewManager creates a new certificate manager.
 func NewManager() (*Manager, error) {
+	logging.Info("Creating certificate manager")
+
 	email := config.GetString(CertEmailKey)
 	certPath := config.GetString(CertCertFileKey)
 	keyPath := config.GetString(CertKeyFileKey)
@@ -110,13 +111,11 @@ func NewManager() (*Manager, error) {
 
 // ObtainCertificate obtains a new certificate if one does not already exist.
 func (m *Manager) ObtainCertificate(domain string) error {
-	// Check if certificate already exists
 	if _, err := os.Stat(m.certPath); err == nil {
 		logging.Info("Certificate already exists, skipping obtainment for domain: %s", domain)
 		return nil
 	}
 
-	// Register user if not already registered
 	if m.user.GetRegistration() == nil {
 		reg, err := m.legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 		if err != nil {
@@ -126,7 +125,6 @@ func (m *Manager) ObtainCertificate(domain string) error {
 		logging.Info("Successfully registered user: %s", m.user.Email)
 	}
 
-	// Obtain the certificate
 	request := certificate.ObtainRequest{
 		Domains: []string{domain, "*." + domain},
 		Bundle:  true,
@@ -142,11 +140,11 @@ func (m *Manager) ObtainCertificate(domain string) error {
 
 // StartRenewalLoop starts a ticker to periodically check and renew the certificate.
 func (m *Manager) StartRenewalLoop(domain string) {
-	cfg := viper.GetViper()
-	renewalInterval := cfg.GetDuration(CertRenewalRenewBeforeKey)
-	checkInterval := cfg.GetDuration(CertRenewalCheckIntervalKey)
-
 	logging.Info("Starting certificate renewal loop")
+
+	renewalInterval := config.GetDuration(CertRenewalRenewBeforeKey)
+	checkInterval := config.GetDuration(CertRenewalCheckIntervalKey)
+
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 

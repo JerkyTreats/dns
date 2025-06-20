@@ -1,4 +1,4 @@
-// Package config provides centralized, extensible configuration loading for PHITE using spf13/viper.
+// Package config provides centralized, extensible configuration loading for DNS using spf13/viper.
 // All config access must go through this package.
 package config
 
@@ -30,8 +30,7 @@ var (
 	instanceOnce      sync.Once
 	requiredKeys      []string
 	requiredKeysMutex sync.Mutex
-	// Replace global variable with a slice to track missing required keys
-	MissingKeys []string
+	missingKeys       []string
 )
 
 // getInstance returns the singleton config instance
@@ -264,12 +263,12 @@ func CheckRequiredKeys() error {
 	defer requiredKeysMutex.Unlock()
 
 	// Reset missing keys slice
-	MissingKeys = nil
+	missingKeys = nil
 
 	// Check each required key
 	for _, key := range requiredKeys {
 		if !HasKey(key) {
-			MissingKeys = append(MissingKeys, key)
+			missingKeys = append(missingKeys, key)
 		}
 	}
 
@@ -308,6 +307,6 @@ func ResetForTest() {
 	instance = nil
 	requiredKeysMutex.Lock()
 	requiredKeys = nil
-	MissingKeys = nil
+	missingKeys = nil
 	requiredKeysMutex.Unlock()
 }

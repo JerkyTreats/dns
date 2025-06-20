@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/jerkytreats/dns/internal/logging"
 )
 
 type DNSProvider struct {
@@ -18,6 +19,8 @@ func NewDNSProvider(zonesPath string) *DNSProvider {
 }
 
 func (d *DNSProvider) Present(domain, token, keyAuth string) error {
+	logging.Info("Presenting DNS challenge for domain: %s", domain)
+
 	fqdn, value := dns01.GetRecord(domain, keyAuth)
 
 	// The fqdn from GetRecord has a trailing dot, which we need to remove for the ORIGIN
@@ -27,13 +30,23 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 @	60 IN	TXT	"%s"`, origin, value)
 
 	challengeFile := d.getChallengeFilePath(fqdn)
-	return os.WriteFile(challengeFile, []byte(challengeContent), 0644)
+	if err := os.WriteFile(challengeFile, []byte(challengeContent), 0644); err != nil {
+		logging.Error("Failed to write challenge file: %v", err)
+		return err
+	}
+	return nil
 }
 
 func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
+	logging.Info("Cleaning up DNS challenge for domain: %s", domain)
+
 	fqdn, _ := dns01.GetRecord(domain, keyAuth)
 	challengeFile := d.getChallengeFilePath(fqdn)
-	return os.Remove(challengeFile)
+	if err := os.Remove(challengeFile); err != nil {
+		logging.Error("Failed to remove challenge file: %v", err)
+		return err
+	}
+	return nil
 }
 
 func (d *DNSProvider) getChallengeFilePath(fqdn string) string {
