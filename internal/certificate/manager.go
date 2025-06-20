@@ -82,10 +82,15 @@ func NewManager() (*Manager, error) {
 		key:   privateKey,
 	}
 
-	config := lego.NewConfig(user)
-	config.Certificate.KeyType = certcrypto.RSA2048
+	legoConfig := lego.NewConfig(user)
+	legoConfig.Certificate.KeyType = certcrypto.RSA2048
 
-	client, err := lego.NewClient(config)
+	// Set custom CA directory URL if provided
+	if caURL := config.GetString(CertCADirURLKey); caURL != "" {
+		legoConfig.CADirURL = caURL
+	}
+
+	client, err := lego.NewClient(legoConfig)
 	if err != nil {
 		return nil, fmt.Errorf("could not create lego client: %w", err)
 	}

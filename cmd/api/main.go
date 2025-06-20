@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -48,6 +49,29 @@ func init() {
 }
 
 func main() {
+	// Command-line flag for config file
+	configFile := flag.String("config", "", "Path to the configuration file")
+	flag.Parse()
+
+	// Initialize configuration
+	if *configFile != "" {
+		if err := config.InitConfig(config.WithConfigPath(*configFile)); err != nil {
+			fmt.Printf("Failed to initialize configuration: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		if err := config.InitConfig(); err != nil {
+			fmt.Printf("Failed to initialize configuration: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Check required configuration keys after initialization
+	if err := config.CheckRequiredKeys(); err != nil {
+		fmt.Printf("Configuration validation failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Initialize logger
 	logging.Info("Application starting...")
 	defer logging.Sync()

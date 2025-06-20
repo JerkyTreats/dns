@@ -1,0 +1,13 @@
+$ORIGIN test.jerkytreats.dev.
+$TTL 300
+
+@   IN  SOA ns1.test.jerkytreats.dev. admin.test.jerkytreats.dev. (
+        2024061901  ; Serial
+        7200        ; Refresh
+        3600        ; Retry
+        1209600     ; Expire
+        3600        ; Minimum TTL
+    )
+
+@   IN  NS  ns1.test.jerkytreats.dev.
+ns1 IN  A   127.0.0.1

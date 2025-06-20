@@ -1,0 +1,11 @@
+test.jerkytreats.dev:53 {
+    errors
+    log
+    file /etc/coredns/zones/test.jerkytreats.dev.zone
+}
+
+.:53 {
+    errors
+    log
+    forward . 8.8.8.8 8.8.4.4
+}

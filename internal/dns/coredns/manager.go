@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
@@ -166,6 +167,24 @@ func (m *Manager) Reload() error {
 		logging.Warn("No reload command configured for CoreDNS.")
 		return nil
 	}
+
+	// Special handling for integration tests
+	if m.reloadCommand[0] == "docker-compose" && m.reloadCommand[1] == "restart" {
+		cmd := exec.Command("docker-compose", "-f", "docker-compose.test.yml", "restart", "coredns-test")
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+
+		if err := cmd.Run(); err != nil {
+			logging.Error("CoreDNS restart failed: %s", out.String())
+			return fmt.Errorf("restarting CoreDNS container failed: %w: %s", err, out.String())
+		}
+		logging.Info("CoreDNS container restarted successfully: %s", out.String())
+		// Give coredns time to restart
+		time.Sleep(5 * time.Second)
+		return nil
+	}
+
 	cmd := exec.Command(m.reloadCommand[0], m.reloadCommand[1:]...)
 	var out bytes.Buffer
 	cmd.Stdout = &out

@@ -1,0 +1,48 @@
+app:
+  name: dns-manager
+  version: 1.0.0
+  environment: test
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 120s
+  tls:
+    enabled: false
+    port: 8443
+    cert_file: /etc/letsencrypt/live/test.jerkytreats.dev/cert.pem
+    key_file: /etc/letsencrypt/live/test.jerkytreats.dev/privkey.pem
+    min_version: "1.2"
+    max_version: "1.3"
+
+dns:
+  domain: test.jerkytreats.dev
+  coredns:
+    config_path: /etc/coredns/Corefile
+    zones_path: /etc/coredns/zones
+    reload_command: [] # Disabled for tests - CoreDNS will pick up file changes
+    tls:
+      enabled: false
+      port: 853
+      cert_file: /etc/letsencrypt/live/test.jerkytreats.dev/cert.pem
+      key_file: /etc/letsencrypt/live/test.jerkytreats.dev/privkey.pem
+
+logging:
+  level: debug
+  format: json
+  output: stdout
+
+certificate:
+  provider: "lego"
+  email: "admin@test.jerkytreats.dev"
+  domain: "test.jerkytreats.dev"
+  ca_dir_url: "https://pebble:14000/dir"
+  renewal:
+    enabled: false
+    renew_before: "720h" # 30 days
+    check_interval: "24h"
+  monitoring:
+    enabled: false
+    alert_threshold: "168h" # 7 days

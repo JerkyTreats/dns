@@ -1,0 +1,48 @@
+services:
+  api-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    command: ["/app/api", "-config", "/app/configs/config.test.yaml"]
+    ports:
+      - "8081:8080"
+      - "8444:8443"
+    volumes:
+      - ./configs:/app/configs
+      - ./configs/coredns-test/zones:/etc/coredns/zones
+    environment:
+      - APP_ENV=test
+    depends_on:
+      - coredns-test
+    networks:
+      - dns-test-network
+
+  coredns-test:
+    image: coredns/coredns:1.11.1
+    ports:
+      - "5353:53/udp"
+      - "5353:53/tcp"
+    volumes:
+      - ./configs/coredns-test:/etc/coredns
+      - ./configs/coredns-test/zones:/etc/coredns/zones
+    command: ["-conf", "/etc/coredns/Corefile"]
+    networks:
+      - dns-test-network
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: -config /test/config/pebble-config.json
+    ports:
+      - "14000:14000" # ACME
+      - "15000:15000" # Management
+    environment:
+      - PEBBLE_VA_NOSLEEP=1
+      - PEBBLE_WFE_NONCEREJECT=20
+    volumes:
+      - ./configs/pebble:/test/config
+    networks:
+      - dns-test-network
+
+networks:
+  dns-test-network:
+    driver: bridge
