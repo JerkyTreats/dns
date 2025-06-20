@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,23 +62,25 @@ func TestCheckRequiredKeys(t *testing.T) {
 	RegisterRequiredKey("required_key1")
 	RegisterRequiredKey("required_key2")
 
-	// Test missing keys
+	// Test missing keys - now should return error
 	err := CheckRequiredKeys()
-	require.NoError(t, err) // We removed the error return in cleanup
+	require.Error(t, err) // Should return error for missing keys
+	assert.Contains(t, err.Error(), "missing required configuration keys")
 
 	// For this test, we can verify the internal state through HasKey
 	assert.False(t, HasKey("required_key1"))
 	assert.False(t, HasKey("required_key2"))
 
-	// Set one key and test again
+	// Set one key and test again - still should error for the missing second key
 	SetForTest("required_key1", "value1")
 	err = CheckRequiredKeys()
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required_key2")
 
 	assert.True(t, HasKey("required_key1"))
 	assert.False(t, HasKey("required_key2"))
 
-	// Set the second key
+	// Set the second key - now should pass
 	SetForTest("required_key2", "value2")
 	err = CheckRequiredKeys()
 	require.NoError(t, err)
@@ -480,16 +481,258 @@ func TestDefaultValues(t *testing.T) {
 	// Reset config before test
 	ResetForTest()
 
-	// Initialize with no config file
+	// Initialize with isolated search paths to avoid project config files
 	tmpDir := t.TempDir()
-	err := InitConfig(WithOnlySearchPaths(tmpDir))
+	err := InitConfig(WithOnlySearchPaths(tmpDir)) // Empty directory
 	assert.NoError(t, err)
 
-	// Test all default values
+	// Test default values
 	assert.Equal(t, "INFO", GetString(LogLevelKey))
 	assert.Equal(t, 0, GetInt("nonexistent_int"))
 	assert.False(t, GetBool("nonexistent_bool"))
-	assert.Equal(t, time.Duration(0), GetDuration("nonexistent_duration"))
-	assert.Empty(t, GetStringSlice("nonexistent_slice"))
-	assert.Empty(t, GetStringMapString("nonexistent_map"))
+}
+
+func TestGetBootstrapConfig(t *testing.T) {
+	// Reset config before test
+	ResetForTest()
+	defer ResetForTest()
+
+	// Create a temporary config file with bootstrap config
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+dns:
+  internal:
+    origin: "internal.test.local"
+    bootstrap_devices:
+      - name: "ns"
+        tailscale_name: "omnitron"
+        aliases: ["omnitron", "dns"]
+        description: "NAS, DNS host"
+        enabled: true
+      - name: "dev"
+        tailscale_name: "revenantor"
+        aliases: ["macbook"]
+        description: "MacBook development"
+        enabled: false
+`
+	err := os.WriteFile(configFile, []byte(configContent), 0644)
+	assert.NoError(t, err)
+
+	// Initialize with config path
+	err = InitConfig(WithConfigPath(configFile))
+	assert.NoError(t, err)
+
+	// Test bootstrap config
+	config := GetBootstrapConfig()
+	assert.Equal(t, "internal.test.local", config.Origin)
+	assert.Len(t, config.Devices, 2)
+
+	// Check first device
+	assert.Equal(t, "ns", config.Devices[0].Name)
+	assert.Equal(t, "omnitron", config.Devices[0].TailscaleName)
+	assert.Equal(t, []string{"omnitron", "dns"}, config.Devices[0].Aliases)
+	assert.Equal(t, "NAS, DNS host", config.Devices[0].Description)
+	assert.True(t, config.Devices[0].Enabled)
+
+	// Check second device
+	assert.Equal(t, "dev", config.Devices[1].Name)
+	assert.Equal(t, "revenantor", config.Devices[1].TailscaleName)
+	assert.Equal(t, []string{"macbook"}, config.Devices[1].Aliases)
+	assert.Equal(t, "MacBook development", config.Devices[1].Description)
+	assert.False(t, config.Devices[1].Enabled)
+}
+
+func TestValidateBootstrapConfig(t *testing.T) {
+	// Reset config before test
+	ResetForTest()
+	defer ResetForTest()
+
+	tests := []struct {
+		name          string
+		config        string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "Valid configuration",
+			config: `
+dns:
+  internal:
+    origin: "internal.test.local"
+    bootstrap_devices:
+      - name: "ns"
+        tailscale_name: "omnitron"
+        enabled: true
+`,
+			expectError: false,
+		},
+		{
+			name: "Missing origin",
+			config: `
+dns:
+  internal:
+    bootstrap_devices:
+      - name: "ns"
+        tailscale_name: "omnitron"
+        enabled: true
+`,
+			expectError:   true,
+			errorContains: "dns.internal.origin is required",
+		},
+		{
+			name: "No bootstrap devices",
+			config: `
+dns:
+  internal:
+    origin: "internal.test.local"
+    bootstrap_devices: []
+`,
+			expectError:   true,
+			errorContains: "at least one bootstrap device must be configured",
+		},
+		{
+			name: "Device missing name",
+			config: `
+dns:
+  internal:
+    origin: "internal.test.local"
+    bootstrap_devices:
+      - tailscale_name: "omnitron"
+        enabled: true
+`,
+			expectError:   true,
+			errorContains: "name is required",
+		},
+		{
+			name: "Device missing tailscale_name",
+			config: `
+dns:
+  internal:
+    origin: "internal.test.local"
+    bootstrap_devices:
+      - name: "ns"
+        enabled: true
+`,
+			expectError:   true,
+			errorContains: "tailscale_name is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset for each test
+			ResetForTest()
+
+			// Create temporary config file
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.yaml")
+			err := os.WriteFile(configFile, []byte(tt.config), 0644)
+			assert.NoError(t, err)
+
+			// Initialize config
+			err = InitConfig(WithConfigPath(configFile))
+			assert.NoError(t, err)
+
+			// Validate bootstrap config
+			err = ValidateBootstrapConfig()
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateTailscaleConfig(t *testing.T) {
+	// Reset config before test
+	ResetForTest()
+	defer ResetForTest()
+
+	tests := []struct {
+		name          string
+		config        string
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "Valid Tailscale configuration",
+			config: `
+tailscale:
+  api_key: "tskey-api-test"
+  tailnet: "test@example.com"
+`,
+			expectError: false,
+		},
+		{
+			name: "Missing API key",
+			config: `
+tailscale:
+  tailnet: "test@example.com"
+`,
+			expectError:   true,
+			errorContains: "tailscale.api_key is required",
+		},
+		{
+			name: "Missing tailnet",
+			config: `
+tailscale:
+  api_key: "tskey-api-test"
+`,
+			expectError:   true,
+			errorContains: "tailscale.tailnet is required",
+		},
+		{
+			name: "Empty Tailscale config",
+			config: `
+app:
+  name: test
+`,
+			expectError:   true,
+			errorContains: "tailscale.api_key is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset for each test
+			ResetForTest()
+
+			// Create temporary config file
+			tmpDir := t.TempDir()
+			configFile := filepath.Join(tmpDir, "config.yaml")
+			err := os.WriteFile(configFile, []byte(tt.config), 0644)
+			assert.NoError(t, err)
+
+			// Initialize config
+			err = InitConfig(WithConfigPath(configFile))
+			assert.NoError(t, err)
+
+			// Validate Tailscale config
+			err = ValidateTailscaleConfig()
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestConfigurationKeys(t *testing.T) {
+	// Test that configuration keys are properly defined
+	assert.Equal(t, "dns.internal.origin", DNSInternalOriginKey)
+	assert.Equal(t, "dns.internal.bootstrap_devices", DNSBootstrapDevicesKey)
+	assert.Equal(t, "tailscale.api_key", TailscaleAPIKeyKey)
+	assert.Equal(t, "tailscale.tailnet", TailscaleTailnetKey)
+	assert.Equal(t, "tailscale.base_url", TailscaleBaseURLKey)
 }

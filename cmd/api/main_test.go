@@ -37,6 +37,10 @@ func TestHealthCheckHandler(t *testing.T) {
 						"status":  "healthy",
 						"message": "CoreDNS is running",
 					},
+					"bootstrap": map[string]interface{}{
+						"status":  "disabled",
+						"message": "Dynamic zone bootstrap is disabled",
+					},
 				},
 			},
 		},

@@ -19,11 +19,26 @@ server:
 
 dns:
   domain: internal.jerkytreats.dev
-  # Dynamic zone bootstrap configuration (disabled by default)
+  # NEW: Dynamic bootstrap configuration - NO IP ADDRESSES!
   internal:
-    enabled: false  # Set to true to enable dynamic zone bootstrap
+    enabled: true  # Set to false to disable bootstrap
     origin: "internal.jerkytreats.dev"
-    bootstrap_devices: []  # Configure devices when enabled
+    bootstrap_devices:
+      - name: "ns"
+        tailscale_name: "omnitron"  # Tailscale device name
+        aliases: ["omnitron", "dns"]
+        description: "NAS, DNS host"
+        enabled: true
+      - name: "macbook"
+        tailscale_name: "revenantor"  # Tailscale device name
+        aliases: ["dev", "revenantor"]
+        description: "MacBook development"
+        enabled: true
+      - name: "android"
+        tailscale_name: "google-pixel-6"  # Tailscale device name
+        aliases: ["pixel"]
+        description: "Google Pixel 6"
+        enabled: false  # Optional devices can be disabled
   coredns:
     config_path: /etc/coredns/Corefile
     zones_path: /etc/coredns/zones
@@ -34,10 +49,11 @@ dns:
       cert_file: /etc/letsencrypt/live/internal.jerkytreats.dev/cert.pem
       key_file: /etc/letsencrypt/live/internal.jerkytreats.dev/privkey.pem
 
-# Tailscale configuration (only needed if bootstrap is enabled)
+# NEW: Tailscale integration configuration
 tailscale:
   api_key: "${TAILSCALE_API_KEY}"    # Environment variable
   tailnet: "${TAILSCALE_TAILNET}"    # Environment variable
+  # base_url: "https://api.tailscale.com"  # Optional, for custom endpoints
 
 logging:
   level: debug

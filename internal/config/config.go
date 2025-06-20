@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"os" // Added for ToUpper
 	"sync"
 	"time"
@@ -13,7 +14,31 @@ import (
 // Exported configuration keys
 const (
 	LogLevelKey = "log_level"
+
+	// DNS Bootstrap configuration keys
+	DNSInternalOriginKey   = "dns.internal.origin"
+	DNSBootstrapDevicesKey = "dns.internal.bootstrap_devices"
+
+	// Tailscale configuration keys
+	TailscaleAPIKeyKey  = "tailscale.api_key"
+	TailscaleTailnetKey = "tailscale.tailnet"
+	TailscaleBaseURLKey = "tailscale.base_url" // Optional, for testing
 )
+
+// BootstrapDevice represents a device configuration for bootstrap
+type BootstrapDevice struct {
+	Name          string   `yaml:"name" mapstructure:"name"`
+	TailscaleName string   `yaml:"tailscale_name" mapstructure:"tailscale_name"`
+	Aliases       []string `yaml:"aliases,omitempty" mapstructure:"aliases"`
+	Description   string   `yaml:"description,omitempty" mapstructure:"description"`
+	Enabled       bool     `yaml:"enabled" mapstructure:"enabled"`
+}
+
+// BootstrapConfig represents the bootstrap configuration section
+type BootstrapConfig struct {
+	Origin  string            `yaml:"origin" mapstructure:"origin"`
+	Devices []BootstrapDevice `yaml:"bootstrap_devices" mapstructure:"bootstrap_devices"`
+}
 
 // Config holds the configuration state and provides thread-safe access
 type Config struct {
@@ -223,7 +248,7 @@ func GetStringSlice(key string) []string {
 	defer cfg.mu.RUnlock()
 
 	if cfg.viper == nil {
-		return nil
+		return []string{}
 	}
 	return cfg.viper.GetStringSlice(key)
 }
@@ -241,55 +266,68 @@ func GetDuration(key string) time.Duration {
 	return cfg.viper.GetDuration(key)
 }
 
-// RegisterRequiredKey adds a key to the list of required configuration items.
-// This should be called during the init() phase of packages that require specific configurations.
-// It only registers the key without loading config - use CheckRequiredKeys() to validate.
+// GetBootstrapConfig returns the bootstrap configuration
+func GetBootstrapConfig() BootstrapConfig {
+	cfg := getInstance()
+	_ = cfg.ensureInitialized()
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
+
+	var bootstrapConfig BootstrapConfig
+	if cfg.viper != nil {
+		cfg.viper.UnmarshalKey("dns.internal", &bootstrapConfig)
+	}
+	return bootstrapConfig
+}
+
+// RegisterRequiredKey adds a key to the list of required configuration keys.
 func RegisterRequiredKey(key string) {
 	requiredKeysMutex.Lock()
 	defer requiredKeysMutex.Unlock()
-	// Avoid duplicates
-	for _, k := range requiredKeys {
-		if k == key {
-			return
-		}
-	}
 	requiredKeys = append(requiredKeys, key)
 }
 
-// CheckRequiredKeys validates that all registered required keys are present in the configuration.
-// This should be called after setting the config path but before using config values.
+// CheckRequiredKeys validates that all required keys have values.
 func CheckRequiredKeys() error {
 	requiredKeysMutex.Lock()
 	defer requiredKeysMutex.Unlock()
 
-	// Reset missing keys slice
-	missingKeys = nil
+	cfg := getInstance()
+	_ = cfg.ensureInitialized()
 
-	// Check each required key
+	// Reset missing keys slice
+	missingKeys = []string{}
+
 	for _, key := range requiredKeys {
-		if !HasKey(key) {
+		if !cfg.hasKey(key) {
 			missingKeys = append(missingKeys, key)
 		}
 	}
 
-	// Return error if any keys are missing (optional - for now just track them)
+	if len(missingKeys) > 0 {
+		return fmt.Errorf("missing required configuration keys: %v", missingKeys)
+	}
 	return nil
 }
 
-// HasKey returns true if the config has the key.
+// HasKey checks if a configuration key exists.
 func HasKey(key string) bool {
 	cfg := getInstance()
 	_ = cfg.ensureInitialized()
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 
-	if cfg.viper == nil {
-		return false
-	}
-	return cfg.viper.IsSet(key)
+	return cfg.hasKey(key)
 }
 
-// SetForTest sets a configuration value for testing purposes only.
+func (c *Config) hasKey(key string) bool {
+	if c.viper == nil {
+		return false
+	}
+	return c.viper.IsSet(key)
+}
+
+// SetForTest sets a configuration value for testing purposes.
 func SetForTest(key string, value interface{}) {
 	cfg := getInstance()
 	_ = cfg.ensureInitialized()
@@ -301,12 +339,49 @@ func SetForTest(key string, value interface{}) {
 	}
 }
 
-// ResetForTest resets the config singleton for test use only.
+// ResetForTest resets the configuration instance for testing.
 func ResetForTest() {
 	instanceOnce = sync.Once{}
 	instance = nil
-	requiredKeysMutex.Lock()
-	requiredKeys = nil
-	missingKeys = nil
-	requiredKeysMutex.Unlock()
+	requiredKeys = []string{}
+	missingKeys = []string{}
+}
+
+// ValidateBootstrapConfig validates the bootstrap configuration
+func ValidateBootstrapConfig() error {
+	bootstrapConfig := GetBootstrapConfig()
+
+	if bootstrapConfig.Origin == "" {
+		return fmt.Errorf("dns.internal.origin is required")
+	}
+
+	if len(bootstrapConfig.Devices) == 0 {
+		return fmt.Errorf("at least one bootstrap device must be configured")
+	}
+
+	for i, device := range bootstrapConfig.Devices {
+		if device.Name == "" {
+			return fmt.Errorf("device %d: name is required", i)
+		}
+		if device.TailscaleName == "" {
+			return fmt.Errorf("device %d (%s): tailscale_name is required", i, device.Name)
+		}
+	}
+
+	return nil
+}
+
+// ValidateTailscaleConfig validates the Tailscale configuration
+func ValidateTailscaleConfig() error {
+	apiKey := GetString(TailscaleAPIKeyKey)
+	if apiKey == "" {
+		return fmt.Errorf("tailscale.api_key is required")
+	}
+
+	tailnet := GetString(TailscaleTailnetKey)
+	if tailnet == "" {
+		return fmt.Errorf("tailscale.tailnet is required")
+	}
+
+	return nil
 }
