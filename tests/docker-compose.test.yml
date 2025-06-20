@@ -1,8 +1,8 @@
 services:
   api-test:
     build:
-      context: .
-      dockerfile: Dockerfile.test
+      context: ..
+      dockerfile: tests/Dockerfile.test
     command: ["/app/api", "-config", "/app/configs/config.test.yaml"]
     ports:
       - "8081:8080"

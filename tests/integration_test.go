@@ -140,7 +140,7 @@ func TestDNS_QueryRecord(t *testing.T) {
 	time.Sleep(15 * time.Second)
 
 	// Query the record using Docker network since localhost:5353 conflicts with macOS mDNS
-	dnsCmd := exec.Command("docker", "run", "--rm", "--network", "dns_dns-test-network",
+	dnsCmd := exec.Command("docker", "run", "--rm", "--network", "tests_dns-test-network",
 		"busybox", "nslookup", "www.test-query.test.jerkytreats.dev", "coredns-test")
 
 	var out bytes.Buffer
