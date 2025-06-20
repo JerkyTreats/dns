@@ -1,0 +1,53 @@
+# Build stage
+FROM golang:1.24.3-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/api ./cmd/api
+
+# Final stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata netcat-openbsd curl bind-tools
+
+# Create non-root user
+RUN adduser -D -g '' appuser
+
+# Create zones directory and set permissions
+RUN mkdir -p /etc/coredns/zones && chown -R appuser:appuser /etc/coredns
+
+# Set working directory
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/bin/api /app/api
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+# For testing, run as root to avoid permission issues with mounted volumes
+# USER appuser
+
+# Expose port
+EXPOSE 8080
+
+# Set environment variables
+ENV GIN_MODE=release
+
+# Run the application
+CMD ["/app/api"]

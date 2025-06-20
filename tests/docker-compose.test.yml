@@ -13,9 +13,40 @@ services:
     environment:
       - APP_ENV=test
     depends_on:
-      - coredns-test
+      coredns-test:
+        condition: service_started
     networks:
       - dns-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: tests/Dockerfile.test-runner
+    working_dir: /app/tests
+    volumes:
+      - ..:/app
+    environment:
+      - CGO_ENABLED=0
+      - API_BASE_URL=http://api-test:8080
+      - DNS_SERVER=coredns-test:53
+      - PEBBLE_BASE_URL=http://pebble:15000
+      - INTEGRATION_TEST=1
+    depends_on:
+      api-test:
+        condition: service_healthy
+      coredns-test:
+        condition: service_started
+    networks:
+      - dns-test-network
+    profiles:
+      - test
+    command: sh -c "cd /app && go test -v ./tests/integration_test.go ./tests/integration_bootstrap_test.go -tags=integration"
 
   coredns-test:
     image: coredns/coredns:1.11.1
@@ -28,6 +59,12 @@ services:
     command: ["-conf", "/etc/coredns/Corefile"]
     networks:
       - dns-test-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -u -z localhost 53"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 3s
 
   pebble:
     image: ghcr.io/letsencrypt/pebble:latest
@@ -42,7 +79,17 @@ services:
       - ./configs/pebble:/test/config
     networks:
       - dns-test-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 15000"] # Check management port instead
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 15s
 
 networks:
   dns-test-network:
     driver: bridge
+
+volumes:
+  coredns-zones:
+    driver: local
