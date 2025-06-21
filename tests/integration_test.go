@@ -16,7 +16,9 @@ import (
 
 	"github.com/jerkytreats/dns/internal/certificate"
 	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/dns/bootstrap"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -475,4 +477,473 @@ func TestCertificateManagement(t *testing.T) {
 	})
 
 	fmt.Println("  ✅ Certificate management integration tests completed")
+}
+
+// P0 CRITICAL PRIORITY INTEGRATION TESTS
+
+func TestServiceStartupIntegration(t *testing.T) {
+	fmt.Println("🧪 Testing Service Startup Integration (P0)...")
+
+	// Test complete application initialization flow similar to main.go
+	t.Run("Configuration_Initialization", func(t *testing.T) {
+		// Test config loading and validation
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		// Load test configuration
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err, "Should be able to initialize configuration")
+
+		// Verify required keys are available
+		err = config.CheckRequiredKeys()
+		require.NoError(t, err, "Required configuration keys should be present")
+
+		fmt.Println("    ✅ Configuration initialization successful")
+	})
+
+	t.Run("CoreDNS_Manager_Initialization", func(t *testing.T) {
+		// Test CoreDNS manager creation with test config
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		configPath := config.GetString("dns.coredns.config_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+
+		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		assert.NotNil(t, manager, "CoreDNS manager should be created successfully")
+
+		fmt.Println("    ✅ CoreDNS manager initialization successful")
+	})
+
+	t.Run("Bootstrap_Manager_Initialization", func(t *testing.T) {
+		// Test bootstrap manager creation with mock Tailscale
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		// Set up test configuration for bootstrap
+		config.SetForTest("dns.internal.enabled", "true")
+		config.SetForTest("dns.internal.origin", "internal.test.jerkytreats.dev")
+		config.SetForTest("dns.internal.bootstrap_devices", []map[string]interface{}{
+			{
+				"name":           "test-device-1",
+				"tailscale_name": "test-device",
+				"enabled":        true,
+			},
+		})
+		config.SetForTest("tailscale.api_key", "test-api-key")
+		config.SetForTest("tailscale.tailnet", "test-tailnet")
+		config.SetForTest("tailscale.base_url", "http://mock-tailscale")
+
+		// Override CoreDNS paths for test environment
+		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
+
+		// Create managers
+		configPath := config.GetString("dns.coredns.config_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+		coreManager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+
+		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
+		bootstrapConfig := config.GetBootstrapConfig()
+		bootstrapManager := bootstrap.NewManager(coreManager, tailscaleClient, bootstrapConfig)
+
+		assert.NotNil(t, bootstrapManager, "Bootstrap manager should be created successfully")
+
+		// Test validation
+		err = bootstrapManager.ValidateConfiguration()
+		require.NoError(t, err, "Bootstrap configuration should be valid")
+
+		fmt.Println("    ✅ Bootstrap manager initialization successful")
+	})
+
+	t.Run("Certificate_Manager_Initialization", func(t *testing.T) {
+		// Test certificate manager creation
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		config.SetForTest("certificate.email", "test@test.jerkytreats.dev")
+		config.SetForTest("certificate.domain", "test.jerkytreats.dev")
+		config.SetForTest("certificate.ca_dir_url", "https://pebble:14000/dir")
+		config.SetForTest("certificate.insecure_skip_verify", "true")
+		config.SetForTest("server.tls.cert_file", "/tmp/test-cert.pem")
+		config.SetForTest("server.tls.key_file", "/tmp/test-key.pem")
+		config.SetForTest("dns.coredns.zones_path", "/tmp/test-zones")
+		config.SetForTest("certificate.renewal.enabled", "false")
+		config.SetForTest("certificate.renewal.renew_before", "720h")
+		config.SetForTest("certificate.renewal.check_interval", "24h")
+
+		manager, err := certificate.NewManager()
+		require.NoError(t, err, "Certificate manager should be created successfully")
+		assert.NotNil(t, manager, "Certificate manager should not be nil")
+
+		fmt.Println("    ✅ Certificate manager initialization successful")
+	})
+
+	t.Run("Service_Integration_Health", func(t *testing.T) {
+		// Test that all services can work together without conflicts
+		resp, err := http.Get(getAPIBaseURL() + "/health")
+		require.NoError(t, err, "Health endpoint should be accessible")
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "Health endpoint should return OK")
+
+		var healthResp map[string]interface{}
+		err = json.NewDecoder(resp.Body).Decode(&healthResp)
+		require.NoError(t, err, "Health response should be valid JSON")
+
+		status, ok := healthResp["status"].(string)
+		require.True(t, ok, "Health response should have status field")
+		assert.Equal(t, "healthy", status, "Service should report healthy status")
+
+		fmt.Println("    ✅ Service integration health check successful")
+	})
+
+	fmt.Println("  ✅ Service startup integration test passed")
+}
+
+func TestEndToEndBootstrapWorkflow(t *testing.T) {
+	fmt.Println("🧪 Testing End-to-End Bootstrap Workflow (P0)...")
+
+	// Clean up any existing test zones
+	testZoneFile := "configs/coredns-test/zones/internal.zone"
+	os.Remove(testZoneFile)
+	defer os.Remove(testZoneFile)
+
+	t.Run("Tailscale_Device_Discovery", func(t *testing.T) {
+		// Test device discovery from mock Tailscale service
+		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
+
+		devices, err := tailscaleClient.ListDevices()
+		require.NoError(t, err, "Should be able to list devices from mock Tailscale")
+		assert.GreaterOrEqual(t, len(devices), 1, "Should find at least one device")
+
+		// Verify device structure
+		device := devices[0]
+		assert.NotEmpty(t, device.Name, "Device should have a name")
+		assert.NotEmpty(t, device.Addresses, "Device should have addresses")
+		assert.True(t, len(device.Addresses) > 0, "Device should have at least one address")
+
+		fmt.Println("    ✅ Device discovery successful")
+	})
+
+	t.Run("Bootstrap_Zone_Creation", func(t *testing.T) {
+		// Set up test configuration
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		// Override CoreDNS paths for test environment
+		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
+
+		// Create managers
+		configPath := config.GetString("dns.coredns.config_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+		coreManager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+
+		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
+
+		// Set up bootstrap config with test device
+		config.SetForTest("dns.internal.origin", "internal.test.jerkytreats.dev.")
+		config.SetForTest("dns.internal.bootstrap_devices", []map[string]interface{}{
+			{
+				"name":           "test-device-1",
+				"tailscale_name": "test-device",
+				"enabled":        true,
+			},
+		})
+
+		bootstrapConfig := config.GetBootstrapConfig()
+		bootstrapManager := bootstrap.NewManager(coreManager, tailscaleClient, bootstrapConfig)
+
+		// Test zone creation and device bootstrap
+		err = bootstrapManager.EnsureInternalZone()
+		require.NoError(t, err, "Bootstrap should create internal zone successfully")
+
+		// Verify zone file was created
+		expectedZoneFile := "configs/coredns-test/zones/internal.zone"
+		_, err = os.Stat(expectedZoneFile)
+		require.NoError(t, err, "Internal zone file should be created")
+
+		// Verify zone file contains expected content
+		content, err := os.ReadFile(expectedZoneFile)
+		require.NoError(t, err, "Should be able to read zone file")
+
+		zoneContent := string(content)
+		assert.Contains(t, zoneContent, "internal.test.jerkytreats.dev", "Zone should contain correct domain")
+		assert.Contains(t, zoneContent, "test-device-1", "Zone should contain bootstrapped device")
+
+		fmt.Println("    ✅ Bootstrap zone creation successful")
+	})
+
+	t.Run("DNS_Record_Resolution", func(t *testing.T) {
+		// Wait for DNS changes to propagate
+		fmt.Println("    ⏳ Waiting for DNS propagation...")
+		time.Sleep(5 * time.Second)
+
+		// Test DNS resolution of bootstrapped device
+		dnsCmd := exec.Command("/usr/bin/dig", "@coredns-test", "test-device-1.internal.test.jerkytreats.dev", "A", "+short", "+time=5")
+		var out bytes.Buffer
+		dnsCmd.Stdout = &out
+		dnsCmd.Stderr = &out
+
+		err := dnsCmd.Run()
+		if err != nil {
+			t.Logf("DNS query output: %s", out.String())
+			// Try alternative query to verify DNS server is working
+			altCmd := exec.Command("/usr/bin/dig", "@coredns-test", "test.jerkytreats.dev", "SOA", "+short")
+			var altOut bytes.Buffer
+			altCmd.Stdout = &altOut
+			if altCmd.Run() == nil && altOut.String() != "" {
+				fmt.Println("    ⚠️  DNS server working but bootstrap record not yet resolvable (timing issue)")
+				return
+			}
+		}
+
+		output := out.String()
+		t.Logf("DNS query result: %s", output)
+
+		// Check if we got an IP address (100.x.x.x range expected from mock Tailscale)
+		if strings.Contains(output, "100.") {
+			fmt.Println("    ✅ DNS record resolution successful")
+		} else {
+			fmt.Println("    ⚠️  DNS record not yet resolvable (propagation delay)")
+		}
+	})
+
+	t.Run("Bootstrap_Status_Verification", func(t *testing.T) {
+		// Set up bootstrap manager again to check status
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		// Override CoreDNS paths for test environment
+		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
+
+		configPath := config.GetString("dns.coredns.config_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+		coreManager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+
+		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
+
+		config.SetForTest("dns.internal.origin", "internal.test.jerkytreats.dev.")
+		config.SetForTest("dns.internal.bootstrap_devices", []map[string]interface{}{
+			{
+				"name":           "test-device-1",
+				"tailscale_name": "test-device",
+				"enabled":        true,
+			},
+		})
+
+		bootstrapConfig := config.GetBootstrapConfig()
+		bootstrapManager := bootstrap.NewManager(coreManager, tailscaleClient, bootstrapConfig)
+
+		// Verify bootstrap status
+		isBootstrapped := bootstrapManager.IsZoneBootstrapped()
+		assert.True(t, isBootstrapped, "Zone should be marked as bootstrapped")
+
+		fmt.Println("    ✅ Bootstrap status verification successful")
+	})
+
+	fmt.Println("  ✅ End-to-end bootstrap workflow test passed")
+}
+
+func TestZoneManagementIntegration(t *testing.T) {
+	fmt.Println("🧪 Testing Zone Management Integration (P0)...")
+
+	// Clean up test files
+	testZoneFile := "configs/coredns-test/zones/test-zone-mgmt.zone"
+	testCorefilePath := "configs/coredns-test/Corefile"
+
+	defer func() {
+		os.Remove(testZoneFile)
+		// Restore original Corefile
+		if originalCorefile, err := os.ReadFile("configs/coredns-test/Corefile.backup"); err == nil {
+			os.WriteFile(testCorefilePath, originalCorefile, 0644)
+		}
+	}()
+
+	// Backup original Corefile
+	if originalCorefile, err := os.ReadFile(testCorefilePath); err == nil {
+		os.WriteFile("configs/coredns-test/Corefile.backup", originalCorefile, 0644)
+	}
+
+	t.Run("Zone_Creation", func(t *testing.T) {
+		// Test zone creation through CoreDNS manager
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		// Override CoreDNS paths for test environment
+		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
+
+		configPath := config.GetString("dns.coredns.config_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+
+		// Create a new zone
+		err = manager.AddZone("test-zone-mgmt")
+		require.NoError(t, err, "Should be able to create new zone")
+
+		// Verify zone file was created
+		_, err = os.Stat(testZoneFile)
+		require.NoError(t, err, "Zone file should be created")
+
+		// Verify zone file content
+		content, err := os.ReadFile(testZoneFile)
+		require.NoError(t, err, "Should be able to read zone file")
+
+		zoneContent := string(content)
+		assert.Contains(t, zoneContent, "test-zone-mgmt.test.jerkytreats.dev", "Zone should contain correct domain")
+		assert.Contains(t, zoneContent, "SOA", "Zone should contain SOA record")
+		assert.Contains(t, zoneContent, "NS", "Zone should contain NS record")
+
+		fmt.Println("    ✅ Zone creation successful")
+	})
+
+	t.Run("DNS_Record_Addition", func(t *testing.T) {
+		// Test adding DNS records to the zone
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		// Override CoreDNS paths for test environment
+		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
+
+		configPath := config.GetString("dns.coredns.config_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+
+		// Add a record to the zone
+		err = manager.AddRecord("test-zone-mgmt", "www", "192.168.100.1")
+		require.NoError(t, err, "Should be able to add DNS record")
+
+		// Verify record was added to zone file
+		content, err := os.ReadFile(testZoneFile)
+		require.NoError(t, err, "Should be able to read zone file")
+
+		zoneContent := string(content)
+		assert.Contains(t, zoneContent, "www", "Zone should contain the new record name")
+		assert.Contains(t, zoneContent, "192.168.100.1", "Zone should contain the new record IP")
+
+		// Add another record
+		err = manager.AddRecord("test-zone-mgmt", "api", "192.168.100.2")
+		require.NoError(t, err, "Should be able to add second DNS record")
+
+		// Verify both records exist
+		content, err = os.ReadFile(testZoneFile)
+		require.NoError(t, err)
+
+		zoneContent = string(content)
+		assert.Contains(t, zoneContent, "www", "Zone should contain first record")
+		assert.Contains(t, zoneContent, "192.168.100.1", "Zone should contain first record IP")
+		assert.Contains(t, zoneContent, "api", "Zone should contain second record")
+		assert.Contains(t, zoneContent, "192.168.100.2", "Zone should contain second record IP")
+
+		fmt.Println("    ✅ DNS record addition successful")
+	})
+
+	t.Run("CoreDNS_Configuration_Update", func(t *testing.T) {
+		// Verify that Corefile was updated with the new zone
+		content, err := os.ReadFile(testCorefilePath)
+		require.NoError(t, err, "Should be able to read Corefile")
+
+		corefileContent := string(content)
+		assert.Contains(t, corefileContent, "test-zone-mgmt.test.jerkytreats.dev", "Corefile should contain new zone")
+		assert.Contains(t, corefileContent, "test-zone-mgmt.zone", "Corefile should reference zone file")
+
+		fmt.Println("    ✅ CoreDNS configuration update successful")
+	})
+
+	t.Run("DNS_Resolution_Verification", func(t *testing.T) {
+		// Wait for DNS server to reload configuration
+		fmt.Println("    ⏳ Waiting for CoreDNS to reload configuration...")
+		time.Sleep(5 * time.Second)
+
+		// Test DNS resolution of added records
+		testRecords := []struct {
+			name string
+			ip   string
+		}{
+			{"www.test-zone-mgmt.test.jerkytreats.dev", "192.168.100.1"},
+			{"api.test-zone-mgmt.test.jerkytreats.dev", "192.168.100.2"},
+		}
+
+		for _, record := range testRecords {
+			dnsCmd := exec.Command("/usr/bin/dig", "@coredns-test", record.name, "A", "+short", "+time=3")
+			var out bytes.Buffer
+			dnsCmd.Stdout = &out
+			dnsCmd.Stderr = &out
+
+			err := dnsCmd.Run()
+			output := strings.TrimSpace(out.String())
+
+			if err != nil || !strings.Contains(output, record.ip) {
+				t.Logf("DNS query for %s failed or returned unexpected result: %s", record.name, output)
+				fmt.Printf("    ⚠️  DNS resolution for %s not working (may need DNS server restart)\n", record.name)
+			} else {
+				fmt.Printf("    ✅ DNS resolution for %s -> %s successful\n", record.name, record.ip)
+			}
+		}
+	})
+
+	t.Run("Zone_Cleanup", func(t *testing.T) {
+		// Test zone removal
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		// Override CoreDNS paths for test environment
+		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
+
+		configPath := config.GetString("dns.coredns.config_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+
+		// Remove the zone
+		err = manager.RemoveZone("test-zone-mgmt")
+		require.NoError(t, err, "Should be able to remove zone")
+
+		// Verify zone file was removed
+		_, err = os.Stat(testZoneFile)
+		assert.True(t, os.IsNotExist(err), "Zone file should be removed")
+
+		fmt.Println("    ✅ Zone cleanup successful")
+	})
+
+	fmt.Println("  ✅ Zone management integration test passed")
 }

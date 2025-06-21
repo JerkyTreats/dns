@@ -10,4 +10,13 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
+# Copy go.mod and go.sum first for better layer caching
+COPY go.mod go.sum ./
+
+# Download dependencies - this layer will be cached unless go.mod/go.sum changes
+RUN go mod download
+
+# Copy the rest of the source code
+COPY . .
+
 CMD ["sh", "-c", "cd /app && go test -v ./tests/integration_test.go -tags=integration"]

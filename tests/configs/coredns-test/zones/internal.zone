@@ -1,0 +1,11 @@
+$ORIGIN internal.test.jerkytreats.dev.
+@	3600 IN	SOA ns1.test.jerkytreats.dev. admin.test.jerkytreats.dev. (
+	2024061601 ; serial
+	7200       ; refresh
+	3600       ; retry
+	1209600    ; expire
+	3600       ; minimum
+)
+@	3600 IN	NS ns1.test.jerkytreats.dev.
+@	3600 IN	A 100.64.0.1
+test-device-1	IN	A	100.64.0.1

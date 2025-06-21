@@ -122,7 +122,13 @@ func main() {
 		}
 
 		// Create Tailscale client
-		tailscaleClient := tailscale.NewClient(apiKey, tailnet)
+		baseURL := config.GetString(config.TailscaleBaseURLKey)
+		var tailscaleClient *tailscale.Client
+		if baseURL != "" {
+			tailscaleClient = tailscale.NewClientWithBaseURL(apiKey, tailnet, baseURL)
+		} else {
+			tailscaleClient = tailscale.NewClient(apiKey, tailnet)
+		}
 
 		// Get bootstrap configuration
 		bootstrapConfig := config.GetBootstrapConfig()

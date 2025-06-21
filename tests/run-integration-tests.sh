@@ -50,17 +50,25 @@ print_status "🚀 Starting integration test run..."
 
 # Clean up any existing containers and networks
 print_status "🧹 Cleaning up any existing test containers..."
-docker-compose -f docker-compose.test.yml down -v --remove-orphans >/dev/null 2>&1 || true
+# Include --profile test to ensure test-runner service is properly cleaned up
+docker-compose -f docker-compose.test.yml --profile test down -v --remove-orphans >/dev/null 2>&1 || true
 
 # Additional network cleanup to prevent orphaned network issues
 print_status "🔧 Ensuring clean Docker network state..."
+# Remove any networks associated with this compose project
+docker network ls --filter "name=tests_" --format "{{.Name}}" | xargs -r docker network rm >/dev/null 2>&1 || true
+# Specifically remove the test network if it exists
+docker network rm tests_dns-test-network >/dev/null 2>&1 || true
 docker network prune -f >/dev/null 2>&1 || true
-sleep 1
+sleep 2
 
 # Function to handle cleanup on exit
 cleanup() {
     print_status "🧹 Cleaning up test environment..."
-    docker-compose -f docker-compose.test.yml down -v --remove-orphans >/dev/null 2>&1 || true
+    # Include --profile test to ensure test-runner service is properly cleaned up
+    docker-compose -f docker-compose.test.yml --profile test down -v --remove-orphans >/dev/null 2>&1 || true
+    # Specifically remove the test network if it exists
+    docker network rm tests_dns-test-network >/dev/null 2>&1 || true
     docker network prune -f >/dev/null 2>&1 || true
 }
 
@@ -97,7 +105,8 @@ docker pull ghcr.io/letsencrypt/pebble:latest &
 wait  # Wait for final image
 
 # Run tests entirely within Docker with parallel startup
-if ! docker-compose -f docker-compose.test.yml up --build --exit-code-from test-runner test-runner; then
+# Use --profile test to ensure proper service selection
+if ! docker-compose -f docker-compose.test.yml --profile test up --build --exit-code-from test-runner; then
     print_error "❌ Integration tests failed!"
 
     print_warning "Collecting diagnostic information..."

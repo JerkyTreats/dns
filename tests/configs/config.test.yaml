@@ -19,6 +19,20 @@ server:
 
 dns:
   domain: test.jerkytreats.dev
+  internal:
+    enabled: true
+    origin: "internal.test.jerkytreats.dev"
+    bootstrap_devices:
+      - name: "test-device-1"
+        tailscale_name: "test-device"
+        aliases: ["test-device", "device1"]
+        description: "Test device 1"
+        enabled: true
+      - name: "api-server"
+        tailscale_name: "api-server"
+        aliases: ["api", "server"]
+        description: "API server"
+        enabled: true
   coredns:
     config_path: /etc/coredns/Corefile
     zones_path: /etc/coredns/zones
@@ -47,3 +61,9 @@ certificate:
   monitoring:
     enabled: false
     alert_threshold: "168h" # 7 days
+
+# Tailscale integration configuration for testing
+tailscale:
+  api_key: "test-api-key"
+  tailnet: "test-tailnet"
+  base_url: "http://mock-tailscale:80"  # Mock service URL
