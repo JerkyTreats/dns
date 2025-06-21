@@ -775,17 +775,11 @@ func TestZoneManagementIntegration(t *testing.T) {
 	testCorefilePath := "configs/coredns-test/Corefile"
 
 	defer func() {
+		// Clean up test files
 		os.Remove(testZoneFile)
-		// Restore original Corefile
-		if originalCorefile, err := os.ReadFile("configs/coredns-test/Corefile.backup"); err == nil {
-			os.WriteFile(testCorefilePath, originalCorefile, 0644)
-		}
+		// Remove the generated Corefile - template will be copied fresh next time
+		os.Remove(testCorefilePath)
 	}()
-
-	// Backup original Corefile
-	if originalCorefile, err := os.ReadFile(testCorefilePath); err == nil {
-		os.WriteFile("configs/coredns-test/Corefile.backup", originalCorefile, 0644)
-	}
 
 	t.Run("Zone_Creation", func(t *testing.T) {
 		// Test zone creation through CoreDNS manager

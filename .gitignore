@@ -68,6 +68,9 @@ coverage/
 # Air live reload tool
 tmp/
 
+# Test-generated files (templates are versioned, generated files are not)
+tests/configs/coredns-test/Corefile
+
 # # Application specific
 # config.yaml
 # config.json

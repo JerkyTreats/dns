@@ -106,7 +106,8 @@ wait  # Wait for final image
 
 # Run tests entirely within Docker with parallel startup
 # Use --profile test to ensure proper service selection
-if ! docker-compose -f docker-compose.test.yml --profile test up --build --exit-code-from test-runner; then
+# Add --no-attach to avoid watcher issues that can cause panics
+if ! docker-compose -f docker-compose.test.yml --profile test up --build --exit-code-from test-runner --no-attach pebble --no-attach mock-tailscale --no-attach coredns-test --no-attach api-test; then
     print_error "❌ Integration tests failed!"
 
     print_warning "Collecting diagnostic information..."

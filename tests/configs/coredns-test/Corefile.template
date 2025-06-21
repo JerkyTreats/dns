@@ -11,9 +11,3 @@ test.jerkytreats.dev:53 {
     reload 5s
     forward . 8.8.8.8 8.8.4.4
 }
-
-internal.test.jerkytreats.dev:53 {
-    file configs/coredns-test/zones/internal.zone
-    errors
-    log
-}

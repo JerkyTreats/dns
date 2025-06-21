@@ -68,6 +68,7 @@ services:
       - "8444:8443"
     volumes:
       - ./configs:/app/configs
+      - ./configs/coredns-test/Corefile:/etc/coredns/Corefile
       - ./configs/coredns-test/zones:/etc/coredns/zones
     environment:
       - APP_ENV=test

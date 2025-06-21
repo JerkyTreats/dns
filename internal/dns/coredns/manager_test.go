@@ -64,3 +64,110 @@ func TestManager(t *testing.T) {
 		assert.True(t, strings.Contains(err.Error(), "reloading CoreDNS failed"), "Error message should indicate failure")
 	})
 }
+
+func TestZoneValidation(t *testing.T) {
+	// Setup test environment
+	tempDir, err := os.MkdirTemp("", "coredns-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	configPath := filepath.Join(tempDir, "Corefile")
+	zonesPath := filepath.Join(tempDir, "zones")
+
+	// Create initial Corefile with existing zone
+	initialConfig := `test.local:53 {
+    errors
+    log
+    file /zones/test.local.zone
+}
+
+.:53 {
+    forward . 8.8.8.8
+}`
+	err = os.WriteFile(configPath, []byte(initialConfig), 0644)
+	require.NoError(t, err)
+
+	manager := NewManager(configPath, zonesPath, []string{}, "test.local")
+
+	t.Run("AddZone creates new zone", func(t *testing.T) {
+		err := manager.AddZone("new-service")
+		require.NoError(t, err)
+
+		// Verify zone file was created
+		zoneFile := filepath.Join(zonesPath, "new-service.zone")
+		_, err = os.Stat(zoneFile)
+		require.NoError(t, err)
+
+		// Verify Corefile was updated
+		config, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		assert.Contains(t, string(config), "new-service.test.local:53")
+	})
+
+	t.Run("AddZone does not duplicate existing zone", func(t *testing.T) {
+		// Add the same zone twice
+		err := manager.AddZone("duplicate-service")
+		require.NoError(t, err)
+
+		err = manager.AddZone("duplicate-service")
+		require.NoError(t, err) // Should not error
+
+		// Verify only one occurrence in Corefile
+		config, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		configStr := string(config)
+
+		count := strings.Count(configStr, "duplicate-service.test.local:53")
+		assert.Equal(t, 1, count, "Zone should only appear once in Corefile")
+	})
+
+	t.Run("zoneExistsInConfig detects existing zones", func(t *testing.T) {
+		config := `test.local:53 {
+    errors
+    log
+}
+
+existing-zone.test.local:53 {
+    file /zones/existing-zone.zone
+    errors
+    log
+}`
+
+		// Test existing zone detection
+		exists := manager.zoneExistsInConfig(config, "existing-zone.test.local:53")
+		assert.True(t, exists, "Should detect existing zone")
+
+		// Test non-existing zone
+		exists = manager.zoneExistsInConfig(config, "non-existing.test.local:53")
+		assert.False(t, exists, "Should not detect non-existing zone")
+
+		// Test partial matches don't trigger false positives
+		exists = manager.zoneExistsInConfig(config, "test.local:53")
+		assert.True(t, exists, "Should detect zone at start of config")
+	})
+
+	t.Run("RemoveZone cleans up properly", func(t *testing.T) {
+		// Add a zone
+		err := manager.AddZone("removable-service")
+		require.NoError(t, err)
+
+		// Verify it exists
+		config, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		assert.Contains(t, string(config), "removable-service.test.local:53")
+
+		// Remove the zone
+		err = manager.RemoveZone("removable-service")
+		require.NoError(t, err)
+
+		// Verify it's gone from config
+		config, err = os.ReadFile(configPath)
+		require.NoError(t, err)
+		assert.NotContains(t, string(config), "removable-service.test.local:53")
+
+		// Verify zone file is removed
+		zoneFile := filepath.Join(zonesPath, "removable-service.zone")
+		_, err = os.Stat(zoneFile)
+		assert.True(t, os.IsNotExist(err), "Zone file should be removed")
+	})
+}

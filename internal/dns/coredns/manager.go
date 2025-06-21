@@ -104,6 +104,13 @@ func (m *Manager) updateConfig(serviceName string) error {
 		return fmt.Errorf("failed to read CoreDNS config: %w", err)
 	}
 
+	// Check if zone already exists in the configuration
+	zoneName := fmt.Sprintf("%s.%s:53", serviceName, m.domain)
+	if m.zoneExistsInConfig(string(config), zoneName) {
+		logging.Debug("Zone %s already exists in CoreDNS config", zoneName)
+		return nil // Zone already exists, no need to add it again
+	}
+
 	zoneConfig := fmt.Sprintf(`
 %s.%s:53 {
     file %s/%s.zone
@@ -120,6 +127,13 @@ func (m *Manager) updateConfig(serviceName string) error {
 	}
 
 	return nil
+}
+
+// zoneExistsInConfig checks if a zone already exists in the CoreDNS configuration
+func (m *Manager) zoneExistsInConfig(config, zoneName string) bool {
+	// Look for the zone name followed by whitespace and opening brace
+	pattern := regexp.MustCompile(fmt.Sprintf(`(?m)^%s\s*\{`, regexp.QuoteMeta(zoneName)))
+	return pattern.MatchString(config)
 }
 
 // AddRecord adds a new DNS record and reloads CoreDNS.

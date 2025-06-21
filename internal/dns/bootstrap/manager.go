@@ -317,7 +317,24 @@ func (m *Manager) RefreshDeviceIPs() error {
 func (m *Manager) IsZoneBootstrapped() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.bootstrapped
+
+	// Check if zone file exists and has content
+	zoneName := extractZoneName(m.config.Origin)
+	if zoneName == "" {
+		return false
+	}
+
+	// Try to add a test record to see if zone exists and is accessible
+	testErr := m.corednsManager.AddRecord(zoneName, "_bootstrap_test", "127.0.0.1")
+	if testErr != nil {
+		// Zone doesn't exist or isn't accessible
+		return false
+	}
+
+	// If we can add records, the zone is bootstrapped
+	// Update our internal state to match reality
+	m.bootstrapped = true
+	return true
 }
 
 // ValidateConfiguration validates the Tailscale connection and bootstrap config

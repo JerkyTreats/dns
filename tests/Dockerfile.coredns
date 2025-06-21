@@ -22,9 +22,26 @@ RUN addgroup -g 1001 coredns && \
 RUN mkdir -p /etc/coredns /etc/coredns/zones && \
     chown -R coredns:coredns /etc/coredns
 
+# Create entrypoint script
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'set -e' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Copy template to working Corefile if template exists' >> /entrypoint.sh && \
+    echo 'if [ -f "/etc/coredns/Corefile.template" ]; then' >> /entrypoint.sh && \
+    echo '    echo "Copying Corefile.template to Corefile..."' >> /entrypoint.sh && \
+    echo '    cp /etc/coredns/Corefile.template /etc/coredns/Corefile' >> /entrypoint.sh && \
+    echo '    echo "Template copied successfully"' >> /entrypoint.sh && \
+    echo 'fi' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo '# Start CoreDNS with provided arguments' >> /entrypoint.sh && \
+    echo 'exec /coredns "$@"' >> /entrypoint.sh
+
+RUN chmod +x /entrypoint.sh && \
+    chown coredns:coredns /entrypoint.sh
+
 # Switch to non-root user
 USER coredns
 
 EXPOSE 53 53/udp
 
-ENTRYPOINT ["/coredns"]
+ENTRYPOINT ["/entrypoint.sh"]
