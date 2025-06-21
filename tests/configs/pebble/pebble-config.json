@@ -4,6 +4,8 @@
         "managementListenAddress": "0.0.0.0:15000",
         "dnsResolver": "coredns-test:53",
         "httpPort": 5002,
-        "tlsPort": 5001
+        "tlsPort": 5001,
+        "certificate": "/test/config/cert.pem",
+        "privateKey": "/test/config/key.pem"
     }
 }

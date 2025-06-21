@@ -1,0 +1,34 @@
+# Use the official Pebble image as the binary source
+FROM ghcr.io/letsencrypt/pebble:latest AS pebble-binary
+
+# Use Alpine as the base for our custom image
+FROM alpine:3.19
+
+# Install essential tools for health checks and debugging
+RUN apk add --no-cache \
+    bind-tools \
+    netcat-openbsd \
+    curl \
+    wget \
+    ca-certificates \
+    tzdata
+
+# Copy the Pebble binary from the official image
+COPY --from=pebble-binary /app /app
+
+# Create a non-root user for security
+RUN addgroup -g 1001 pebble && \
+    adduser -D -u 1001 -G pebble pebble
+
+# Create config directory and set permissions
+RUN mkdir -p /test/config && \
+    chown -R pebble:pebble /test
+
+# Switch to non-root user
+USER pebble
+
+# Expose the required ports
+EXPOSE 14000 15000
+
+# Set the entrypoint to the Pebble binary
+ENTRYPOINT ["/app"]

@@ -39,6 +39,7 @@ certificate:
   email: "admin@test.jerkytreats.dev"
   domain: "test.jerkytreats.dev"
   ca_dir_url: "https://pebble:14000/dir"
+  insecure_skip_verify: true  # Skip certificate verification for test environment
   renewal:
     enabled: false
     renew_before: "720h" # 30 days

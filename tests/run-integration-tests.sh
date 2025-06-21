@@ -48,14 +48,20 @@ print_status "🐳 Running integration tests in Docker containers"
 
 print_status "🚀 Starting integration test run..."
 
-# Clean up any existing containers
+# Clean up any existing containers and networks
 print_status "🧹 Cleaning up any existing test containers..."
 docker-compose -f docker-compose.test.yml down -v --remove-orphans >/dev/null 2>&1 || true
+
+# Additional network cleanup to prevent orphaned network issues
+print_status "🔧 Ensuring clean Docker network state..."
+docker network prune -f >/dev/null 2>&1 || true
+sleep 1
 
 # Function to handle cleanup on exit
 cleanup() {
     print_status "🧹 Cleaning up test environment..."
-    docker-compose -f docker-compose.test.yml down -v >/dev/null 2>&1 || true
+    docker-compose -f docker-compose.test.yml down -v --remove-orphans >/dev/null 2>&1 || true
+    docker network prune -f >/dev/null 2>&1 || true
 }
 
 # Set trap to cleanup on exit

@@ -5,9 +5,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -27,6 +29,7 @@ const (
 	CertCertFileKey             = "server.tls.cert_file"
 	CertKeyFileKey              = "server.tls.key_file"
 	CertCADirURLKey             = "certificate.ca_dir_url"
+	CertInsecureSkipVerifyKey   = "certificate.insecure_skip_verify"
 	CertRenewalEnabledKey       = "certificate.renewal.enabled"
 	CertRenewalRenewBeforeKey   = "certificate.renewal.renew_before"
 	CertRenewalCheckIntervalKey = "certificate.renewal.check_interval"
@@ -89,6 +92,20 @@ func NewManager() (*Manager, error) {
 	// Set custom CA directory URL if provided
 	if caURL := config.GetString(CertCADirURLKey); caURL != "" {
 		legoConfig.CADirURL = caURL
+	}
+
+	// Configure insecure skip verify for test environments
+	skipVerify := config.GetBool(CertInsecureSkipVerifyKey)
+	logging.Info("Certificate insecure_skip_verify setting: %v", skipVerify)
+	if skipVerify {
+		logging.Info("Configuring HTTP client to skip certificate verification")
+		legoConfig.HTTPClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}
 	}
 
 	client, err := lego.NewClient(legoConfig)

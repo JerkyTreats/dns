@@ -50,5 +50,7 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 }
 
 func (d *DNSProvider) getChallengeFilePath(fqdn string) string {
-	return filepath.Join(d.zonesPath, fmt.Sprintf("%s.zone", fqdn))
+	// Remove trailing dot and use the full FQDN for the challenge file
+	cleanFqdn := strings.TrimSuffix(fqdn, ".")
+	return filepath.Join(d.zonesPath, fmt.Sprintf("%s.zone", cleanFqdn))
 }

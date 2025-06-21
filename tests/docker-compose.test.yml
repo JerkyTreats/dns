@@ -36,8 +36,10 @@ services:
       start_period: 2s
 
   pebble:
-    image: ghcr.io/letsencrypt/pebble:latest
-    command: -config /test/config/pebble-config.json
+    build:
+      context: .
+      dockerfile: Dockerfile.pebble
+    command: ["-config", "/test/config/pebble-config.json"]
     ports:
       - "14000:14000"
       - "15000:15000"
@@ -49,11 +51,11 @@ services:
     networks:
       - dns-test-network
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 15000"]
+      test: ["CMD-SHELL", "curl -k --connect-timeout 2 https://localhost:15000/roots/0 >/dev/null 2>&1 || nc -z localhost 15000"]
       interval: 2s
-      timeout: 2s
-      retries: 5
-      start_period: 5s
+      timeout: 3s
+      retries: 8
+      start_period: 8s
 
   # API service can start independently and check dependencies internally
   api-test:
@@ -101,6 +103,8 @@ services:
       coredns-test:
         condition: service_healthy
       mock-tailscale:
+        condition: service_healthy
+      pebble:
         condition: service_healthy
     networks:
       - dns-test-network
