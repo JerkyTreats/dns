@@ -26,33 +26,25 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if we're in the right directory
 if [ ! -f "docker-compose.test.yml" ]; then
     print_error "docker-compose.test.yml not found!"
     print_error "Please run this script from the tests directory: cd tests && ./run-integration-tests.sh"
     exit 1
 fi
 
-# Check if Docker is running
 if ! docker info >/dev/null 2>&1; then
     print_error "Docker is not running. Please start Docker and try again."
     exit 1
 fi
 
-# Check if Docker Compose is available
 if ! command -v docker-compose >/dev/null 2>&1; then
     print_error "docker-compose is not installed or not in PATH"
     exit 1
 fi
 
-# Check for --docker flag to run tests entirely in Docker
-DOCKER_MODE=false
-if [ "$1" = "--docker" ]; then
-    DOCKER_MODE=true
-    print_status "🐳 Running tests entirely within Docker containers"
-else
-    print_status "🏠 Running tests from host system (legacy mode)"
-fi
+print_status "🐳 Running integration tests in Docker containers"
+
+
 
 print_status "🚀 Starting integration test run..."
 
@@ -78,57 +70,43 @@ fi
 
 print_success "Docker Compose configuration is valid"
 
-if [ "$DOCKER_MODE" = true ]; then
-    # Run tests entirely within Docker
-    print_status "🏗️  Building and starting test services..."
+print_status "🏗️  Building and starting test services..."
 
-    # Start all services including test-runner
-    if ! DOCKER_BUILDKIT=0 docker-compose -f docker-compose.test.yml up --build --exit-code-from test-runner test-runner; then
-        print_error "❌ Integration tests failed!"
+# Use standard Docker build (no BuildKit)
+print_status "🔧 Using standard Docker build"
+export DOCKER_BUILDKIT=0
+unset COMPOSE_DOCKER_CLI_BUILD
 
-        print_warning "Collecting diagnostic information..."
+# Pre-pull base images in smaller batches for better Colima compatibility
+print_status "📦 Pre-pulling base images..."
+docker pull golang:1.24.3-alpine &
+docker pull alpine:3.19 &
+wait  # Wait for first batch
 
-        # Get service logs for debugging
-        echo ""
-        print_status "📋 Recent service logs:"
-        docker-compose -f docker-compose.test.yml logs --tail=20 || true
+docker pull nginx:alpine &
+docker pull coredns/coredns:1.11.1 &
+wait  # Wait for second batch
 
-        # Check service status
-        echo ""
-        print_status "🔍 Service status:"
-        docker-compose -f docker-compose.test.yml ps || true
+docker pull ghcr.io/letsencrypt/pebble:latest &
+wait  # Wait for final image
 
-        exit 1
-    fi
+# Run tests entirely within Docker with parallel startup
+if ! docker-compose -f docker-compose.test.yml up --build --exit-code-from test-runner test-runner; then
+    print_error "❌ Integration tests failed!"
 
-    print_success "🎉 All integration tests passed in Docker!"
-else
-    # Original host-based approach
-    print_status "🏃 Running integration tests from host..."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_warning "Collecting diagnostic information..."
 
-    if go test -v integration_test.go; then
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        print_success "🎉 All integration tests passed!"
-    else
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        print_error "❌ Integration tests failed!"
+    # Get service logs for debugging
+    echo ""
+    print_status "📋 Recent service logs:"
+    docker-compose -f docker-compose.test.yml logs --tail=20 || true
 
-        print_warning "Collecting diagnostic information..."
+    # Check service status
+    echo ""
+    print_status "🔍 Service status:"
+    docker-compose -f docker-compose.test.yml ps || true
 
-        # Get service logs for debugging
-        echo ""
-        print_status "📋 Recent service logs:"
-        docker-compose -f docker-compose.test.yml logs --tail=20 || true
-
-        # Check service status
-        echo ""
-        print_status "🔍 Service status:"
-        docker-compose -f docker-compose.test.yml ps || true
-
-        exit 1
-    fi
+    exit 1
 fi
 
-print_success "✨ Integration test run completed successfully!"
-print_status "💡 Tip: Use './run-integration-tests.sh --docker' to run tests entirely within Docker containers"
+print_success "🎉 All integration tests passed!"

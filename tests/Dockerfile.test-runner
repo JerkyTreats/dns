@@ -1,6 +1,5 @@
 FROM golang:1.24.3-alpine
 
-# Install testing dependencies
 RUN apk add --no-cache \
     ca-certificates \
     tzdata \
@@ -9,8 +8,6 @@ RUN apk add --no-cache \
     bind-tools \
     git
 
-# Set working directory to the app root where go.mod is located
 WORKDIR /app
 
-# Default command is to run tests in the tests directory
-CMD ["sh", "-c", "cd /app && go test -v ./tests/integration_test.go ./tests/integration_bootstrap_test.go -tags=integration"]
+CMD ["sh", "-c", "cd /app && go test -v ./tests/integration_test.go -tags=integration"]

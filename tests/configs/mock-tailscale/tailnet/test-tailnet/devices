@@ -1,0 +1,46 @@
+{
+  "devices": [
+    {
+      "id": "test-device-1",
+      "name": "test-device.test-tailnet.ts.net",
+      "hostname": "test-device",
+      "addresses": [
+        "100.64.0.1"
+      ],
+      "authorized": true,
+      "user": "test@example.com",
+      "tags": ["tag:server"],
+      "keyExpiryDisabled": false,
+      "expires": "2025-01-01T00:00:00Z",
+      "created": "2024-01-01T00:00:00Z",
+      "lastSeen": "2024-12-01T00:00:00Z",
+      "machineKey": "mkey:test-machine-key",
+      "nodeKey": "nodekey:test-node-key",
+      "clientVersion": "1.56.1",
+      "updateAvailable": false,
+      "os": "linux",
+      "deviceSubnets": []
+    },
+    {
+      "id": "test-device-2",
+      "name": "api-server.test-tailnet.ts.net",
+      "hostname": "api-server",
+      "addresses": [
+        "100.64.0.2"
+      ],
+      "authorized": true,
+      "user": "test@example.com",
+      "tags": ["tag:api"],
+      "keyExpiryDisabled": false,
+      "expires": "2025-01-01T00:00:00Z",
+      "created": "2024-01-01T00:00:00Z",
+      "lastSeen": "2024-12-01T00:00:00Z",
+      "machineKey": "mkey:test-machine-key-2",
+      "nodeKey": "nodekey:test-node-key-2",
+      "clientVersion": "1.56.1",
+      "updateAvailable": false,
+      "os": "linux",
+      "deviceSubnets": []
+    }
+  ]
+}

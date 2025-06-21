@@ -1,4 +1,61 @@
 services:
+  # Independent services that can start in parallel
+  coredns-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.coredns
+    ports:
+      - "5353:53/udp"
+      - "5353:53/tcp"
+    volumes:
+      - ./configs/coredns-test:/etc/coredns
+      - ./configs/coredns-test/zones:/etc/coredns/zones
+    command: ["-conf", "/etc/coredns/Corefile"]
+    networks:
+      - dns-test-network
+    healthcheck:
+      test: ["CMD-SHELL", "dig @localhost version.bind TXT CH +short +time=1 +tries=1 || nc -u -z localhost 53"]
+      interval: 1s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
+
+  mock-tailscale:
+    image: nginx:alpine
+    ports:
+      - "8090:80"
+    volumes:
+      - ./configs/mock-tailscale:/usr/share/nginx/html
+    networks:
+      - dns-test-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 80"]
+      interval: 1s
+      timeout: 1s
+      retries: 5
+      start_period: 2s
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: -config /test/config/pebble-config.json
+    ports:
+      - "14000:14000"
+      - "15000:15000"
+    environment:
+      - PEBBLE_VA_NOSLEEP=1
+      - PEBBLE_WFE_NONCEREJECT=20
+    volumes:
+      - ./configs/pebble:/test/config
+    networks:
+      - dns-test-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 15000"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 5s
+
+  # API service can start independently and check dependencies internally
   api-test:
     build:
       context: ..
@@ -12,18 +69,16 @@ services:
       - ./configs/coredns-test/zones:/etc/coredns/zones
     environment:
       - APP_ENV=test
-    depends_on:
-      coredns-test:
-        condition: service_started
     networks:
       - dns-test-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 2s
-      timeout: 3s
+      interval: 1s
+      timeout: 2s
       retries: 10
-      start_period: 5s
+      start_period: 3s
 
+  # Test runner waits for critical services
   test-runner:
     build:
       context: ..
@@ -37,54 +92,21 @@ services:
       - DNS_SERVER=coredns-test:53
       - PEBBLE_BASE_URL=http://pebble:15000
       - INTEGRATION_TEST=1
+      - TAILSCALE_API_KEY=test-api-key
+      - TAILSCALE_TAILNET=test-tailnet
+      - TAILSCALE_BASE_URL=http://mock-tailscale/
     depends_on:
       api-test:
         condition: service_healthy
       coredns-test:
-        condition: service_started
+        condition: service_healthy
+      mock-tailscale:
+        condition: service_healthy
     networks:
       - dns-test-network
     profiles:
       - test
-    command: sh -c "cd /app && go test -v ./tests/integration_test.go ./tests/integration_bootstrap_test.go -tags=integration"
-
-  coredns-test:
-    image: coredns/coredns:1.11.1
-    ports:
-      - "5353:53/udp"
-      - "5353:53/tcp"
-    volumes:
-      - ./configs/coredns-test:/etc/coredns
-      - ./configs/coredns-test/zones:/etc/coredns/zones
-    command: ["-conf", "/etc/coredns/Corefile"]
-    networks:
-      - dns-test-network
-    healthcheck:
-      test: ["CMD-SHELL", "nc -u -z localhost 53"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 3s
-
-  pebble:
-    image: ghcr.io/letsencrypt/pebble:latest
-    command: -config /test/config/pebble-config.json
-    ports:
-      - "14000:14000" # ACME
-      - "15000:15000" # Management
-    environment:
-      - PEBBLE_VA_NOSLEEP=1
-      - PEBBLE_WFE_NONCEREJECT=20
-    volumes:
-      - ./configs/pebble:/test/config
-    networks:
-      - dns-test-network
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 15000"] # Check management port instead
-      interval: 5s
-      timeout: 2s
-      retries: 5
-      start_period: 15s
+    command: sh -c "cd /app && go test -v ./tests/integration_test.go -tags=integration"
 
 networks:
   dns-test-network:

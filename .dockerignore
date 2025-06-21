@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+*.md
+README.md
+
+# Documentation
+docs/
+
+# Test files and test artifacts
+tests/ssl-test/
+tests/logs/
+tests/*.log
+
+# Build artifacts
+*.log
+*.tmp
+*.out
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dependencies (will be downloaded in container)
+vendor/
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Agent files (documentation)
+.agent/
+
+# Scripts not needed for build
+scripts/
+
+# Docker files not needed in build context
+Dockerfile*
+docker-compose*.yml
+.dockerignore

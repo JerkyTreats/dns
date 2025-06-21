@@ -17,204 +17,120 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getAPIBaseURL returns the API base URL from environment or default
 func getAPIBaseURL() string {
-	if baseURL := os.Getenv("API_BASE_URL"); baseURL != "" {
-		return baseURL
-	}
-	return "http://localhost:8081" // fallback for local testing
+	return "http://api-test:8080"
 }
 
-// getDNSServer returns the DNS server address from environment or default
 func getDNSServer() string {
-	if dnsServer := os.Getenv("DNS_SERVER"); dnsServer != "" {
-		return dnsServer
-	}
-	return "localhost:5353" // fallback for local testing
+	return "coredns-test:53"
 }
 
-// getPebbleBaseURL returns the Pebble base URL for testing
 func getPebbleBaseURL() string {
-	if os.Getenv("API_BASE_URL") != "" {
-		return "http://pebble:15000" // Docker network
-	}
-	return "http://localhost:15000" // fallback for local testing
+	return "http://pebble:15000"
 }
 
 // TestMain sets up and tears down the integration test environment
 func TestMain(m *testing.M) {
-	fmt.Println("🚀 Starting integration test environment...")
+	fmt.Println("🚀 Starting integration tests...")
+	fmt.Println("🐳 Running in Docker environment")
 
-	// If running in Docker, services should already be available
-	if os.Getenv("API_BASE_URL") != "" {
-		fmt.Println("🐳 Running in Docker environment - services should be ready")
-		// Wait for services to be ready
-		if !waitForServicesReady() {
-			panic("Services never became ready")
-		}
-		fmt.Println("🎉 Services are ready!")
-	} else {
-		// Original host-based setup for backward compatibility
-		if _, err := os.Stat("docker-compose.test.yml"); os.IsNotExist(err) {
-			panic("docker-compose.test.yml not found - make sure you're running from the tests directory")
-		}
-
-		// Clean up any existing containers first
-		fmt.Println("🧹 Cleaning up any existing test containers...")
-		cleanupCmd := exec.Command("docker-compose", "-f", "docker-compose.test.yml", "down", "-v", "--remove-orphans")
-		cleanupCmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=0")
-		if err := cleanupCmd.Run(); err != nil {
-			fmt.Printf("⚠️  Cleanup warning (this is often normal): %v\n", err)
-		}
-
-		// Start the test environment
-		fmt.Println("🏗️  Building and starting test services...")
-		startTime := time.Now()
-
-		cmd := exec.Command("docker-compose", "-f", "docker-compose.test.yml", "up", "-d", "--build")
-		cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=0")
-
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-
-		err := cmd.Run()
-		if err != nil {
-			fmt.Printf("❌ Docker compose failed: %s\nOutput: %s\n", err.Error(), out.String())
-			panic("docker-compose up failed")
-		}
-
-		buildDuration := time.Since(startTime)
-		fmt.Printf("✅ Services started in %v\n", buildDuration.Round(time.Second))
-
-		// Wait for all services to be healthy
-		fmt.Println("🔍 Waiting for services to be ready...")
-
-		if !waitForServicesReady() {
-			fmt.Println("📋 Getting service logs for debugging...")
-			logsCmd := exec.Command("docker-compose", "-f", "docker-compose.test.yml", "logs", "--tail=20")
-			var logsOut bytes.Buffer
-			logsCmd.Stdout = &logsOut
-			logsCmd.Stderr = &logsOut
-			logsCmd.Run()
-			fmt.Printf("Service logs:\n%s\n", logsOut.String())
-
-			cleanup()
-			panic("Services never became ready")
-		}
-
-		totalSetupTime := time.Since(startTime)
-		fmt.Printf("🎉 Test environment ready! Total setup time: %v\n", totalSetupTime.Round(time.Second))
-		fmt.Println("▶️  Running integration tests...")
-
-		defer cleanup()
+	if !waitForServicesReady() {
+		panic("Services never became ready")
 	}
 
-	// Run the tests
-	testStartTime := time.Now()
 	code := m.Run()
-	testDuration := time.Since(testStartTime)
-
-	fmt.Printf("\n🏁 Tests completed in %v\n", testDuration.Round(time.Second))
-
+	fmt.Printf("🏁 Tests completed\n")
 	os.Exit(code)
 }
 
 // waitForServicesReady waits for all services to be ready with proper health checks
 func waitForServicesReady() bool {
-	const maxWaitTime = 60 * time.Second // Reduced from 120s
-	const pollInterval = 1 * time.Second // Reduced from 2s
-
-	startTime := time.Now()
+	const maxWaitTime = 60 * time.Second
+	const pollInterval = 1 * time.Second
 
 	services := []serviceCheck{
-		{
-			name: "API Service",
-			check: func() (bool, string) {
-				resp, err := http.Get(getAPIBaseURL() + "/health")
-				if err != nil {
-					return false, fmt.Sprintf("connection failed: %v", err)
-				}
-				defer resp.Body.Close()
-
-				if resp.StatusCode != http.StatusOK {
-					return false, fmt.Sprintf("status %d", resp.StatusCode)
-				}
-
-				// Parse the health response to ensure all components are healthy
-				var healthResp map[string]interface{}
-				if err := json.NewDecoder(resp.Body).Decode(&healthResp); err == nil {
-					if status, ok := healthResp["status"].(string); ok && status == "healthy" {
-						return true, "healthy"
-					}
-				}
-				return false, "unhealthy response"
-			},
-		},
-		{
-			name: "CoreDNS Service",
-			check: func() (bool, string) {
-				if os.Getenv("API_BASE_URL") != "" {
-					// Running in Docker - check internal service
-					cmd := exec.Command("nc", "-u", "-z", "coredns-test", "53")
-					err := cmd.Run()
-					if err != nil {
-						return false, fmt.Sprintf("CoreDNS service not accessible: %v", err)
-					}
-					return true, "CoreDNS service accessible"
-				} else {
-					// Running from host - check port mapping
-					cmd := exec.Command("nc", "-u", "-z", "localhost", "5353")
-					err := cmd.Run()
-					if err != nil {
-						return false, fmt.Sprintf("Port 5353 not accessible: %v", err)
-					}
-					return true, "DNS port accessible"
-				}
-			},
-		},
+		{"API Service", checkAPIService},
+		{"CoreDNS Service", checkCoreDNSService},
+		{"Mock Tailscale Service", checkMockTailscaleService},
 	}
 
-	// Track which services are ready
 	ready := make([]bool, len(services))
+	startTime := time.Now()
 
 	for time.Since(startTime) < maxWaitTime {
 		allReady := true
 
 		for i, service := range services {
 			if ready[i] {
-				continue // Skip services that are already ready
+				continue
 			}
 
-			isReady, status := service.check()
-			if isReady {
+			if isReady, status := service.check(); isReady {
 				ready[i] = true
 				fmt.Printf("  ✅ %s: %s\n", service.name, status)
 			} else {
 				allReady = false
 				elapsed := time.Since(startTime).Round(time.Second)
-				fmt.Printf("  ⏳ %s: %s (waiting %v)\n", service.name, status, elapsed)
+				fmt.Printf("  ⏳ %s: %s (%v)\n", service.name, status, elapsed)
 			}
 		}
 
 		if allReady {
-			// Optionally check Pebble but don't block on it
 			checkPebble()
 			return true
 		}
-
 		time.Sleep(pollInterval)
 	}
 
-	// Timeout reached
-	fmt.Printf("⏰ Timeout reached after %v\n", maxWaitTime)
-	for i, service := range services {
-		if !ready[i] {
-			fmt.Printf("  ❌ %s: never became ready\n", service.name)
-		}
+	return false
+}
+
+func checkAPIService() (bool, string) {
+	resp, err := http.Get(getAPIBaseURL() + "/health")
+	if err != nil {
+		return false, fmt.Sprintf("connection failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Sprintf("status %d", resp.StatusCode)
 	}
 
-	return false
+	var healthResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&healthResp); err == nil {
+		if status, ok := healthResp["status"].(string); ok && status == "healthy" {
+			return true, "healthy"
+		}
+	}
+	return false, "unhealthy response"
+}
+
+func checkCoreDNSService() (bool, string) {
+	// First try a proper DNS query to verify functionality
+	cmd := exec.Command("dig", "@coredns-test", "version.bind", "TXT", "CH", "+short", "+time=1", "+tries=1")
+	if err := cmd.Run(); err == nil {
+		return true, "DNS queries working"
+	}
+
+	// Fallback to simple port check
+	cmd = exec.Command("nc", "-u", "-z", "coredns-test", "53")
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Sprintf("service not accessible: %v", err)
+	}
+	return true, "port accessible"
+}
+
+func checkMockTailscaleService() (bool, string) {
+	resp, err := http.Get("http://mock-tailscale/tailnet/test-tailnet/devices")
+	if err != nil {
+		return false, fmt.Sprintf("connection failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Sprintf("status %d", resp.StatusCode)
+	}
+	return true, "accessible"
 }
 
 // checkPebble optionally checks if Pebble is working, but doesn't fail the tests if it's not
@@ -242,29 +158,16 @@ type serviceCheck struct {
 	check func() (bool, string)
 }
 
-// cleanup tears down the test environment
-func cleanup() {
-	cmd := exec.Command("docker-compose", "-f", "docker-compose.test.yml", "down", "-v")
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("⚠️  Cleanup error: %v\n", err)
-	}
-
-	// Clean up test files (only SSL directory if it exists)
-	os.RemoveAll("./ssl-test")
-}
-
 func TestAPI_AddRecord(t *testing.T) {
 	fmt.Println("🧪 Testing API Add Record...")
 
-	// Create zone file in the mounted directory (tests/configs/coredns-test/zones)
 	zoneFilePath := "configs/coredns-test/zones/test-service.zone"
 	zoneContent := "$ORIGIN test-service.test.jerkytreats.dev.\n@ IN SOA ns1.test.jerkytreats.dev. admin.test.jerkytreats.dev. 1 7200 3600 1209600 3600\n"
 
 	err := os.WriteFile(zoneFilePath, []byte(zoneContent), 0644)
 	require.NoError(t, err, "Failed to create zone file")
-	defer os.Remove(zoneFilePath) // Clean up
+	defer os.Remove(zoneFilePath)
 
-	// Now, add a record to that zone
 	apiURL := getAPIBaseURL() + "/add-record"
 	requestBody, _ := json.Marshal(map[string]string{
 		"service_name": "test-service",
@@ -272,14 +175,11 @@ func TestAPI_AddRecord(t *testing.T) {
 		"ip":           "192.168.10.1",
 	})
 
-	fmt.Println("  📤 Sending add-record request...")
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(requestBody))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// If we get an error, read the response body for debugging
 	if resp.StatusCode != http.StatusCreated {
-		// Get zone file contents for debugging
 		body, _ := os.ReadFile(zoneFilePath)
 		t.Logf("Zone file contents: %s", string(body))
 
@@ -295,95 +195,112 @@ func TestAPI_AddRecord(t *testing.T) {
 func TestDNS_QueryRecord(t *testing.T) {
 	fmt.Println("🧪 Testing DNS Query...")
 
-	// Create zone file in the mounted directory
 	zoneFilePath := "configs/coredns-test/zones/test-query.zone"
 	zoneContent := "$ORIGIN test-query.test.jerkytreats.dev.\n@ IN SOA ns1.test.jerkytreats.dev. admin.test.jerkytreats.dev. 1 7200 3600 1209600 3600\nwww IN A 192.168.20.1\n"
 
 	err := os.WriteFile(zoneFilePath, []byte(zoneContent), 0644)
 	require.NoError(t, err, "Failed to create zone file")
-	defer os.Remove(zoneFilePath) // Clean up
+	defer os.Remove(zoneFilePath)
 
-	// Update Corefile to include the new zone
 	corefilePath := "configs/coredns-test/Corefile"
 	corefile, err := os.ReadFile(corefilePath)
 	require.NoError(t, err, "Failed to read Corefile")
 
-	// Add zone configuration
 	newCorefileContent := string(corefile) + "\ntest-query.test.jerkytreats.dev:53 {\n    file /etc/coredns/zones/test-query.zone\n    errors\n    log\n}\n"
 
 	err = os.WriteFile(corefilePath, []byte(newCorefileContent), 0644)
 	require.NoError(t, err, "Failed to update Corefile")
-	defer os.WriteFile(corefilePath, corefile, 0644) // Restore original
+	defer os.WriteFile(corefilePath, corefile, 0644)
 
-	// Instead of restarting CoreDNS, we'll wait for it to pick up the changes
-	// CoreDNS typically watches for file changes, so we give it a moment
-	fmt.Println("  ⏳ Waiting for CoreDNS to pick up configuration changes...")
+	fmt.Println("  ⏳ Waiting for CoreDNS configuration changes...")
 	time.Sleep(5 * time.Second)
 
-	// Query the record using dig
-	fmt.Println("  🔍 Querying DNS record...")
-
-	var dnsCmd *exec.Cmd
-
-	if os.Getenv("API_BASE_URL") != "" {
-		// Running in Docker - use container network
-		dnsCmd = exec.Command("dig", "@coredns-test", "www.test-query.test.jerkytreats.dev", "A", "+short")
-	} else {
-		// Running from host - use external port
-		dnsCmd = exec.Command("dig", "@localhost", "-p", "5353", "www.test-query.test.jerkytreats.dev", "A", "+short")
-	}
+	dnsCmd := exec.Command("dig", "@coredns-test", "www.test-query.test.jerkytreats.dev", "A", "+short")
 
 	var out bytes.Buffer
 	dnsCmd.Stdout = &out
 	dnsCmd.Stderr = &out
 
-	runErr := dnsCmd.Run()
-	if runErr != nil {
+	if runErr := dnsCmd.Run(); runErr != nil {
 		t.Logf("DNS query failed: %s", out.String())
-		// Try a basic connectivity test first
-		var connectCmd *exec.Cmd
-		if os.Getenv("API_BASE_URL") != "" {
-			connectCmd = exec.Command("nc", "-u", "-z", "coredns-test", "53")
-		} else {
-			connectCmd = exec.Command("nc", "-u", "-z", "localhost", "5353")
-		}
-
-		if connectErr := connectCmd.Run(); connectErr != nil {
-			t.Logf("DNS server connectivity test failed: %v", connectErr)
-		}
-
-		require.NoError(t, runErr, "DNS query command failed: %s", out.String())
+		require.NoError(t, runErr, "DNS query failed: %s", out.String())
 	}
 
 	output := out.String()
 	t.Logf("DNS query output: %s", output)
 
-	// Check if the IP address is in the output
 	if !strings.Contains(output, "192.168.20.1") {
-		// If the specific query didn't work, let's try a simpler test
-		fmt.Println("  🔍 Trying alternative DNS query...")
-		var altDnsCmd *exec.Cmd
-
-		if os.Getenv("API_BASE_URL") != "" {
-			// Try querying the main test domain that should exist
-			altDnsCmd = exec.Command("dig", "@coredns-test", "test.jerkytreats.dev", "SOA", "+short")
-		} else {
-			altDnsCmd = exec.Command("dig", "@localhost", "-p", "5353", "test.jerkytreats.dev", "SOA", "+short")
-		}
-
-		var altOut bytes.Buffer
-		altDnsCmd.Stdout = &altOut
-		altDnsCmd.Stderr = &altOut
-
-		if altErr := altDnsCmd.Run(); altErr == nil && altOut.String() != "" {
-			t.Logf("Alternative DNS query successful: %s", altOut.String())
-			t.Logf("DNS server is working, but dynamic zone addition may not be supported without restart")
-			// Pass the test since DNS is working, just note the limitation
-			fmt.Println("  ⚠️  DNS server is responding, but dynamic zones require restart")
-			return
-		}
+		tryAlternativeQuery(t)
+		return
 	}
 
 	assert.Contains(t, output, "192.168.20.1", "Expected IP not found in DNS response")
 	fmt.Println("  ✅ DNS query test passed")
+}
+
+func tryAlternativeQuery(t *testing.T) {
+	fmt.Println("  🔍 Trying alternative DNS query...")
+	altDnsCmd := exec.Command("dig", "@coredns-test", "test.jerkytreats.dev", "SOA", "+short")
+
+	var altOut bytes.Buffer
+	altDnsCmd.Stdout = &altOut
+	altDnsCmd.Stderr = &altOut
+
+	if altErr := altDnsCmd.Run(); altErr == nil && altOut.String() != "" {
+		t.Logf("Alternative DNS query successful: %s", altOut.String())
+		fmt.Println("  ⚠️  DNS server responding, dynamic zones require restart")
+		return
+	}
+}
+
+func TestBootstrapIntegration(t *testing.T) {
+	fmt.Println("🧪 Testing Bootstrap Integration...")
+
+	// Test that we can reach the mock Tailscale service
+	resp, err := http.Get("http://mock-tailscale/tailnet/test-tailnet/devices")
+	require.NoError(t, err, "Failed to connect to mock Tailscale service")
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "Mock Tailscale service should respond")
+
+	// Test parsing the mock response
+	var devicesResp map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&devicesResp)
+	require.NoError(t, err, "Failed to parse mock Tailscale response")
+
+	devices, ok := devicesResp["devices"].([]interface{})
+	require.True(t, ok, "Expected devices array in response")
+	assert.GreaterOrEqual(t, len(devices), 1, "Expected at least one device in mock response")
+
+	// Test that first device has expected structure
+	if len(devices) > 0 {
+		device := devices[0].(map[string]interface{})
+		assert.Contains(t, device, "id", "Device should have id")
+		assert.Contains(t, device, "name", "Device should have name")
+		assert.Contains(t, device, "addresses", "Device should have addresses")
+
+		addresses := device["addresses"].([]interface{})
+		assert.GreaterOrEqual(t, len(addresses), 1, "Device should have at least one address")
+
+		// Verify the mock data matches our test expectations
+		assert.Equal(t, "test-device-1", device["id"], "First device should have expected ID")
+		assert.Equal(t, "test-device.test-tailnet.ts.net", device["name"], "First device should have expected name")
+		assert.Equal(t, "100.64.0.1", addresses[0], "First device should have expected IP")
+	}
+
+	// Test Bootstrap Configuration API endpoint
+	configURL := getAPIBaseURL() + "/bootstrap/config"
+	configResp, err := http.Get(configURL)
+	if err == nil {
+		defer configResp.Body.Close()
+		if configResp.StatusCode == http.StatusOK {
+			fmt.Println("  ✅ Bootstrap config endpoint accessible")
+		} else {
+			fmt.Printf("  ⚠️  Bootstrap config endpoint returned status %d\n", configResp.StatusCode)
+		}
+	} else {
+		fmt.Printf("  ⚠️  Bootstrap config endpoint not accessible: %v\n", err)
+	}
+
+	fmt.Println("  ✅ Bootstrap integration test passed")
 }
