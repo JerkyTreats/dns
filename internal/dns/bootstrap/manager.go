@@ -318,6 +318,11 @@ func (m *Manager) IsZoneBootstrapped() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// If corednsManager is nil (e.g., in tests), return the internal state
+	if m.corednsManager == nil {
+		return m.bootstrapped
+	}
+
 	// Check if zone file exists and has content
 	zoneName := extractZoneName(m.config.Origin)
 	if zoneName == "" {

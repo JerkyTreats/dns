@@ -157,22 +157,56 @@ func main() {
 	}
 
 	// Certificate management
+	var certManager *certificate.Manager
 	if config.GetBool(certificate.CertRenewalEnabledKey) {
-		go func() {
-			certManager, err := certificate.NewManager()
-			if err != nil {
-				logging.Error("Failed to create certificate manager: %v", err)
-				return
-			}
+		var err error
+		certManager, err = certificate.NewManager()
+		if err != nil {
+			logging.Error("Failed to create certificate manager: %v", err)
+			os.Exit(1)
+		}
 
-			domain := config.GetString(certificate.CertDomainKey)
-			if err := certManager.ObtainCertificate(domain); err != nil {
-				logging.Error("Failed to obtain certificate: %v", err)
-				return
-			}
+		domain := config.GetString(certificate.CertDomainKey)
 
-			certManager.StartRenewalLoop(domain)
-		}()
+		// If TLS is enabled, ensure certificate exists before starting server
+		if config.GetBool(ServerTLSEnabledKey) {
+			logging.Info("TLS enabled, ensuring certificate exists before starting server")
+
+			certObtainTimeout := 5 * time.Minute
+			certObtainDone := make(chan error, 1)
+
+			go func() {
+				certObtainDone <- certManager.ObtainCertificate(domain)
+			}()
+
+			select {
+			case err := <-certObtainDone:
+				if err != nil {
+					logging.Error("Failed to obtain certificate within timeout: %v", err)
+					logging.Error("Cannot start TLS server without valid certificate")
+					os.Exit(1)
+				}
+				logging.Info("Certificate obtained successfully, proceeding with TLS server startup")
+			case <-time.After(certObtainTimeout):
+				logging.Error("Certificate obtainment timed out after %v", certObtainTimeout)
+				logging.Error("Cannot start TLS server without valid certificate")
+				os.Exit(1)
+			}
+		} else {
+			// For non-TLS mode, obtain certificate in background
+			go func() {
+				if err := certManager.ObtainCertificate(domain); err != nil {
+					logging.Error("Failed to obtain certificate: %v", err)
+					return
+				}
+				logging.Info("Certificate obtained successfully in background")
+			}()
+		}
+
+		// Start renewal loop in background
+		if certManager != nil {
+			go certManager.StartRenewalLoop(domain)
+		}
 	}
 
 	// Create record handler
