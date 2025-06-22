@@ -34,8 +34,9 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/bin/api /app/api
 
-# Set ownership
-RUN chown -R appuser:appuser /app
+# Create zones directory and set permissions
+RUN mkdir -p /etc/coredns/zones && \
+    chown -R appuser:appuser /app /etc/coredns/zones
 
 # Switch to non-root user
 USER appuser

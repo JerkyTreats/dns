@@ -20,5 +20,5 @@ internal.jerkytreats.dev:853 {
 _acme-challenge.internal.jerkytreats.dev:53 {
     errors
     log
-    file /zones/_acme-challenge.internal.jerkytreats.dev.zone
+    file /etc/coredns/zones/_acme-challenge.internal.jerkytreats.dev.zone
 }

@@ -11,6 +11,7 @@ services:
     volumes:
       - ./configs:/app/configs
       - ./ssl:/etc/letsencrypt
+      - coredns-zones:/etc/coredns/zones
     environment:
       - APP_ENV=development
       - TAILSCALE_API_KEY=${TAILSCALE_API_KEY}
@@ -28,11 +29,16 @@ services:
       - "853:853/tcp"
     volumes:
       - ./configs/coredns:/etc/coredns
-      - ./configs/coredns/zones:/etc/coredns/zones
+      - ./configs/coredns/zones:/zones:ro
+      - coredns-zones:/etc/coredns/zones
       - ./ssl:/etc/letsencrypt:ro
     command: -conf /etc/coredns/Corefile
     networks:
       - dns-network
+
+volumes:
+  coredns-zones:
+    driver: local
 
 networks:
   dns-network:

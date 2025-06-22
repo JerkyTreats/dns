@@ -30,10 +30,19 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 @	60 IN	TXT	"%s"`, origin, value)
 
 	challengeFile := d.getChallengeFilePath(fqdn)
+
+	// Ensure the directory exists
+	if err := os.MkdirAll(filepath.Dir(challengeFile), 0755); err != nil {
+		logging.Error("Failed to create challenge file directory: %v", err)
+		return fmt.Errorf("failed to create challenge file directory: %w", err)
+	}
+
 	if err := os.WriteFile(challengeFile, []byte(challengeContent), 0644); err != nil {
 		logging.Error("Failed to write challenge file: %v", err)
-		return err
+		return fmt.Errorf("failed to write challenge file to %s: %w", challengeFile, err)
 	}
+
+	logging.Info("Successfully created challenge file: %s", challengeFile)
 	return nil
 }
 
@@ -42,10 +51,17 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 
 	fqdn, _ := dns01.GetRecord(domain, keyAuth)
 	challengeFile := d.getChallengeFilePath(fqdn)
+
 	if err := os.Remove(challengeFile); err != nil {
+		if os.IsNotExist(err) {
+			logging.Warn("Challenge file already removed or never existed: %s", challengeFile)
+			return nil
+		}
 		logging.Error("Failed to remove challenge file: %v", err)
-		return err
+		return fmt.Errorf("failed to remove challenge file %s: %w", challengeFile, err)
 	}
+
+	logging.Info("Successfully removed challenge file: %s", challengeFile)
 	return nil
 }
 
