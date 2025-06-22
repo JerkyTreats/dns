@@ -10,6 +10,7 @@ services:
       - "8443:8443"
     volumes:
       - ./configs:/app/configs
+      - ./configs/coredns:/etc/coredns:rw
       - ./ssl:/etc/letsencrypt
       - coredns-zones:/etc/coredns/zones
     environment:
@@ -28,7 +29,7 @@ services:
       - "53:53/tcp"
       - "853:853/tcp"
     volumes:
-      - ./configs/coredns:/etc/coredns
+      - ./configs/coredns:/etc/coredns:rw
       - ./configs/coredns/zones:/zones:ro
       - coredns-zones:/etc/coredns/zones
       - ./ssl:/etc/letsencrypt:ro
