@@ -74,6 +74,9 @@ tmp/
 # Test-generated files (templates are versioned, generated files are not)
 tests/configs/coredns-test/Corefile
 
+# Dynamic CoreDNS configuration (generated at runtime)
+configs/coredns/Corefile
+
 # # Application specific
 # config.yaml
 # config.json

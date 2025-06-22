@@ -19,6 +19,7 @@ services:
       - TAILSCALE_TAILNET=${TAILSCALE_TAILNET}
     depends_on:
       - coredns
+    restart: unless-stopped  # Restart on failure for reliability
     networks:
       - dns-network
 
@@ -34,6 +35,7 @@ services:
       - coredns-zones:/etc/coredns/zones
       - ./ssl:/etc/letsencrypt:ro
     command: -conf /etc/coredns/Corefile
+    restart: unless-stopped  # Restart on failure, but not if manually stopped
     networks:
       - dns-network
 

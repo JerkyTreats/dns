@@ -34,7 +34,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # Change to project root
 cd "$PROJECT_ROOT"
 
-log "Starting Tailscale Internal DNS Manager services..."
+log "Starting Tailscale Internal DNS Manager with Dynamic Configuration..."
 
 # Check for required files
 if [ ! -f "configs/config.yaml" ]; then
@@ -43,7 +43,14 @@ if [ ! -f "configs/config.yaml" ]; then
     exit 1
 fi
 
-log "Configuration file found"
+if [ ! -f "configs/coredns/Corefile.template" ]; then
+    error "CoreDNS template file configs/coredns/Corefile.template not found!"
+    echo "This file should be committed to the repository."
+    exit 1
+fi
+
+log "Configuration files found"
+log "Using dynamic CoreDNS configuration system"
 
 # Create ssl directory if it doesn't exist
 if [ ! -d "ssl" ]; then
@@ -138,6 +145,12 @@ if [ ! -z "$DOMAIN" ]; then
     echo "2. DNS test: dig @localhost $DOMAIN"
 fi
 
+echo
+log "Dynamic Configuration System:"
+echo "- CoreDNS will generate its configuration automatically"
+echo "- DNS zones and records are managed dynamically"
+echo "- TLS integration happens automatically when certificates are available"
+echo "- API-driven configuration updates with automatic restarts"
 echo
 
 log "Start script completed!"

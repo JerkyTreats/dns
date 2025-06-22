@@ -34,7 +34,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # Change to project root
 cd "$PROJECT_ROOT"
 
-log "Starting deployment of Tailscale Internal DNS Manager..."
+log "Starting deployment of Tailscale Internal DNS Manager with Dynamic Configuration..."
 
 # Check for required files
 log "Checking required configuration files..."
@@ -45,7 +45,14 @@ if [ ! -f "configs/config.yaml" ]; then
     exit 1
 fi
 
-log "Configuration file found"
+if [ ! -f "configs/coredns/Corefile.template" ]; then
+    error "CoreDNS template file configs/coredns/Corefile.template not found!"
+    echo "This file should be committed to the repository."
+    exit 1
+fi
+
+log "Configuration files found"
+log "Using dynamic CoreDNS configuration system"
 
 # Create ssl directory if it doesn't exist
 if [ ! -d "ssl" ]; then
@@ -151,6 +158,13 @@ fi
 
 echo "3. View logs: docker-compose logs -f"
 echo "4. Check the documentation in docs/ for more information"
+echo
+log "Dynamic Configuration Features Active:"
+echo "- CoreDNS configuration is generated automatically on startup"
+echo "- New zones and records are added dynamically via API"
+echo "- TLS certificates are integrated automatically when available"
+echo "- Configuration updates trigger automatic CoreDNS restarts"
+echo "- No manual CoreDNS Corefile editing required"
 echo
 
 log "Deployment script completed!"

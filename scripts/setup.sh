@@ -182,12 +182,22 @@ fi
 
 log "Configuration file created successfully!"
 
-# Fix permissions for CoreDNS config (needed for container write access)
-log "Setting up file permissions for CoreDNS configuration..."
+# Setup directories for dynamic CoreDNS configuration
+log "Setting up directories for dynamic CoreDNS configuration..."
 mkdir -p ssl/ configs/coredns/zones/
 chmod 755 configs/coredns/
-chmod 666 configs/coredns/Corefile
 chmod 755 configs/coredns/zones/
+
+# Ensure the Corefile template exists
+if [ ! -f "configs/coredns/Corefile.template" ]; then
+    error "CoreDNS template file configs/coredns/Corefile.template not found!"
+    error "This file should be committed to the repository."
+    exit 1
+fi
+
+log "Dynamic CoreDNS configuration setup complete"
+info "The application will generate the Corefile dynamically from the template"
+info "No static Corefile is needed - configuration is template-based"
 
 echo
 
@@ -242,6 +252,12 @@ echo "1. Edit configs/config.yaml to configure your Tailscale devices"
 echo "2. Deploy the services with: ./scripts/deploy.sh"
 echo "3. Verify deployment with: curl http://localhost:8080/health"
 echo "4. Test DNS resolution with: dig @localhost your-device.$INTERNAL_DOMAIN"
+echo
+info "Dynamic Configuration Features:"
+echo "- CoreDNS configuration is generated dynamically from templates"
+echo "- New domains and DNS records are added automatically"
+echo "- TLS certificates are integrated automatically when available"
+echo "- No manual CoreDNS configuration file editing required"
 echo
 info "Useful commands:"
 echo "- ./scripts/deploy.sh    # Deploy services"

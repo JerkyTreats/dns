@@ -43,8 +43,11 @@ const (
 )
 
 var (
-	// Global bootstrap manager for health checks
+	// Global managers for health checks and TLS integration
 	bootstrapManager *bootstrap.Manager
+	configManager    *coredns.ConfigManager
+	certManager      *certificate.Manager
+	dnsManager       *coredns.Manager
 )
 
 func init() {
@@ -91,14 +94,53 @@ func main() {
 	logging.Info("Application starting...")
 	defer logging.Sync()
 
-	// Initialize CoreDNS manager from config
+	// Step 1: Initialize Dynamic CoreDNS Configuration Manager
+	logging.Info("Initializing dynamic CoreDNS configuration management...")
 	configPath := config.GetString("dns.coredns.config_path")
+	templatePath := config.GetString(coredns.DNSTemplatePathKey)
+	if templatePath == "" {
+		// Default template path if not configured
+		templatePath = "configs/coredns/Corefile.template"
+	}
 	zonesPath := config.GetString("dns.coredns.zones_path")
-	reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 	domain := config.GetString(coredns.DNSDomainKey)
-	manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
 
-	// Initialize bootstrap if enabled
+	configManager = coredns.NewConfigManager(configPath, templatePath, domain, zonesPath)
+
+	// Step 2: Generate minimal initial Corefile (no TLS, no domain-specific routes)
+	logging.Info("Generating initial CoreDNS configuration...")
+	if err := configManager.GenerateCorefile(); err != nil {
+		logging.Error("Failed to generate initial CoreDNS configuration: %v", err)
+		os.Exit(1)
+	}
+
+	// Step 3: Initialize CoreDNS manager with ConfigManager integration
+	reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+	dnsManager = coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+	dnsManager.SetConfigManager(configManager)
+
+	// Step 4: Wait for CoreDNS to be ready (managed by docker-compose)
+	logging.Info("Waiting for CoreDNS to be ready...")
+	time.Sleep(5 * time.Second) // Allow docker-compose to start CoreDNS
+
+	// Step 5: Initialize Certificate Manager (if TLS enabled)
+	var tlsEnabled = config.GetBool(ServerTLSEnabledKey)
+	var certificateReady = false
+
+	if config.GetBool(certificate.CertRenewalEnabledKey) {
+		logging.Info("Initializing certificate manager with CoreDNS integration...")
+		var err error
+		certManager, err = certificate.NewManager()
+		if err != nil {
+			logging.Error("Failed to create certificate manager: %v", err)
+			os.Exit(1)
+		}
+
+		// Integrate certificate manager with ConfigManager for TLS enablement
+		certManager.SetCoreDNSManager(configManager)
+	}
+
+	// Step 6: Initialize bootstrap if enabled
 	if config.GetBool(BootstrapEnabledKey) {
 		logging.Info("Bootstrap is enabled, initializing dynamic zone bootstrap...")
 
@@ -133,12 +175,19 @@ func main() {
 		// Get bootstrap configuration
 		bootstrapConfig := config.GetBootstrapConfig()
 
-		// Create bootstrap manager
-		bootstrapManager = bootstrap.NewManager(manager, tailscaleClient, bootstrapConfig)
+		// Create bootstrap manager using the ConfigManager-integrated DNS manager
+		bootstrapManager = bootstrap.NewManager(dnsManager, tailscaleClient, bootstrapConfig)
 
 		// Validate Tailscale connection and configuration
 		if err := bootstrapManager.ValidateConfiguration(); err != nil {
 			logging.Error("Bootstrap validation failed: %v", err)
+			os.Exit(1)
+		}
+
+		// Step 7: Add internal domain configuration via ConfigManager
+		logging.Info("Adding internal domain to dynamic configuration...")
+		if err := configManager.AddDomain(domain, nil); err != nil {
+			logging.Error("Failed to add internal domain: %v", err)
 			os.Exit(1)
 		}
 
@@ -156,31 +205,7 @@ func main() {
 		logging.Info("Bootstrap is disabled")
 	}
 
-	// Certificate management
-	var certManager *certificate.Manager
-	if config.GetBool(certificate.CertRenewalEnabledKey) {
-		var err error
-		certManager, err = certificate.NewManager()
-		if err != nil {
-			logging.Error("Failed to create certificate manager: %v", err)
-			os.Exit(1)
-		}
-	}
-
-	// Create record handler
-	recordHandler := handler.NewRecordHandler(manager)
-
-	// Setup routes
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthCheckHandler)
-	mux.HandleFunc("/add-record", recordHandler.AddRecord)
-
-	// Create server - start without TLS first if certificates need to be obtained
-	var server *http.Server
-	var tlsEnabled = config.GetBool(ServerTLSEnabledKey)
-	var certificateReady = false
-
-	// Check if TLS certificates already exist
+	// Step 8: Check if TLS certificates already exist
 	if tlsEnabled {
 		certFile := config.GetString(ServerTLSCertFileKey)
 		keyFile := config.GetString(ServerTLSKeyFileKey)
@@ -191,17 +216,50 @@ func main() {
 				// Certificate files exist, try to load them to verify they're valid
 				if _, err := tls.LoadX509KeyPair(certFile, keyFile); err == nil {
 					certificateReady = true
-					logging.Info("Valid TLS certificates found, will start with TLS enabled")
+					logging.Info("Valid TLS certificates found, enabling TLS configuration...")
+
+					// Enable TLS in CoreDNS configuration
+					if err := configManager.EnableTLS(domain, certFile, keyFile); err != nil {
+						logging.Warn("Failed to enable TLS in CoreDNS configuration: %v", err)
+					} else {
+						logging.Info("TLS enabled in CoreDNS configuration")
+					}
 				} else {
 					logging.Warn("Certificate files exist but are invalid: %v", err)
 				}
 			}
 		}
 
-		if !certificateReady {
-			logging.Info("TLS enabled but no valid certificates found - will start HTTP server first, then obtain certificates")
+		// Step 9: Start certificate obtainment if certificates not ready (async)
+		if !certificateReady && certManager != nil {
+			logging.Info("Starting certificate obtainment process...")
+			go func() {
+				certDomain := config.GetString(certificate.CertDomainKey)
+				if err := certManager.ObtainCertificate(certDomain); err != nil {
+					logging.Error("Failed to obtain certificate: %v", err)
+				} else {
+					logging.Info("Certificate obtained successfully")
+				}
+
+				// Start renewal loop
+				if config.GetBool(certificate.CertRenewalEnabledKey) {
+					logging.Info("Starting certificate renewal loop...")
+					certManager.StartRenewalLoop(certDomain)
+				}
+			}()
 		}
 	}
+
+	// Create record handler
+	recordHandler := handler.NewRecordHandler(dnsManager)
+
+	// Setup routes
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthCheckHandler)
+	mux.HandleFunc("/add-record", recordHandler.AddRecord)
+
+	// Step 10: Create and start API server
+	var server *http.Server
 
 	// Start with HTTP server if certificates are not ready, or if TLS is disabled
 	if !tlsEnabled || !certificateReady {
@@ -252,42 +310,6 @@ func main() {
 	// Wait for server to start
 	<-serverStarted
 	logging.Info("Server started successfully")
-
-	// Now handle certificate obtainment if needed
-	if certManager != nil {
-		domain := config.GetString(certificate.CertDomainKey)
-
-		if tlsEnabled && !certificateReady {
-			logging.Info("Server is running, now obtaining TLS certificates...")
-
-			// Obtain certificate in background, then restart server with TLS
-			go func() {
-				if err := certManager.ObtainCertificate(domain); err != nil {
-					logging.Error("Failed to obtain certificate: %v", err)
-					return
-				}
-
-				logging.Info("Certificate obtained successfully!")
-
-				// TODO: Implement graceful server restart with TLS
-				// For now, log that manual restart is needed
-				logging.Info("Certificate ready - restart the application to enable TLS")
-
-			}()
-		} else if !tlsEnabled {
-			// For non-TLS mode, obtain certificate in background for future use
-			go func() {
-				if err := certManager.ObtainCertificate(domain); err != nil {
-					logging.Error("Failed to obtain certificate: %v", err)
-					return
-				}
-				logging.Info("Certificate obtained successfully in background")
-			}()
-		}
-
-		// Start renewal loop in background
-		go certManager.StartRenewalLoop(domain)
-	}
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)

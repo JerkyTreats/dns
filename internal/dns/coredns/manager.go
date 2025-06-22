@@ -16,10 +16,13 @@ import (
 
 const (
 	// DNS
-	DNSConfigPathKey    = "dns.coredns.config_path"
-	DNSZonesPathKey     = "dns.coredns.zones_path"
-	DNSReloadCommandKey = "dns.coredns.reload_command"
-	DNSDomainKey        = "dns.domain"
+	DNSConfigPathKey         = "dns.coredns.config_path"
+	DNSTemplatePathKey       = "dns.coredns.template_path"
+	DNSZonesPathKey          = "dns.coredns.zones_path"
+	DNSReloadCommandKey      = "dns.coredns.reload_command"
+	DNSRestartTimeoutKey     = "dns.coredns.restart_timeout"
+	DNSHealthCheckRetriesKey = "dns.coredns.health_check_retries"
+	DNSDomainKey             = "dns.domain"
 )
 
 func init() {
@@ -27,6 +30,7 @@ func init() {
 	config.RegisterRequiredKey(DNSZonesPathKey)
 	config.RegisterRequiredKey(DNSReloadCommandKey)
 	config.RegisterRequiredKey(DNSDomainKey)
+	// Template path is optional, will use default if not provided
 }
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -38,6 +42,9 @@ type Manager struct {
 	reloadCommand []string
 	domain        string
 	mu            sync.Mutex
+
+	// Dynamic configuration manager
+	configManager *ConfigManager
 }
 
 // NewManager creates a new CoreDNS manager.
@@ -49,6 +56,12 @@ func NewManager(configPath, zonesPath string, reloadCommand []string, domain str
 		reloadCommand: reloadCommand,
 		domain:        domain,
 	}
+}
+
+// SetConfigManager integrates the manager with a ConfigManager for dynamic configuration
+func (m *Manager) SetConfigManager(cm *ConfigManager) {
+	logging.Info("Integrating CoreDNS manager with ConfigManager")
+	m.configManager = cm
 }
 
 // AddZone adds a new zone for a service
@@ -84,13 +97,23 @@ func (m *Manager) AddZone(serviceName string) error {
 		return fmt.Errorf("failed to write zone file: %w", err)
 	}
 
-	if err := m.updateConfig(serviceName); err != nil {
-		os.Remove(zoneFile)
-		return fmt.Errorf("failed to update CoreDNS config: %w", err)
-	}
+	// Use ConfigManager if available, otherwise fall back to direct config update
+	if m.configManager != nil {
+		logging.Info("Using ConfigManager to add domain: %s.%s", serviceName, m.domain)
+		if err := m.configManager.AddDomain(fmt.Sprintf("%s.%s", serviceName, m.domain), nil); err != nil {
+			os.Remove(zoneFile)
+			return fmt.Errorf("failed to add domain via ConfigManager: %w", err)
+		}
+	} else {
+		// Fallback to direct config update for backward compatibility
+		if err := m.updateConfig(serviceName); err != nil {
+			os.Remove(zoneFile)
+			return fmt.Errorf("failed to update CoreDNS config: %w", err)
+		}
 
-	if err := m.Reload(); err != nil {
-		return fmt.Errorf("failed to reload CoreDNS: %w", err)
+		if err := m.Reload(); err != nil {
+			return fmt.Errorf("failed to reload CoreDNS: %w", err)
+		}
 	}
 
 	return nil

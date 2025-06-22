@@ -35,8 +35,11 @@ dns:
         enabled: true
   coredns:
     config_path: /etc/coredns/Corefile
+    template_path: /etc/coredns/Corefile.template
     zones_path: /etc/coredns/zones
     reload_command: [] # Disabled for tests - CoreDNS will pick up file changes
+    restart_timeout: "10s"  # Shorter timeout for tests
+    health_check_retries: 3  # Fewer retries for tests
     tls:
       enabled: false
       port: 853

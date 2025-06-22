@@ -8,8 +8,8 @@ services:
       - "5353:53/udp"
       - "5353:53/tcp"
     volumes:
-      - ./configs/coredns-test:/etc/coredns
-      - ./configs/coredns-test/zones:/etc/coredns/zones
+      - ./configs/coredns-test:/etc/coredns:rw
+      - ./configs/coredns-test/zones:/etc/coredns/zones:rw
     command: ["-conf", "/etc/coredns/Corefile"]
     networks:
       - dns-test-network
@@ -68,8 +68,8 @@ services:
       - "8444:8443"
     volumes:
       - ./configs:/app/configs
-      - ./configs/coredns-test/Corefile:/etc/coredns/Corefile
-      - ./configs/coredns-test/zones:/etc/coredns/zones
+      - ./configs/coredns-test:/etc/coredns:rw
+      - ./configs/coredns-test/zones:/etc/coredns/zones:rw
     environment:
       - APP_ENV=test
     depends_on:

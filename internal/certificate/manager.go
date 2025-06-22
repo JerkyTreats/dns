@@ -68,6 +68,11 @@ type Manager struct {
 	user       *User
 	certPath   string
 	keyPath    string
+
+	// CoreDNS integration for TLS enablement
+	corednsConfigManager interface {
+		EnableTLS(domain, certPath, keyPath string) error
+	}
 }
 
 // NewManager creates a new certificate manager.
@@ -170,6 +175,14 @@ func NewManager() (*Manager, error) {
 	}, nil
 }
 
+// SetCoreDNSManager integrates the certificate manager with CoreDNS ConfigManager for TLS enablement
+func (m *Manager) SetCoreDNSManager(configManager interface {
+	EnableTLS(domain, certPath, keyPath string) error
+}) {
+	logging.Info("Integrating certificate manager with CoreDNS ConfigManager")
+	m.corednsConfigManager = configManager
+}
+
 // ObtainCertificate obtains a new certificate if one does not already exist.
 func (m *Manager) ObtainCertificate(domain string) error {
 	if _, err := os.Stat(m.certPath); err == nil {
@@ -196,7 +209,22 @@ func (m *Manager) ObtainCertificate(domain string) error {
 	}
 
 	logging.Info("Successfully obtained certificate for domain: %s", domain)
-	return m.saveCertificate(certs)
+	if err := m.saveCertificate(certs); err != nil {
+		return err
+	}
+
+	// Notify CoreDNS ConfigManager to enable TLS
+	if m.corednsConfigManager != nil {
+		logging.Info("Notifying CoreDNS ConfigManager to enable TLS for domain: %s", domain)
+		if err := m.corednsConfigManager.EnableTLS(domain, m.certPath, m.keyPath); err != nil {
+			logging.Error("Failed to enable TLS in CoreDNS configuration: %v", err)
+			// Don't fail certificate obtainment if TLS enablement fails
+		} else {
+			logging.Info("Successfully enabled TLS in CoreDNS configuration for domain: %s", domain)
+		}
+	}
+
+	return nil
 }
 
 // StartRenewalLoop starts a ticker to periodically check and renew the certificate.
@@ -260,6 +288,7 @@ func (m *Manager) checkAndRenew(domain string, renewalInterval time.Duration) {
 	}
 
 	logging.Info("Successfully renewed certificate for domain: %s", domain)
+	// Note: TLS enablement is handled in ObtainCertificate method
 }
 
 func (m *Manager) saveCertificate(certs *certificate.Resource) error {
