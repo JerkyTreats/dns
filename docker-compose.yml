@@ -13,6 +13,8 @@ services:
       - ./ssl:/etc/letsencrypt
     environment:
       - APP_ENV=development
+      - TAILSCALE_API_KEY=${TAILSCALE_API_KEY}
+      - TAILSCALE_TAILNET=${TAILSCALE_TAILNET}
     depends_on:
       - coredns
     networks:

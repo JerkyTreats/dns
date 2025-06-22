@@ -1,187 +1,266 @@
 # Tailscale Internal DNS Manager
 
-A lightweight API for managing internal DNS records. This service provides a simple interface to manage DNS records for internal services, with CoreDNS integration for reliable DNS resolution and automated Let's Encrypt SSL/TLS certification.
+A lightweight API for managing internal DNS records with dynamic zone bootstrapping using Tailscale device discovery. This service provides automated DNS record management for internal services, with CoreDNS integration for reliable DNS resolution and automated Let's Encrypt SSL/TLS certification.
 
-## The Point
+## Overview
 
----
+This project automatically discovers devices in your Tailscale network and creates DNS records for them, eliminating the need to manually manage static IP addresses. It provides:
 
-I'm experimenting with AI, and want to run local LLM.
-
-It's compute intensive, so I want to use my gaming PC.
-
----
-
-I want to run from mobile/laptop/etc, which means I need a Tailscale network.
-
-I don't like the `*.tailscale.ts.net` endpoints, I want to use `*.internal.jerkytreats.dev`
-
----
-
-So I need a CoreDNS server that is the NS for internal.jerkytreats.dev.
-
-Then I can build an API in front of the LLM at `llm.internal.jerkytreats.dev`
-
-But I am NOT going to manually add an entry to the CoreDNS server. It's a moral imperative as a platform engineer to automate domain resolution.
-
-So I build an API around the CoreDNS server to `add-record/` that will start resolving against `llm.internal.jerkytreats.dev`
-
----
-
-The best part is, the security is free because its all behind Tailscale. Only in-network devices can call thesee endpoints.
-
-And when I say "I built", I meant I "one-shot vibe coded it" over the course of an hour or two.
-
-So now the game is to build out as many of these little services as I can, create an "API Mesh" behind the TS network and see I can built a custom AI agent around it.
-
-It's all a bit nuts, but its been fun and I'm working _fast_.
-
-## Features
-
-- RESTful API for DNS record management
-- CoreDNS integration for reliable DNS resolution
-- Automated Let's Encrypt SSL/TLS certification using `go-acme/lego`
-- In-application certificate issuance and renewal (no `certbot` required)
-- Docker-based deployment for easy setup
-- OpenAPI/Swagger documentation
-- Health monitoring endpoints with certificate status
-- Comprehensive test coverage
+- **Dynamic Zone Bootstrap**: Automatically discovers Tailscale devices and creates DNS records
+- **RESTful API**: Simple interface for DNS record management
+- **CoreDNS Integration**: Reliable DNS resolution with automatic zone file management
+- **Let's Encrypt Integration**: Automated SSL/TLS certificate management
+- **Docker Deployment**: Easy containerized setup
 
 ## Prerequisites
 
-- Go 1.24 or later
-- Docker and Docker Compose
-- A domain you control for DNS-01 challenge validation
+### Required Software
+- **Docker and Docker Compose**: For containerized deployment
+- **Tailscale Account**: With API access enabled
+- **Domain Control**: A domain you control for DNS-01 challenge validation
 
-## Quick Start
+### Tailscale Setup
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/jerkytreats/dns.git
-    cd dns
-    ```
+1. **Create a Tailscale API Key**:
+   - Go to the [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys)
+   - Generate an API key with appropriate permissions
+   - Note your Tailnet name (usually your organization name or email domain)
 
-2.  **Configure your domain and email** in `configs/config.yaml`. The `server.tls.enabled` flag controls whether the server starts with HTTPS.
-    ```yaml
-    server:
-      tls:
-        enabled: true # Set to true to enable HTTPS
+2. **Enable API Access**:
+   - Ensure your Tailscale account has API access enabled
+   - Verify you can see your devices in the admin console
 
-    certificate:
-      email: "your-email@example.com"
-      domain: "internal.yourdomain.com"
-    ```
+## First-Time Setup
 
-3.  **Deploy the services:**
-    ```bash
-    docker-compose up --build
-    ```
+### 1. Clone and Configure
 
-The application will start, obtain an SSL certificate from Let's Encrypt's staging environment, and serve traffic:
-- **HTTP:** `http://localhost:8080`
-- **HTTPS:** `https://localhost:8443`
-- **CoreDNS:** `localhost:53` (UDP/TCP) and `localhost:853` (DNS-over-TLS)
-
-## SSL/TLS Configuration
-
-Certificate management is handled directly within the Go application using the `go-acme/lego` library, removing the need for an external `certbot` container.
-
-- **Automated Issuance and Renewal**: The application obtains and renews certificates automatically. On the first run, it will generate a new certificate. A background process checks daily and renews the certificate if it is within the configured renewal window (default: 30 days).
-- **DNS-01 Challenge**: Wildcard certificates (`*.internal.yourdomain.com`) are supported using the DNS-01 challenge method. The application temporarily creates the required TXT records in a CoreDNS zone file to prove ownership of the domain.
-- **Staging and Production**: By default, the service uses Let's Encrypt's staging environment to avoid hitting rate limits during development. To use the production environment, update the `ca_dir_url` in `configs/config.yaml`.
-
-## API Endpoints
-
-### Health Check
-```http
-GET /health
+```bash
+git clone https://github.com/jerkytreats/dns.git
+cd dns
 ```
-Returns the health status of the API and CoreDNS services. If TLS is enabled, it also includes details about the current SSL certificate, such as its expiration date.
 
-### Add DNS Record
-```http
-POST /add-record
-Content-Type: application/json
+### 2. Environment Variables
 
-{
-    "service_name": "my-service"
-}
+Create a `.env` file or set environment variables:
+
+```bash
+# Required Tailscale Configuration
+export TAILSCALE_API_KEY="tskey-api-xxxxx"     # Your Tailscale API key
+export TAILSCALE_TAILNET="your-tailnet-name"   # Your Tailnet identifier
+
+# Optional
+export APP_ENV=production
 ```
-Creates a new DNS `A` record for `<service_name>.internal.yourdomain.com`.
 
-## Configuration
+### 3. Configuration Setup
 
-The service is configured through `configs/config.yaml`. Key options include:
+Copy the bootstrap example configuration:
+
+```bash
+cp configs/config-bootstrap-example.yaml configs/config.yaml
+```
+
+Edit `configs/config.yaml` to match your setup:
 
 ```yaml
-server:
-  host: 0.0.0.0
-  port: 8080
-  tls:
-    enabled: true
-    port: 8443
-    cert_file: /etc/letsencrypt/live/internal.jerkytreats.dev/cert.pem
-    key_file: /etc/letsencrypt/live/internal.jerkytreats.dev/privkey.pem
-
 dns:
-  coredns:
-    config_path: /etc/coredns/Corefile
-    zones_path: /etc/coredns/zones
-    tls:
-      enabled: true
-      port: 853
+  domain: internal.yourdomain.com  # Change to your domain
+  internal:
+    enabled: true  # Enable dynamic bootstrap
+    origin: "internal.yourdomain.com"  # Your internal domain
+    bootstrap_devices:
+      - name: "server"
+        tailscale_name: "your-server-name"  # Tailscale device name
+        aliases: ["api", "dns"]
+        description: "Main server"
+        enabled: true
+      # Add more devices as needed
+
+# Tailscale configuration uses environment variables
+tailscale:
+  api_key: "${TAILSCALE_API_KEY}"
+  tailnet: "${TAILSCALE_TAILNET}"
 
 certificate:
-  email: "admin@jerkytreats.dev"
-  domain: "internal.jerkytreats.dev"
-  ca_dir_url: "https://acme-staging-v02.api.letsencrypt.org/directory" # Staging URL
-  renewal:
+  email: "your-email@yourdomain.com"  # Required for Let's Encrypt
+  domain: "internal.yourdomain.com"   # Must match your domain
+  ca_dir_url: "https://acme-v02.api.letsencrypt.org/directory"  # Production
+```
+
+### 4. Let's Encrypt Configuration
+
+**For Production SSL Certificates**:
+
+1. **Update Certificate Settings** in `configs/config.yaml`:
+   ```yaml
+   certificate:
+     email: "your-email@yourdomain.com"          # Required
+     domain: "internal.yourdomain.com"           # Your domain
+     ca_dir_url: "https://acme-v02.api.letsencrypt.org/directory"  # Production
+
+   server:
+     tls:
+       enabled: true  # Enable HTTPS
+   ```
+
+2. **DNS-01 Challenge**: The service uses DNS-01 challenge for wildcard certificates
+   - Requires your domain's DNS to point to your CoreDNS server
+   - Automatically manages challenge records during certificate issuance
+
+**For Development/Testing**:
+- Use staging URL: `https://acme-staging-v02.api.letsencrypt.org/directory`
+- Set `server.tls.enabled: false` to disable HTTPS
+
+### 5. Deploy Services
+
+```bash
+# Using Docker Compose
+docker-compose up --build -d
+
+# Or using the deployment script
+./scripts/deploy.sh
+```
+
+### 6. Verify Deployment
+
+1. **Check Service Health**:
+   ```bash
+   curl http://localhost:8080/health
+   ```
+
+2. **Test DNS Resolution**:
+   ```bash
+   # Test internal domain resolution
+   dig @localhost your-device.internal.yourdomain.com
+
+   # Test with specific device
+   nslookup server.internal.yourdomain.com localhost
+   ```
+
+3. **Check Logs**:
+   ```bash
+   docker-compose logs api
+   docker-compose logs coredns
+   ```
+
+## Configuration Reference
+
+### Dynamic Bootstrap Configuration
+
+The `dns.internal.bootstrap_devices` section defines which Tailscale devices to automatically create DNS records for:
+
+```yaml
+dns:
+  internal:
     enabled: true
-    renew_before: "720h" # 30 days
-    check_interval: "24h"
+    origin: "internal.yourdomain.com"
+    bootstrap_devices:
+      - name: "server"                    # DNS record name
+        tailscale_name: "my-server"       # Tailscale device name
+        aliases: ["api", "web"]           # Additional DNS names
+        description: "Main server"        # Documentation
+        enabled: true                     # Enable/disable this device
 ```
 
-## Development
+### Environment Variables
 
-### Running Tests
-To run the test suite:
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TAILSCALE_API_KEY` | Yes | Tailscale API key for device discovery |
+| `TAILSCALE_TAILNET` | Yes | Your Tailnet identifier/name |
+| `APP_ENV` | No | Application environment (development/production) |
+
+## API Usage
+
+### Health Check
 ```bash
-go test ./...
+curl http://localhost:8080/health
 ```
 
-### Local Environment
-To run the services locally for development:
+### Add DNS Record
 ```bash
-docker-compose up --build
+curl -X POST http://localhost:8080/add-record \
+  -H "Content-Type: application/json" \
+  -d '{"service_name": "my-new-service"}'
 ```
-The API server will start with hot-reloading enabled.
 
-## Docker Deployment
+## Security
 
-The `docker-compose.yml` file orchestrates the `api` and `coredns` services.
-- The `api` service builds from `Dockerfile.api`.
-- A shared volume (`./ssl`) is used to store the SSL certificates, which are written by the `api` service and read by the `coredns` service.
-- DNS zone files are located in `configs/coredns/zones` and mounted into the `coredns` container.
+- **Network Security**: All services run behind Tailscale network isolation
+- **TLS Encryption**: Automatic Let's Encrypt certificates with modern cipher suites
+- **Private Keys**: Securely managed with proper file permissions
+- **API Authentication**: Protected by Tailscale network access
 
-## Security Features
+## Troubleshooting
 
-- **TLS 1.2/1.3 support** with modern cipher suites
-- **Certificate transparency** monitoring
-- **Secure private key handling** with proper permissions
-- **DNS-over-HTTPS/TLS** support for CoreDNS
-- **Automatic certificate rotation** and renewal
+### Common Issues
 
-## API Documentation
+1. **Tailscale API Connection Failed**:
+   - Verify `TAILSCALE_API_KEY` is correct
+   - Check your Tailnet name in `TAILSCALE_TAILNET`
+   - Ensure API access is enabled in Tailscale admin console
 
-API documentation is available through Swagger UI at `/swagger` when the service is running.
+2. **Device Not Found**:
+   - Check device name matches exactly in Tailscale admin console
+   - Ensure device is online and connected to Tailscale
+   - Verify device appears in `tailscale status` output
 
-## Contributing
+3. **Let's Encrypt Certificate Issues**:
+   - Ensure your domain's DNS points to your server
+   - Check firewall allows ports 80, 443, 53, and 853
+   - Verify email address is valid in configuration
+   - For testing, use staging URL to avoid rate limits
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+4. **DNS Resolution Issues**:
+   - Test CoreDNS directly: `dig @localhost internal.yourdomain.com`
+   - Check CoreDNS logs: `docker-compose logs coredns`
+   - Verify zone files in `configs/coredns/zones/`
+
+### Debug Mode
+
+Enable debug logging in `configs/config.yaml`:
+```yaml
+logging:
+  level: debug
+```
+
+### Log Analysis
+```bash
+# API service logs
+docker-compose logs -f api
+
+# CoreDNS logs
+docker-compose logs -f coredns
+
+# Follow all logs
+docker-compose logs -f
+```
+
+## Maintenance
+
+### Certificate Renewal
+- Certificates auto-renew 30 days before expiration
+- Monitor certificate status via `/health` endpoint
+- Manual renewal: restart the API service
+
+### Device Updates
+- New devices are automatically discovered on service restart
+- Modify `bootstrap_devices` in config and restart to add/remove devices
+- Use the API to add temporary records without config changes
+
+### Updates
+```bash
+git pull origin main
+docker-compose down
+docker-compose up --build -d
+```
+
+## Architecture
+
+- **API Service**: Go application managing DNS records and certificates
+- **CoreDNS**: DNS server with dynamic zone file management
+- **Tailscale Integration**: Device discovery and IP resolution
+- **Let's Encrypt**: Automated certificate management via DNS-01 challenge
 
 ## License
 
