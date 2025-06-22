@@ -181,6 +181,14 @@ else
 fi
 
 log "Configuration file created successfully!"
+
+# Fix permissions for CoreDNS config (needed for container write access)
+log "Setting up file permissions for CoreDNS configuration..."
+mkdir -p ssl/ configs/coredns/zones/
+chmod 755 configs/coredns/
+chmod 666 configs/coredns/Corefile
+chmod 755 configs/coredns/zones/
+
 echo
 
 # Step 4: Bootstrap Devices Configuration
