@@ -25,18 +25,16 @@ FROM alpine:3.19
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata
 
-# Create non-root user
-RUN adduser -D -g '' appuser
-
 # Set working directory
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /app/bin/api /app/api
 
-# Create zones directory and set permissions
+# Create zones directory and set permissions (run as root for volume management)
 RUN mkdir -p /etc/coredns/zones /etc/coredns && \
-    chown -R appuser:appuser /app /etc/coredns
+    chmod -R 755 /etc/coredns && \
+    chmod +x /app/api
 
 # Set environment variables for better DNS propagation checking in containers
 # This helps avoid issues with Docker's internal DNS resolver (127.0.0.11)
@@ -45,8 +43,7 @@ ENV LEGO_DISABLE_CNAME_SUPPORT=false
 # Additional DNS propagation settings for container environments
 ENV LEGO_DNS_TIMEOUT=10s
 
-# Switch to non-root user
-USER appuser
+# Run as root to manage CoreDNS configuration files in production
 
 # Expose port
 EXPOSE 8080

@@ -29,22 +29,20 @@ FROM alpine:3.19
 # Install only essential runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata netcat-openbsd curl bind-tools
 
-# Create non-root user
-RUN adduser -D -g '' appuser
-
-# Create directories
-RUN mkdir -p /etc/coredns/zones && chown -R appuser:appuser /etc/coredns
+# Create directories (run as root for volume management)
+RUN mkdir -p /etc/coredns/zones && chmod -R 755 /etc/coredns
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /app/bin/api /app/api
 
-# Set ownership
-RUN chown -R appuser:appuser /app
+# Make binary executable
+RUN chmod +x /app/api
 
 EXPOSE 8080
 
 ENV GIN_MODE=release
 
+# Run as root to manage CoreDNS configuration files
 CMD ["/app/api"]

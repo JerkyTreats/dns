@@ -195,6 +195,13 @@ if [ ! -f "configs/coredns/Corefile.template" ]; then
     exit 1
 fi
 
+# Set proper permissions on template files for Docker containers
+log "Setting proper permissions on configuration files..."
+chmod 644 configs/coredns/Corefile.template
+if [ -d "tests/configs/coredns-test" ]; then
+    chmod 644 tests/configs/coredns-test/Corefile.template 2>/dev/null || true
+fi
+
 log "Dynamic CoreDNS configuration setup complete"
 info "The application will generate the Corefile dynamically from the template"
 info "No static Corefile is needed - configuration is template-based"
