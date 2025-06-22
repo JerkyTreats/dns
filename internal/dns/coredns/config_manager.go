@@ -91,13 +91,17 @@ func (cm *ConfigManager) GenerateCorefile() error {
 
 	// Prepare template data
 	templateData := struct {
-		BaseDomain string
-		Domains    []*DomainConfig
-		ZonesPath  string
+		BaseDomain  string
+		Domains     []*DomainConfig
+		ZonesPath   string
+		GeneratedAt string
+		Version     int
 	}{
-		BaseDomain: cm.domain,
-		Domains:    cm.getDomainList(),
-		ZonesPath:  cm.zonesPath,
+		BaseDomain:  cm.domain,
+		Domains:     cm.getDomainList(),
+		ZonesPath:   cm.zonesPath,
+		GeneratedAt: time.Now().Format("2006-01-02 15:04:05 MST"),
+		Version:     cm.configVersion + 1, // Next version since we're generating
 	}
 
 	// Execute template
@@ -361,13 +365,17 @@ func (cm *ConfigManager) generateCorefileInternal() error {
 
 	// Prepare template data
 	templateData := struct {
-		BaseDomain string
-		Domains    []*DomainConfig
-		ZonesPath  string
+		BaseDomain  string
+		Domains     []*DomainConfig
+		ZonesPath   string
+		GeneratedAt string
+		Version     int
 	}{
-		BaseDomain: cm.domain,
-		Domains:    cm.getDomainListInternal(),
-		ZonesPath:  cm.zonesPath,
+		BaseDomain:  cm.domain,
+		Domains:     cm.getDomainListInternal(),
+		ZonesPath:   cm.zonesPath,
+		GeneratedAt: time.Now().Format("2006-01-02 15:04:05 MST"),
+		Version:     cm.configVersion + 1, // Next version since we're generating
 	}
 
 	// Execute template
