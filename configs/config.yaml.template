@@ -65,6 +65,13 @@ certificate:
   email: "LETSENCRYPT_EMAIL_PLACEHOLDER"
   domain: "INTERNAL_DOMAIN_PLACEHOLDER"
   ca_dir_url: "LETSENCRYPT_URL_PLACEHOLDER"
+  # DNS resolvers for ACME challenge verification (use public DNS servers instead of Docker's internal resolver)
+  dns_resolvers:
+    - "8.8.8.8:53"
+    - "1.1.1.1:53"
+  dns_timeout: "10s"
+  # Set to true to skip SSL verification for test environments
+  insecure_skip_verify: false
   renewal:
     enabled: true
     renew_before: "720h" # 30 days

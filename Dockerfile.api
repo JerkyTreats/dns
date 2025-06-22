@@ -38,6 +38,13 @@ COPY --from=builder /app/bin/api /app/api
 RUN mkdir -p /etc/coredns/zones && \
     chown -R appuser:appuser /app /etc/coredns/zones
 
+# Set environment variables for better DNS propagation checking in containers
+# This helps avoid issues with Docker's internal DNS resolver (127.0.0.11)
+ENV DNS_RESOLVERS="8.8.8.8:53,1.1.1.1:53"
+ENV LEGO_DISABLE_CNAME_SUPPORT=false
+# Additional DNS propagation settings for container environments
+ENV LEGO_DNS_TIMEOUT=10s
+
 # Switch to non-root user
 USER appuser
 

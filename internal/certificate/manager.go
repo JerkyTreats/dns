@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/jerkytreats/dns/internal/config"
@@ -33,6 +34,8 @@ const (
 	CertRenewalEnabledKey       = "certificate.renewal.enabled"
 	CertRenewalRenewBeforeKey   = "certificate.renewal.renew_before"
 	CertRenewalCheckIntervalKey = "certificate.renewal.check_interval"
+	CertDNSResolversKey         = "certificate.dns_resolvers"
+	CertDNSTimeoutKey           = "certificate.dns_timeout"
 )
 
 func init() {
@@ -44,6 +47,8 @@ func init() {
 	config.RegisterRequiredKey(CertRenewalEnabledKey)
 	config.RegisterRequiredKey(CertRenewalRenewBeforeKey)
 	config.RegisterRequiredKey(CertRenewalCheckIntervalKey)
+	config.RegisterRequiredKey(CertDNSResolversKey)
+	config.RegisterRequiredKey(CertDNSTimeoutKey)
 }
 
 // User implements acme.User
@@ -94,6 +99,23 @@ func NewManager() (*Manager, error) {
 		legoConfig.CADirURL = caURL
 	}
 
+	// Configure DNS resolvers for challenge verification
+	dnsResolvers := config.GetStringSlice(CertDNSResolversKey)
+	if len(dnsResolvers) > 0 {
+		logging.Info("Configuring DNS resolvers for ACME challenge verification: %v", dnsResolvers)
+	} else {
+		// Default to Google DNS and Cloudflare DNS for public resolution
+		dnsResolvers = []string{"8.8.8.8:53", "1.1.1.1:53"}
+		logging.Info("Using default DNS resolvers for ACME challenge verification: %v", dnsResolvers)
+	}
+
+	// Configure DNS timeout
+	dnsTimeout := config.GetDuration(CertDNSTimeoutKey)
+	if dnsTimeout == 0 {
+		dnsTimeout = 10 * time.Second // Default timeout
+	}
+	logging.Info("Configuring DNS timeout: %v", dnsTimeout)
+
 	// Configure insecure skip verify for test environments
 	skipVerify := config.GetBool(CertInsecureSkipVerifyKey)
 	logging.Info("Certificate insecure_skip_verify setting: %v", skipVerify)
@@ -113,7 +135,29 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("could not create lego client: %w", err)
 	}
 
-	err = client.Challenge.SetDNS01Provider(dnsProvider)
+	// Configure DNS01 challenge options for better compatibility with container environments
+	logging.Info("Configuring DNS01 challenge options for container environment compatibility")
+
+	// Create DNS01 challenge options to solve Docker DNS resolution issues
+	var dns01Options []dns01.ChallengeOption
+
+	// Add custom DNS resolvers for propagation checking
+	if len(dnsResolvers) > 0 {
+		logging.Info("Adding recursive nameservers for DNS01 challenge: %v", dnsResolvers)
+		dns01Options = append(dns01Options, dns01.AddRecursiveNameservers(dnsResolvers))
+	}
+
+	// Add DNS timeout configuration
+	logging.Info("Adding DNS timeout for DNS01 challenge: %v", dnsTimeout)
+	dns01Options = append(dns01Options, dns01.AddDNSTimeout(dnsTimeout))
+
+	// Disable complete propagation requirement for container environments
+	// This helps avoid issues where Docker's internal DNS differs from public DNS
+	logging.Info("Disabling complete propagation requirement for container compatibility")
+	dns01Options = append(dns01Options, dns01.DisableCompletePropagationRequirement())
+
+	// Set the DNS01 provider with the configured options
+	err = client.Challenge.SetDNS01Provider(dnsProvider, dns01Options...)
 	if err != nil {
 		return nil, fmt.Errorf("could not set DNS01 provider: %w", err)
 	}

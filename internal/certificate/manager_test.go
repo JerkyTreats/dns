@@ -93,6 +93,234 @@ func TestCheckAndRenew(t *testing.T) {
 	})
 }
 
+// TestDNSConfigValidation tests the new DNS configuration options
+func TestDNSConfigValidation(t *testing.T) {
+	t.Run("DNS resolvers configuration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "cert-manager-dns-test-")
+		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+		config.ResetForTest()
+		// Set required config
+		config.SetForTest(testCertEmailKey, "test@example.com")
+		config.SetForTest(testCertCertFileKey, filepath.Join(tempDir, "cert.pem"))
+		config.SetForTest(testCertKeyFileKey, filepath.Join(tempDir, "key.pem"))
+		config.SetForTest("dns.coredns.zones_path", tempDir)
+
+		// Test with custom DNS resolvers
+		config.SetForTest(CertDNSResolversKey, []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"})
+
+		manager, err := NewManager()
+		require.NoError(t, err)
+		assert.NotNil(t, manager)
+		assert.NotNil(t, manager.legoClient)
+	})
+
+	t.Run("DNS timeout configuration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "cert-manager-dns-timeout-test-")
+		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+		config.ResetForTest()
+		// Set required config
+		config.SetForTest(testCertEmailKey, "test@example.com")
+		config.SetForTest(testCertCertFileKey, filepath.Join(tempDir, "cert.pem"))
+		config.SetForTest(testCertKeyFileKey, filepath.Join(tempDir, "key.pem"))
+		config.SetForTest("dns.coredns.zones_path", tempDir)
+
+		// Test with custom DNS timeout
+		config.SetForTest(CertDNSTimeoutKey, "30s")
+
+		manager, err := NewManager()
+		require.NoError(t, err)
+		assert.NotNil(t, manager)
+		assert.NotNil(t, manager.legoClient)
+	})
+
+	t.Run("default DNS configuration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "cert-manager-dns-default-test-")
+		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+		config.ResetForTest()
+		// Set required config only, no DNS config
+		config.SetForTest(testCertEmailKey, "test@example.com")
+		config.SetForTest(testCertCertFileKey, filepath.Join(tempDir, "cert.pem"))
+		config.SetForTest(testCertKeyFileKey, filepath.Join(tempDir, "key.pem"))
+		config.SetForTest("dns.coredns.zones_path", tempDir)
+
+		// Should use default DNS resolvers and timeout
+		manager, err := NewManager()
+		require.NoError(t, err)
+		assert.NotNil(t, manager)
+		assert.NotNil(t, manager.legoClient)
+	})
+
+	t.Run("insecure skip verify configuration", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "cert-manager-insecure-test-")
+		require.NoError(t, err)
+		t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+		config.ResetForTest()
+		// Set required config
+		config.SetForTest(testCertEmailKey, "test@example.com")
+		config.SetForTest(testCertCertFileKey, filepath.Join(tempDir, "cert.pem"))
+		config.SetForTest(testCertKeyFileKey, filepath.Join(tempDir, "key.pem"))
+		config.SetForTest("dns.coredns.zones_path", tempDir)
+
+		// Test with insecure skip verify enabled
+		config.SetForTest(CertInsecureSkipVerifyKey, true)
+
+		manager, err := NewManager()
+		require.NoError(t, err)
+		assert.NotNil(t, manager)
+		assert.NotNil(t, manager.legoClient)
+	})
+}
+
+// TestNewManagerConfigKeys tests that the new configuration keys are properly registered
+func TestNewManagerConfigKeys(t *testing.T) {
+	t.Run("DNS configuration keys exist", func(t *testing.T) {
+		// Test that the new configuration keys are defined
+		assert.Equal(t, "certificate.dns_resolvers", CertDNSResolversKey)
+		assert.Equal(t, "certificate.dns_timeout", CertDNSTimeoutKey)
+		assert.Equal(t, "certificate.insecure_skip_verify", CertInsecureSkipVerifyKey)
+	})
+}
+
+// TestDNSResolverValidation tests various DNS resolver configurations
+func TestDNSResolverValidation(t *testing.T) {
+	testCases := []struct {
+		name      string
+		resolvers []string
+		expectErr bool
+	}{
+		{
+			name:      "valid IPv4 resolvers",
+			resolvers: []string{"8.8.8.8:53", "1.1.1.1:53"},
+			expectErr: false,
+		},
+		{
+			name:      "valid IPv6 resolvers",
+			resolvers: []string{"[2001:4860:4860::8888]:53", "[2606:4700:4700::1111]:53"},
+			expectErr: false,
+		},
+		{
+			name:      "mixed IPv4 and IPv6",
+			resolvers: []string{"8.8.8.8:53", "[2001:4860:4860::8888]:53"},
+			expectErr: false,
+		},
+		{
+			name:      "hostname resolvers",
+			resolvers: []string{"dns.google:53", "one.one.one.one:53"},
+			expectErr: false,
+		},
+		{
+			name:      "empty list uses defaults",
+			resolvers: []string{},
+			expectErr: false,
+		},
+		{
+			name:      "nil list uses defaults",
+			resolvers: nil,
+			expectErr: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir, err := os.MkdirTemp("", "cert-manager-resolver-test-")
+			require.NoError(t, err)
+			t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+			config.ResetForTest()
+			// Set required config
+			config.SetForTest(testCertEmailKey, "test@example.com")
+			config.SetForTest(testCertCertFileKey, filepath.Join(tempDir, "cert.pem"))
+			config.SetForTest(testCertKeyFileKey, filepath.Join(tempDir, "key.pem"))
+			config.SetForTest("dns.coredns.zones_path", tempDir)
+
+			if tc.resolvers != nil {
+				config.SetForTest(CertDNSResolversKey, tc.resolvers)
+			}
+
+			manager, err := NewManager()
+			if tc.expectErr {
+				assert.Error(t, err)
+				assert.Nil(t, manager)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, manager)
+				assert.NotNil(t, manager.legoClient)
+			}
+		})
+	}
+}
+
+// TestDNSTimeoutValidation tests various DNS timeout configurations
+func TestDNSTimeoutValidation(t *testing.T) {
+	testCases := []struct {
+		name      string
+		timeout   string
+		expectErr bool
+	}{
+		{
+			name:      "valid timeout seconds",
+			timeout:   "10s",
+			expectErr: false,
+		},
+		{
+			name:      "valid timeout minutes",
+			timeout:   "2m",
+			expectErr: false,
+		},
+		{
+			name:      "valid timeout mixed",
+			timeout:   "1m30s",
+			expectErr: false,
+		},
+		{
+			name:      "zero timeout uses default",
+			timeout:   "0s",
+			expectErr: false,
+		},
+		{
+			name:      "empty timeout uses default",
+			timeout:   "",
+			expectErr: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir, err := os.MkdirTemp("", "cert-manager-timeout-test-")
+			require.NoError(t, err)
+			t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+			config.ResetForTest()
+			// Set required config
+			config.SetForTest(testCertEmailKey, "test@example.com")
+			config.SetForTest(testCertCertFileKey, filepath.Join(tempDir, "cert.pem"))
+			config.SetForTest(testCertKeyFileKey, filepath.Join(tempDir, "key.pem"))
+			config.SetForTest("dns.coredns.zones_path", tempDir)
+
+			if tc.timeout != "" {
+				config.SetForTest(CertDNSTimeoutKey, tc.timeout)
+			}
+
+			manager, err := NewManager()
+			if tc.expectErr {
+				assert.Error(t, err)
+				assert.Nil(t, manager)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, manager)
+				assert.NotNil(t, manager.legoClient)
+			}
+		})
+	}
+}
+
 // createExpiredCert creates a dummy cert file with an expiration in the past.
 func createExpiredCert(t *testing.T, certPath, keyPath string) {
 	template := x509.Certificate{

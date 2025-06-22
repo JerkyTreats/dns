@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -735,4 +736,279 @@ func TestConfigurationKeys(t *testing.T) {
 	assert.Equal(t, "tailscale.api_key", TailscaleAPIKeyKey)
 	assert.Equal(t, "tailscale.tailnet", TailscaleTailnetKey)
 	assert.Equal(t, "tailscale.base_url", TailscaleBaseURLKey)
+}
+
+// TestCertificateDNSConfiguration tests the new certificate DNS configuration options
+func TestCertificateDNSConfiguration(t *testing.T) {
+	t.Run("DNS resolvers configuration", func(t *testing.T) {
+		ResetForTest()
+
+		// Test setting DNS resolvers as string slice
+		resolvers := []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"}
+		SetForTest("certificate.dns_resolvers", resolvers)
+
+		result := GetStringSlice("certificate.dns_resolvers")
+		assert.Equal(t, resolvers, result)
+		assert.Len(t, result, 3)
+		assert.Contains(t, result, "8.8.8.8:53")
+		assert.Contains(t, result, "1.1.1.1:53")
+		assert.Contains(t, result, "9.9.9.9:53")
+	})
+
+	t.Run("DNS timeout configuration", func(t *testing.T) {
+		ResetForTest()
+
+		// Test setting DNS timeout as duration string
+		SetForTest("certificate.dns_timeout", "30s")
+
+		timeout := GetDuration("certificate.dns_timeout")
+		assert.Equal(t, 30*time.Second, timeout)
+
+		// Test different timeout formats
+		SetForTest("certificate.dns_timeout", "2m")
+		timeout = GetDuration("certificate.dns_timeout")
+		assert.Equal(t, 2*time.Minute, timeout)
+
+		SetForTest("certificate.dns_timeout", "1m30s")
+		timeout = GetDuration("certificate.dns_timeout")
+		assert.Equal(t, 90*time.Second, timeout)
+	})
+
+	t.Run("insecure skip verify configuration", func(t *testing.T) {
+		ResetForTest()
+
+		// Test setting insecure skip verify
+		SetForTest("certificate.insecure_skip_verify", true)
+		assert.True(t, GetBool("certificate.insecure_skip_verify"))
+
+		SetForTest("certificate.insecure_skip_verify", false)
+		assert.False(t, GetBool("certificate.insecure_skip_verify"))
+	})
+
+	t.Run("default values", func(t *testing.T) {
+		ResetForTest()
+
+		// Test default values when keys are not set
+		resolvers := GetStringSlice("certificate.dns_resolvers")
+		assert.Empty(t, resolvers) // Should be empty by default
+
+		timeout := GetDuration("certificate.dns_timeout")
+		assert.Equal(t, time.Duration(0), timeout) // Should be 0 by default
+
+		skipVerify := GetBool("certificate.insecure_skip_verify")
+		assert.False(t, skipVerify) // Should be false by default
+	})
+}
+
+// TestDNSResolverValidationFormats tests various DNS resolver format validations
+func TestDNSResolverValidationFormats(t *testing.T) {
+	testCases := []struct {
+		name      string
+		resolvers []string
+		valid     bool
+	}{
+		{
+			name:      "valid IPv4 with port",
+			resolvers: []string{"8.8.8.8:53", "1.1.1.1:53"},
+			valid:     true,
+		},
+		{
+			name:      "valid IPv6 with port",
+			resolvers: []string{"[2001:4860:4860::8888]:53", "[2606:4700:4700::1111]:53"},
+			valid:     true,
+		},
+		{
+			name:      "valid hostname with port",
+			resolvers: []string{"dns.google:53", "one.one.one.one:53"},
+			valid:     true,
+		},
+		{
+			name:      "mixed valid formats",
+			resolvers: []string{"8.8.8.8:53", "[2001:4860:4860::8888]:53", "dns.google:53"},
+			valid:     true,
+		},
+		{
+			name:      "empty list",
+			resolvers: []string{},
+			valid:     true, // Empty list is valid (uses defaults)
+		},
+		{
+			name:      "nil list",
+			resolvers: nil,
+			valid:     true, // Nil list is valid (uses defaults)
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ResetForTest()
+
+			if tc.resolvers != nil {
+				SetForTest("certificate.dns_resolvers", tc.resolvers)
+			}
+
+			result := GetStringSlice("certificate.dns_resolvers")
+			if tc.resolvers == nil {
+				assert.Empty(t, result)
+			} else {
+				assert.Equal(t, tc.resolvers, result)
+			}
+		})
+	}
+}
+
+// TestTimeoutValidationFormats tests various timeout format validations
+func TestTimeoutValidationFormats(t *testing.T) {
+	testCases := []struct {
+		name     string
+		timeout  string
+		expected time.Duration
+		valid    bool
+	}{
+		{
+			name:     "seconds format",
+			timeout:  "10s",
+			expected: 10 * time.Second,
+			valid:    true,
+		},
+		{
+			name:     "minutes format",
+			timeout:  "2m",
+			expected: 2 * time.Minute,
+			valid:    true,
+		},
+		{
+			name:     "hours format",
+			timeout:  "1h",
+			expected: 1 * time.Hour,
+			valid:    true,
+		},
+		{
+			name:     "mixed format",
+			timeout:  "1h30m45s",
+			expected: 1*time.Hour + 30*time.Minute + 45*time.Second,
+			valid:    true,
+		},
+		{
+			name:     "zero timeout",
+			timeout:  "0s",
+			expected: 0,
+			valid:    true,
+		},
+		{
+			name:     "empty string",
+			timeout:  "",
+			expected: 0,
+			valid:    true, // Empty string results in 0 duration
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ResetForTest()
+
+			if tc.timeout != "" {
+				SetForTest("certificate.dns_timeout", tc.timeout)
+			}
+
+			result := GetDuration("certificate.dns_timeout")
+			if tc.valid {
+				assert.Equal(t, tc.expected, result)
+			}
+		})
+	}
+}
+
+// TestCertificateConfigurationIntegration tests the certificate configuration as a whole
+func TestCertificateConfigurationIntegration(t *testing.T) {
+	t.Run("complete certificate configuration", func(t *testing.T) {
+		ResetForTest()
+
+		// Set all certificate-related configuration
+		SetForTest("certificate.email", "test@example.com")
+		SetForTest("certificate.domain", "example.com")
+		SetForTest("certificate.ca_dir_url", "https://acme-staging-v02.api.letsencrypt.org/directory")
+		SetForTest("certificate.dns_resolvers", []string{"8.8.8.8:53", "1.1.1.1:53"})
+		SetForTest("certificate.dns_timeout", "30s")
+		SetForTest("certificate.insecure_skip_verify", true)
+		SetForTest("certificate.renewal.enabled", true)
+		SetForTest("certificate.renewal.renew_before", "720h")
+		SetForTest("certificate.renewal.check_interval", "24h")
+		SetForTest("server.tls.cert_file", "/etc/letsencrypt/live/example.com/fullchain.pem")
+		SetForTest("server.tls.key_file", "/etc/letsencrypt/live/example.com/privkey.pem")
+
+		// Verify all values are set correctly
+		assert.Equal(t, "test@example.com", GetString("certificate.email"))
+		assert.Equal(t, "example.com", GetString("certificate.domain"))
+		assert.Equal(t, "https://acme-staging-v02.api.letsencrypt.org/directory", GetString("certificate.ca_dir_url"))
+
+		resolvers := GetStringSlice("certificate.dns_resolvers")
+		expected := []string{"8.8.8.8:53", "1.1.1.1:53"}
+		assert.Equal(t, expected, resolvers)
+
+		timeout := GetDuration("certificate.dns_timeout")
+		assert.Equal(t, 30*time.Second, timeout)
+
+		assert.True(t, GetBool("certificate.insecure_skip_verify"))
+		assert.True(t, GetBool("certificate.renewal.enabled"))
+
+		renewBefore := GetDuration("certificate.renewal.renew_before")
+		assert.Equal(t, 720*time.Hour, renewBefore)
+
+		checkInterval := GetDuration("certificate.renewal.check_interval")
+		assert.Equal(t, 24*time.Hour, checkInterval)
+
+		assert.Equal(t, "/etc/letsencrypt/live/example.com/fullchain.pem", GetString("server.tls.cert_file"))
+		assert.Equal(t, "/etc/letsencrypt/live/example.com/privkey.pem", GetString("server.tls.key_file"))
+	})
+}
+
+// TestConfigValidationWithYAML tests configuration loading from YAML with new DNS options
+func TestConfigValidationWithYAML(t *testing.T) {
+	ResetForTest()
+
+	// Create a temporary config file with DNS configuration
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+certificate:
+  email: "test@example.com"
+  domain: "example.com"
+  ca_dir_url: "https://acme-staging-v02.api.letsencrypt.org/directory"
+  dns_resolvers:
+    - "8.8.8.8:53"
+    - "1.1.1.1:53"
+    - "9.9.9.9:53"
+  dns_timeout: "30s"
+  insecure_skip_verify: false
+  renewal:
+    enabled: true
+    renew_before: "720h"
+    check_interval: "24h"
+server:
+  tls:
+    cert_file: "/etc/letsencrypt/live/example.com/fullchain.pem"
+    key_file: "/etc/letsencrypt/live/example.com/privkey.pem"
+`
+
+	err := os.WriteFile(configFile, []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	// Initialize with config file
+	err = InitConfig(WithConfigPath(configFile))
+	require.NoError(t, err)
+
+	// Verify configuration was loaded correctly
+	assert.Equal(t, "test@example.com", GetString("certificate.email"))
+	assert.Equal(t, "example.com", GetString("certificate.domain"))
+
+	resolvers := GetStringSlice("certificate.dns_resolvers")
+	expected := []string{"8.8.8.8:53", "1.1.1.1:53", "9.9.9.9:53"}
+	assert.Equal(t, expected, resolvers)
+
+	timeout := GetDuration("certificate.dns_timeout")
+	assert.Equal(t, 30*time.Second, timeout)
+
+	assert.False(t, GetBool("certificate.insecure_skip_verify"))
+	assert.True(t, GetBool("certificate.renewal.enabled"))
 }
