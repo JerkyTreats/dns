@@ -43,13 +43,7 @@ if [ ! -f "configs/config.yaml" ]; then
     exit 1
 fi
 
-# Load .env file if it exists
-if [ -f ".env" ]; then
-    log "Loading environment variables from .env file..."
-    export $(grep -v '^#' .env | xargs)
-else
-    warn ".env file not found. Make sure environment variables are set if bootstrap is enabled."
-fi
+log "Configuration file found"
 
 # Create ssl directory if it doesn't exist
 if [ ! -d "ssl" ]; then

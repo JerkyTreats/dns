@@ -12,30 +12,30 @@ server:
   tls:
     enabled: false
     port: 8443
-    cert_file: /etc/letsencrypt/live/internal.jerkytreats.dev/cert.pem
-    key_file: /etc/letsencrypt/live/internal.jerkytreats.dev/privkey.pem
+    cert_file: /etc/letsencrypt/live/INTERNAL_DOMAIN_PLACEHOLDER/cert.pem
+    key_file: /etc/letsencrypt/live/INTERNAL_DOMAIN_PLACEHOLDER/privkey.pem
     min_version: "1.2"
     max_version: "1.3"
 
 dns:
-  domain: internal.jerkytreats.dev
-  # NEW: Dynamic bootstrap configuration - NO IP ADDRESSES!
+  domain: INTERNAL_DOMAIN_PLACEHOLDER
+  # Dynamic bootstrap configuration
   internal:
     enabled: true  # Set to false to disable bootstrap
-    origin: "internal.jerkytreats.dev"
+    origin: "INTERNAL_DOMAIN_PLACEHOLDER"
     bootstrap_devices:
       - name: "ns"
-        tailscale_name: "omnitron"  # Tailscale device name
+        tailscale_name: "omnitron"  # Change to your Tailscale device name
         aliases: ["omnitron", "dns"]
         description: "NAS, DNS host"
         enabled: true
       - name: "macbook"
-        tailscale_name: "revenantor"  # Tailscale device name
+        tailscale_name: "revenantor"  # Change to your Tailscale device name
         aliases: ["dev", "revenantor"]
         description: "MacBook development"
         enabled: true
       - name: "android"
-        tailscale_name: "google-pixel-6"  # Tailscale device name
+        tailscale_name: "google-pixel-6"  # Change to your Tailscale device name
         aliases: ["pixel"]
         description: "Google Pixel 6"
         enabled: false  # Optional devices can be disabled
@@ -46,13 +46,13 @@ dns:
     tls:
       enabled: false
       port: 853
-      cert_file: /etc/letsencrypt/live/internal.jerkytreats.dev/cert.pem
-      key_file: /etc/letsencrypt/live/internal.jerkytreats.dev/privkey.pem
+      cert_file: /etc/letsencrypt/live/INTERNAL_DOMAIN_PLACEHOLDER/cert.pem
+      key_file: /etc/letsencrypt/live/INTERNAL_DOMAIN_PLACEHOLDER/privkey.pem
 
-# NEW: Tailscale integration configuration
+# Tailscale integration configuration
 tailscale:
-  api_key: "${TAILSCALE_API_KEY}"    # Environment variable
-  tailnet: "${TAILSCALE_TAILNET}"    # Environment variable
+  api_key: "TAILSCALE_API_KEY_PLACEHOLDER"
+  tailnet: "TAILSCALE_TAILNET_PLACEHOLDER"
   # base_url: "https://api.tailscale.com"  # Optional, for custom endpoints
 
 logging:
@@ -62,9 +62,9 @@ logging:
 
 certificate:
   provider: "lego"
-  email: "admin@jerkytreats.dev"
-  domain: "internal.jerkytreats.dev"
-  ca_dir_url: "https://acme-staging-v02.api.letsencrypt.org/directory"
+  email: "LETSENCRYPT_EMAIL_PLACEHOLDER"
+  domain: "INTERNAL_DOMAIN_PLACEHOLDER"
+  ca_dir_url: "LETSENCRYPT_URL_PLACEHOLDER"
   renewal:
     enabled: true
     renew_before: "720h" # 30 days

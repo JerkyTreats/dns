@@ -24,6 +24,9 @@ go.work.sum
 .env.local
 .env.production
 
+# Configuration files (use templates)
+configs/config.yaml
+
 # IDE and editor files
 .vscode/
 .idea/

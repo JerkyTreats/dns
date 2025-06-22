@@ -45,45 +45,7 @@ if [ ! -f "configs/config.yaml" ]; then
     exit 1
 fi
 
-if [ ! -f ".env" ]; then
-    warn ".env file not found. Make sure environment variables are set."
-    echo "You can create one by running './scripts/setup.sh' or set these environment variables:"
-    echo "  - TAILSCALE_API_KEY"
-    echo "  - TAILSCALE_TAILNET"
-    echo "  - APP_ENV (optional)"
-    echo
-fi
-
-# Load .env file if it exists
-if [ -f ".env" ]; then
-    log "Loading environment variables from .env file..."
-    export $(grep -v '^#' .env | xargs)
-fi
-
-# Validate required environment variables for bootstrap functionality
-if grep -q "enabled: true" configs/config.yaml; then
-    log "Bootstrap is enabled, checking required environment variables..."
-
-    if [ -z "$TAILSCALE_API_KEY" ]; then
-        error "TAILSCALE_API_KEY environment variable is required when bootstrap is enabled"
-        exit 1
-    fi
-
-    if [ -z "$TAILSCALE_TAILNET" ]; then
-        error "TAILSCALE_TAILNET environment variable is required when bootstrap is enabled"
-        exit 1
-    fi
-
-    # Validate API key format
-    if [[ ! $TAILSCALE_API_KEY =~ ^tskey-api- ]]; then
-        error "Invalid Tailscale API Key format. Keys should start with 'tskey-api-'"
-        exit 1
-    fi
-
-    log "Environment variables validated successfully"
-else
-    log "Bootstrap is disabled, skipping Tailscale environment variable validation"
-fi
+log "Configuration file found"
 
 # Create ssl directory if it doesn't exist
 if [ ! -d "ssl" ]; then

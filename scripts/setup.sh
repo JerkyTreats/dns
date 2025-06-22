@@ -59,18 +59,35 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
+# Check if template exists
+if [ ! -f "configs/config.yaml.template" ]; then
+    error "Configuration template configs/config.yaml.template not found!"
+    exit 1
+fi
+
 log "Prerequisites check passed!"
 echo
 
-# Step 1: Environment Variables Setup
-log "Step 1: Setting up Environment Variables"
-echo
+# Step 1: Check if config already exists
+if [ -f "configs/config.yaml" ]; then
+    warn "Configuration file configs/config.yaml already exists."
+    echo "Do you want to recreate it? This will overwrite your current configuration. (y/n) [n]:"
+    read -p "Recreate config: " RECREATE_CONFIG
+    RECREATE_CONFIG=${RECREATE_CONFIG:-n}
 
-# Check if .env file already exists
-if [ -f ".env" ]; then
-    warn ".env file already exists. Backing up to .env.backup"
-    cp .env .env.backup
+    if [[ ! $RECREATE_CONFIG =~ ^[Yy]$ ]]; then
+        log "Keeping existing configuration. Exiting setup."
+        exit 0
+    fi
+
+    # Backup existing config
+    log "Backing up existing config to configs/config.yaml.backup"
+    cp configs/config.yaml configs/config.yaml.backup
 fi
+
+# Step 2: Environment Variables Setup
+log "Step 1: Setting up Configuration"
+echo
 
 # Prompt for Tailscale API Key
 echo "Please enter your Tailscale API Key:"
@@ -93,39 +110,6 @@ if [ -z "$TAILSCALE_TAILNET" ]; then
     error "Tailnet name cannot be empty"
     exit 1
 fi
-
-# Prompt for environment
-echo "What environment is this? (development/production) [development]:"
-read -p "APP_ENV: " APP_ENV
-APP_ENV=${APP_ENV:-development}
-
-# Create .env file
-log "Creating .env file..."
-cat > .env << EOF
-# Tailscale Configuration
-TAILSCALE_API_KEY="$TAILSCALE_API_KEY"
-TAILSCALE_TAILNET="$TAILSCALE_TAILNET"
-
-# Application Environment
-APP_ENV="$APP_ENV"
-EOF
-
-log ".env file created successfully!"
-echo
-
-# Step 2: Configuration File Setup
-log "Step 2: Setting up Configuration File"
-echo
-
-# Check if config.yaml already exists
-if [ -f "configs/config.yaml" ]; then
-    warn "configs/config.yaml already exists. Backing up to configs/config.yaml.backup"
-    cp configs/config.yaml configs/config.yaml.backup
-fi
-
-# Copy bootstrap example
-log "Copying bootstrap example configuration..."
-cp configs/config-bootstrap-example.yaml configs/config.yaml
 
 # Prompt for domain customization
 echo "What domain will you use for internal DNS? (e.g., internal.yourdomain.com)"
@@ -162,29 +146,45 @@ else
     log "Using Let's Encrypt staging certificates"
 fi
 
-# Update configuration file
-log "Updating configuration file with your settings..."
+# Step 3: Create configuration file from template
+log "Creating configuration file from template..."
 
-# Use sed to update the configuration file (macOS compatible)
+# Copy template to config file
+cp configs/config.yaml.template configs/config.yaml
+
+# Substitute placeholders in the config file
+log "Substituting configuration values..."
+
+# Use sed to replace placeholders (macOS compatible)
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS
-    sed -i '' "s/internal\.jerkytreats\.dev/$INTERNAL_DOMAIN/g" configs/config.yaml
-    sed -i '' "s/admin@jerkytreats\.dev/$LETSENCRYPT_EMAIL/g" configs/config.yaml
-    sed -i '' "s|https://acme-staging-v02\.api\.letsencrypt\.org/directory|$LETSENCRYPT_URL|g" configs/config.yaml
-    sed -i '' "s/enabled: false/enabled: $TLS_ENABLED/g" configs/config.yaml
+    sed -i '' "s/INTERNAL_DOMAIN_PLACEHOLDER/$INTERNAL_DOMAIN/g" configs/config.yaml
+    sed -i '' "s/LETSENCRYPT_EMAIL_PLACEHOLDER/$LETSENCRYPT_EMAIL/g" configs/config.yaml
+    sed -i '' "s|LETSENCRYPT_URL_PLACEHOLDER|$LETSENCRYPT_URL|g" configs/config.yaml
+    sed -i '' "s/TAILSCALE_API_KEY_PLACEHOLDER/$TAILSCALE_API_KEY/g" configs/config.yaml
+    sed -i '' "s/TAILSCALE_TAILNET_PLACEHOLDER/$TAILSCALE_TAILNET/g" configs/config.yaml
+    # Only enable TLS if using production certificates
+    if [[ $TLS_ENABLED == "true" ]]; then
+        sed -i '' "s/enabled: false/enabled: true/g" configs/config.yaml
+    fi
 else
     # Linux
-    sed -i "s/internal\.jerkytreats\.dev/$INTERNAL_DOMAIN/g" configs/config.yaml
-    sed -i "s/admin@jerkytreats\.dev/$LETSENCRYPT_EMAIL/g" configs/config.yaml
-    sed -i "s|https://acme-staging-v02\.api\.letsencrypt\.org/directory|$LETSENCRYPT_URL|g" configs/config.yaml
-    sed -i "s/enabled: false/enabled: $TLS_ENABLED/g" configs/config.yaml
+    sed -i "s/INTERNAL_DOMAIN_PLACEHOLDER/$INTERNAL_DOMAIN/g" configs/config.yaml
+    sed -i "s/LETSENCRYPT_EMAIL_PLACEHOLDER/$LETSENCRYPT_EMAIL/g" configs/config.yaml
+    sed -i "s|LETSENCRYPT_URL_PLACEHOLDER|$LETSENCRYPT_URL|g" configs/config.yaml
+    sed -i "s/TAILSCALE_API_KEY_PLACEHOLDER/$TAILSCALE_API_KEY/g" configs/config.yaml
+    sed -i "s/TAILSCALE_TAILNET_PLACEHOLDER/$TAILSCALE_TAILNET/g" configs/config.yaml
+    # Only enable TLS if using production certificates
+    if [[ $TLS_ENABLED == "true" ]]; then
+        sed -i "s/enabled: false/enabled: true/g" configs/config.yaml
+    fi
 fi
 
-log "Configuration file updated successfully!"
+log "Configuration file created successfully!"
 echo
 
-# Step 3: Bootstrap Devices Configuration
-log "Step 3: Bootstrap Devices Configuration"
+# Step 4: Bootstrap Devices Configuration
+log "Step 2: Bootstrap Devices Configuration"
 echo
 
 info "You need to configure your Tailscale devices in configs/config.yaml"
@@ -222,19 +222,18 @@ fi
 
 echo
 
-# Step 4: Final Instructions
+# Step 5: Final Instructions
 log "Setup Complete!"
 echo
 
+info "Configuration file created:"
+echo "- configs/config.yaml (contains your secrets - not committed to git)"
+echo
 info "Next steps:"
 echo "1. Edit configs/config.yaml to configure your Tailscale devices"
 echo "2. Deploy the services with: ./scripts/deploy.sh"
 echo "3. Verify deployment with: curl http://localhost:8080/health"
 echo "4. Test DNS resolution with: dig @localhost your-device.$INTERNAL_DOMAIN"
-echo
-info "Useful files created:"
-echo "- .env (environment variables)"
-echo "- configs/config.yaml (main configuration)"
 echo
 info "Useful commands:"
 echo "- ./scripts/deploy.sh    # Deploy services"

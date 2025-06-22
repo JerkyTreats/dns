@@ -39,79 +39,39 @@ git clone https://github.com/jerkytreats/dns.git
 cd dns
 ```
 
-### 2. Environment Variables
+### 2. Run Setup Script
 
-Create a `.env` file or set environment variables:
-
-```bash
-# Required Tailscale Configuration
-export TAILSCALE_API_KEY="tskey-api-xxxxx"     # Your Tailscale API key
-export TAILSCALE_TAILNET="your-tailnet-name"   # Your Tailnet identifier
-
-# Optional
-export APP_ENV=production
-```
-
-### 3. Configuration Setup
-
-Copy the bootstrap example configuration:
+Run the interactive setup script to configure your installation:
 
 ```bash
-cp configs/config-bootstrap-example.yaml configs/config.yaml
+./scripts/setup.sh
 ```
 
-Edit `configs/config.yaml` to match your setup:
+The setup script will:
+- Prompt for your Tailscale API key and Tailnet name
+- Ask for your internal domain and Let's Encrypt email
+- Create a personalized configuration file with your credentials
+- Optionally open the config file for device configuration
+
+### 3. Configuration Details
+
+The setup script creates `configs/config.yaml` from a template. This file contains your credentials and is automatically excluded from git. You can customize:
 
 ```yaml
 dns:
-  domain: internal.yourdomain.com  # Change to your domain
   internal:
-    enabled: true  # Enable dynamic bootstrap
-    origin: "internal.yourdomain.com"  # Your internal domain
     bootstrap_devices:
       - name: "server"
-        tailscale_name: "your-server-name"  # Tailscale device name
+        tailscale_name: "your-actual-tailscale-device-name"  # Change this
         aliases: ["api", "dns"]
         description: "Main server"
         enabled: true
       # Add more devices as needed
-
-# Tailscale configuration uses environment variables
-tailscale:
-  api_key: "${TAILSCALE_API_KEY}"
-  tailnet: "${TAILSCALE_TAILNET}"
-
-certificate:
-  email: "your-email@yourdomain.com"  # Required for Let's Encrypt
-  domain: "internal.yourdomain.com"   # Must match your domain
-  ca_dir_url: "https://acme-v02.api.letsencrypt.org/directory"  # Production
 ```
 
-### 4. Let's Encrypt Configuration
+The setup script handles the domain, credentials, and certificate configuration automatically.
 
-**For Production SSL Certificates**:
-
-1. **Update Certificate Settings** in `configs/config.yaml`:
-   ```yaml
-   certificate:
-     email: "your-email@yourdomain.com"          # Required
-     domain: "internal.yourdomain.com"           # Your domain
-     ca_dir_url: "https://acme-v02.api.letsencrypt.org/directory"  # Production
-
-   server:
-     tls:
-       enabled: true  # Enable HTTPS
-   ```
-
-2. **DNS-01 Challenge**: The service uses DNS-01 challenge for wildcard certificates
-   - Requires your domain's DNS to point to your CoreDNS server
-   - Automatically manages challenge records during certificate issuance
-
-**For Development/Testing**:
-- Use staging URL: `https://acme-staging-v02.api.letsencrypt.org/directory`
-- Set `server.tls.enabled: false` to disable HTTPS
-
-### 5. Deploy Services
+### 4. Deploy Services
 
 ```bash
 # Using Docker Compose
@@ -121,7 +81,7 @@ docker-compose up --build -d
 ./scripts/deploy.sh
 ```
 
-### 6. Verify Deployment
+### 5. Verify Deployment
 
 1. **Check Service Health**:
    ```bash
@@ -162,13 +122,12 @@ dns:
         enabled: true                     # Enable/disable this device
 ```
 
-### Environment Variables
+### Configuration Files
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TAILSCALE_API_KEY` | Yes | Tailscale API key for device discovery |
-| `TAILSCALE_TAILNET` | Yes | Your Tailnet identifier/name |
-| `APP_ENV` | No | Application environment (development/production) |
+| File | Description |
+|------|-------------|
+| `configs/config.yaml` | Main configuration with your credentials (gitignored) |
+| `configs/config.yaml.template` | Template used by setup script |
 
 ## API Usage
 
