@@ -22,8 +22,8 @@ const (
 	defaultHealthDelay   = 2 * time.Second
 
 	// DNS test configuration
-	testDNSServer = "127.0.0.1:53"
-	testQuery     = "."
+	defaultDNSServer = "127.0.0.1:53" // Default for local/single container setup
+	dockerDNSServer  = "coredns:53"   // For multi-container Docker setup
 )
 
 // RestartManager handles CoreDNS container lifecycle management
@@ -35,6 +35,7 @@ type RestartManager struct {
 	healthDelay     time.Duration
 	lastRestartTime time.Time
 	restartCount    int
+	dnsServer       string // DNS server address for health checks
 }
 
 // RestartResult represents the result of a restart operation
@@ -53,10 +54,6 @@ func NewRestartManager() *RestartManager {
 
 	// Get restart command from configuration
 	restartCmd := config.GetStringSlice("dns.coredns.reload_command")
-	if len(restartCmd) == 0 {
-		// Default to docker-compose restart for coredns
-		restartCmd = []string{"docker-compose", "restart", "coredns"}
-	}
 
 	// Get timeouts from configuration with defaults
 	restartTimeout := config.GetDuration(DNSRestartTimeoutKey)
@@ -81,6 +78,7 @@ func NewRestartManager() *RestartManager {
 		healthTimeout:  healthTimeout,
 		healthRetries:  healthRetries,
 		healthDelay:    defaultHealthDelay,
+		dnsServer:      defaultDNSServer,
 	}
 }
 
@@ -171,9 +169,14 @@ func (rm *RestartManager) performRestart() *RestartResult {
 	result := &RestartResult{}
 	restartStart := time.Now()
 
-	// Check if we're in test environment
-	if rm.isTestEnvironment() {
-		return rm.performTestRestart()
+	// If no restart command is configured, rely on CoreDNS reload plugin
+	if len(rm.restartCommand) == 0 {
+		logging.Info("No restart command configured - relying on CoreDNS reload plugin")
+		result.Success = true
+		result.RestartTime = 0
+		result.RestartOutput = "no restart needed - CoreDNS reload plugin handles config changes"
+		result.HealthStatus = "healthy"
+		return result
 	}
 
 	// Create context with timeout
@@ -221,7 +224,7 @@ func (rm *RestartManager) performHealthCheck() *RestartResult {
 	healthStart := time.Now()
 
 	// Test DNS resolution
-	conn, err := net.DialTimeout("udp", testDNSServer, rm.healthTimeout)
+	conn, err := net.DialTimeout("udp", rm.dnsServer, rm.healthTimeout)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to connect to DNS server: %w", err)
 		result.HealthStatus = "connection failed"
@@ -324,42 +327,6 @@ func (rm *RestartManager) rollbackConfiguration(backupConfigPath string) error {
 
 	logging.Warn("Rollback functionality not fully implemented")
 	return fmt.Errorf("rollback functionality not yet implemented")
-}
-
-// isTestEnvironment checks if we're running in a test environment
-func (rm *RestartManager) isTestEnvironment() bool {
-	// Check for test indicators
-	if len(rm.restartCommand) == 0 {
-		return true
-	}
-
-	// Check if restart command is disabled
-	if len(rm.restartCommand) == 1 && rm.restartCommand[0] == "echo" {
-		return true
-	}
-
-	// Check if we're in a testing context
-	if len(rm.restartCommand) >= 2 && rm.restartCommand[0] == "docker-compose" {
-		// In test environment, don't actually try to restart docker containers
-		return true
-	}
-
-	return false
-}
-
-// performTestRestart handles restart operations in test environment
-func (rm *RestartManager) performTestRestart() *RestartResult {
-	logging.Info("Performing test environment restart (no actual restart)")
-
-	result := &RestartResult{
-		Success:         true,
-		RestartTime:     100 * time.Millisecond, // Simulated restart time
-		HealthCheckTime: 50 * time.Millisecond,  // Simulated health check time
-		RestartOutput:   "test environment - no actual restart performed",
-		HealthStatus:    "test healthy",
-	}
-
-	return result
 }
 
 // logRestartResult logs the detailed restart operation result
