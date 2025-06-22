@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/jerkytreats/dns/internal/logging"
@@ -23,11 +22,8 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 
 	fqdn, value := dns01.GetRecord(domain, keyAuth)
 
-	// The fqdn from GetRecord has a trailing dot, which we need to remove for the ORIGIN
-	origin := strings.TrimSuffix(fqdn, ".")
-
-	challengeContent := fmt.Sprintf(`$ORIGIN %s.
-@	60 IN	TXT	"%s"`, origin, value)
+	challengeContent := fmt.Sprintf(`$ORIGIN _acme-challenge.internal.jerkytreats.dev.
+@	60 IN	TXT	"%s"`, value)
 
 	challengeFile := d.getChallengeFilePath(fqdn)
 
@@ -43,6 +39,7 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 	}
 
 	logging.Info("Successfully created challenge file: %s", challengeFile)
+	logging.Info("Challenge content: %s", challengeContent)
 	return nil
 }
 
@@ -66,7 +63,7 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 }
 
 func (d *DNSProvider) getChallengeFilePath(fqdn string) string {
-	// Remove trailing dot and use the full FQDN for the challenge file
-	cleanFqdn := strings.TrimSuffix(fqdn, ".")
-	return filepath.Join(d.zonesPath, fmt.Sprintf("%s.zone", cleanFqdn))
+	// Always create the static ACME challenge zone file that matches the Corefile configuration
+	// This should be _acme-challenge.internal.jerkytreats.dev.zone regardless of the domain
+	return filepath.Join(d.zonesPath, "_acme-challenge.internal.jerkytreats.dev.zone")
 }

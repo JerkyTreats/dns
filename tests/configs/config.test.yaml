@@ -53,6 +53,11 @@ certificate:
   email: "admin@test.jerkytreats.dev"
   domain: "test.jerkytreats.dev"
   ca_dir_url: "https://pebble:14000/dir"
+  # DNS resolvers for ACME challenge verification (use public DNS servers)
+  dns_resolvers:
+    - "8.8.8.8:53"
+    - "1.1.1.1:53"
+  dns_timeout: "10s"
   insecure_skip_verify: true  # Skip certificate verification for test environment
   renewal:
     enabled: false

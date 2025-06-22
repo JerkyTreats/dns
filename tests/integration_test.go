@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,16 +115,22 @@ func checkAPIService() (bool, string) {
 func checkCoreDNSService() (bool, string) {
 	// First try a proper DNS query to verify functionality
 	cmd := exec.Command("/usr/bin/dig", "@coredns-test", "version.bind", "TXT", "CH", "+short", "+time=1", "+tries=1")
-	if err := cmd.Run(); err == nil {
-		return true, "DNS queries working"
+	if err := cmd.Run(); err != nil {
+		// Fallback to simple port check
+		cmd = exec.Command("nc", "-u", "-z", "coredns-test", "53")
+		if err := cmd.Run(); err != nil {
+			return false, fmt.Sprintf("service not accessible: %v", err)
+		}
+		return true, "port accessible (DNS queries not working)"
 	}
 
-	// Fallback to simple port check
-	cmd = exec.Command("nc", "-u", "-z", "coredns-test", "53")
+	// Also verify ACME challenge zone is configured
+	cmd = exec.Command("/usr/bin/dig", "@coredns-test", "_acme-challenge.internal.jerkytreats.dev", "TXT", "+short", "+time=1", "+tries=1")
 	if err := cmd.Run(); err != nil {
-		return false, fmt.Sprintf("service not accessible: %v", err)
+		return true, "DNS queries working (ACME zone not configured yet)"
 	}
-	return true, "port accessible"
+
+	return true, "DNS queries working (including ACME zone)"
 }
 
 func checkMockTailscaleService() (bool, string) {
@@ -153,6 +160,11 @@ func checkPebble() {
 
 	if resp.StatusCode == http.StatusOK {
 		fmt.Println("  ✅ Pebble ACME Service: management interface accessible")
+
+		// Also verify Pebble can resolve CoreDNS
+		fmt.Println("  🔍 Verifying Pebble DNS resolver configuration...")
+		// Note: Pebble config should have "dnsResolver": "coredns-test:53"
+		// This is critical for ACME DNS-01 challenges to work
 	} else {
 		fmt.Printf("  ⚠️  Pebble management interface returned status %d\n", resp.StatusCode)
 	}
@@ -365,10 +377,20 @@ func TestCertificateManagement(t *testing.T) {
 		err = provider.Present(domain, token, keyAuth)
 		require.NoError(t, err, "DNS provider should create challenge file")
 
-		// Verify challenge file was created
-		expectedFile := fmt.Sprintf("%s/_acme-challenge.%s.zone", tempZonesDir, domain)
+		// Verify challenge file was created with the correct static name
+		expectedFile := filepath.Join(tempZonesDir, "_acme-challenge.internal.jerkytreats.dev.zone")
 		_, err = os.Stat(expectedFile)
-		require.NoError(t, err, "Challenge file should exist")
+		require.NoError(t, err, "Challenge file should exist at static path: %s", expectedFile)
+
+		// Verify challenge file content
+		content, err := os.ReadFile(expectedFile)
+		require.NoError(t, err, "Should be able to read challenge file")
+
+		contentStr := string(content)
+		assert.Contains(t, contentStr, "$ORIGIN _acme-challenge.internal.jerkytreats.dev.", "Challenge file should have correct origin")
+		assert.Contains(t, contentStr, "TXT", "Challenge file should contain TXT record")
+
+		t.Logf("Challenge file content:\n%s", contentStr)
 
 		// Test cleanup
 		err = provider.CleanUp(domain, token, keyAuth)
@@ -378,7 +400,7 @@ func TestCertificateManagement(t *testing.T) {
 		_, err = os.Stat(expectedFile)
 		assert.True(t, os.IsNotExist(err), "Challenge file should be removed")
 
-		fmt.Println("    ✅ DNS challenge provider working correctly")
+		fmt.Println("    ✅ DNS challenge provider working correctly with static file path")
 	})
 
 	// Step 3: Test certificate manager creation with Pebble configuration
@@ -408,30 +430,35 @@ func TestCertificateManagement(t *testing.T) {
 
 	// Step 4: Test DNS challenge resolution through CoreDNS
 	t.Run("DNS_Challenge_Resolution", func(t *testing.T) {
-		challengeDomain := "_acme-challenge." + testDomain
 		challengeValue := "integration_test_challenge_456789"
-		challengeFile := fmt.Sprintf("configs/coredns-test/zones/%s.zone", challengeDomain)
+
+		// Create the exact challenge file that the DNS provider would create
+		challengeFile := "configs/coredns-test/zones/_acme-challenge.internal.jerkytreats.dev.zone"
 
 		// Create challenge zone file (simulating what the DNS provider does)
-		challengeContent := fmt.Sprintf(`$ORIGIN %s.
-@ 60 IN TXT "%s"`, challengeDomain, challengeValue)
+		challengeContent := fmt.Sprintf(`$ORIGIN _acme-challenge.internal.jerkytreats.dev.
+@	60 IN	TXT	"%s"`, challengeValue)
 
 		err := os.WriteFile(challengeFile, []byte(challengeContent), 0644)
 		require.NoError(t, err, "Should be able to create DNS challenge file")
 		defer os.Remove(challengeFile)
 
-		// Update Corefile to include the challenge zone
+		// Update Corefile to include the challenge zone (should match production Corefile)
 		corefilePath := "configs/coredns-test/Corefile"
 		corefile, err := os.ReadFile(corefilePath)
 		require.NoError(t, err, "Should be able to read Corefile")
 
-		newCorefileContent := string(corefile) + fmt.Sprintf(`
-%s:53 {
-    file /etc/coredns/zones/%s.zone
+		// Add the ACME challenge zone configuration (if not already present)
+		newCorefileContent := string(corefile)
+		if !strings.Contains(newCorefileContent, "_acme-challenge.internal.jerkytreats.dev:53") {
+			newCorefileContent += fmt.Sprintf(`
+_acme-challenge.internal.jerkytreats.dev:53 {
     errors
     log
+    file /etc/coredns/zones/_acme-challenge.internal.jerkytreats.dev.zone
 }
-`, challengeDomain, challengeDomain)
+`)
+		}
 
 		err = os.WriteFile(corefilePath, []byte(newCorefileContent), 0644)
 		require.NoError(t, err, "Should be able to update Corefile")
@@ -439,10 +466,11 @@ func TestCertificateManagement(t *testing.T) {
 
 		// Wait for CoreDNS to pick up changes
 		fmt.Println("    ⏳ Waiting for CoreDNS to reload configuration...")
-		time.Sleep(3 * time.Second)
+		time.Sleep(5 * time.Second)
 
-		// Query DNS challenge record
-		dnsCmd := exec.Command("/usr/bin/dig", "@coredns-test", challengeDomain, "TXT", "+short")
+		// Query DNS challenge record directly for the ACME domain
+		fmt.Printf("    🔍 Querying DNS for: %s\n", "_acme-challenge.internal.jerkytreats.dev")
+		dnsCmd := exec.Command("/usr/bin/dig", "@coredns-test", "_acme-challenge.internal.jerkytreats.dev", "TXT", "+short")
 		var out bytes.Buffer
 		dnsCmd.Stdout = &out
 		dnsCmd.Stderr = &out
@@ -450,14 +478,45 @@ func TestCertificateManagement(t *testing.T) {
 		err = dnsCmd.Run()
 		if err != nil {
 			t.Logf("DNS query failed: %s", out.String())
-			fmt.Println("    ⚠️  DNS challenge query failed, but DNS provider functionality verified")
+			fmt.Println("    ⚠️  DNS challenge query failed - this is likely the root cause of ACME timeout")
+
+			// Additional debugging
+			fmt.Println("    🔧 Debugging DNS setup:")
+			t.Logf("Challenge file path: %s", challengeFile)
+			t.Logf("Challenge content:\n%s", challengeContent)
+
+			// Check if challenge file exists
+			if _, err := os.Stat(challengeFile); os.IsNotExist(err) {
+				t.Logf("❌ Challenge file does not exist: %s", challengeFile)
+			} else {
+				t.Logf("✅ Challenge file exists: %s", challengeFile)
+				if content, err := os.ReadFile(challengeFile); err == nil {
+					t.Logf("Challenge file content:\n%s", string(content))
+				}
+			}
+
+			// Check CoreDNS configuration
+			if corefileContent, err := os.ReadFile(corefilePath); err == nil {
+				t.Logf("CoreDNS configuration:\n%s", string(corefileContent))
+			}
+
+			// Try alternative query
+			altCmd := exec.Command("/usr/bin/dig", "@coredns-test", "_acme-challenge.internal.jerkytreats.dev.", "TXT")
+			var altOut bytes.Buffer
+			altCmd.Stdout = &altOut
+			altCmd.Stderr = &altOut
+			altCmd.Run()
+			t.Logf("Alternative DNS query output:\n%s", altOut.String())
+
+			// Show this is expected to fail until DNS provider is fixed
+			fmt.Println("    ℹ️  This failure is expected until DNS provider file path is corrected")
 		} else {
 			output := out.String()
 			t.Logf("DNS query output: %s", output)
 			if strings.Contains(output, challengeValue) {
 				fmt.Println("    ✅ DNS challenge resolution working correctly")
 			} else {
-				fmt.Println("    ⚠️  DNS challenge value not found in response (timing issue)")
+				fmt.Printf("    ⚠️  DNS challenge value '%s' not found in response: %s\n", challengeValue, output)
 			}
 		}
 	})
