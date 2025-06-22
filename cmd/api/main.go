@@ -165,48 +165,6 @@ func main() {
 			logging.Error("Failed to create certificate manager: %v", err)
 			os.Exit(1)
 		}
-
-		domain := config.GetString(certificate.CertDomainKey)
-
-		// If TLS is enabled, ensure certificate exists before starting server
-		if config.GetBool(ServerTLSEnabledKey) {
-			logging.Info("TLS enabled, ensuring certificate exists before starting server")
-
-			certObtainTimeout := 5 * time.Minute
-			certObtainDone := make(chan error, 1)
-
-			go func() {
-				certObtainDone <- certManager.ObtainCertificate(domain)
-			}()
-
-			select {
-			case err := <-certObtainDone:
-				if err != nil {
-					logging.Error("Failed to obtain certificate within timeout: %v", err)
-					logging.Error("Cannot start TLS server without valid certificate")
-					os.Exit(1)
-				}
-				logging.Info("Certificate obtained successfully, proceeding with TLS server startup")
-			case <-time.After(certObtainTimeout):
-				logging.Error("Certificate obtainment timed out after %v", certObtainTimeout)
-				logging.Error("Cannot start TLS server without valid certificate")
-				os.Exit(1)
-			}
-		} else {
-			// For non-TLS mode, obtain certificate in background
-			go func() {
-				if err := certManager.ObtainCertificate(domain); err != nil {
-					logging.Error("Failed to obtain certificate: %v", err)
-					return
-				}
-				logging.Info("Certificate obtained successfully in background")
-			}()
-		}
-
-		// Start renewal loop in background
-		if certManager != nil {
-			go certManager.StartRenewalLoop(domain)
-		}
 	}
 
 	// Create record handler
@@ -217,10 +175,45 @@ func main() {
 	mux.HandleFunc("/health", healthCheckHandler)
 	mux.HandleFunc("/add-record", recordHandler.AddRecord)
 
-	// Create server
+	// Create server - start without TLS first if certificates need to be obtained
 	var server *http.Server
+	var tlsEnabled = config.GetBool(ServerTLSEnabledKey)
+	var certificateReady = false
 
-	if config.GetBool(ServerTLSEnabledKey) {
+	// Check if TLS certificates already exist
+	if tlsEnabled {
+		certFile := config.GetString(ServerTLSCertFileKey)
+		keyFile := config.GetString(ServerTLSKeyFileKey)
+
+		// Check if certificate files exist and are valid
+		if _, err := os.Stat(certFile); err == nil {
+			if _, err := os.Stat(keyFile); err == nil {
+				// Certificate files exist, try to load them to verify they're valid
+				if _, err := tls.LoadX509KeyPair(certFile, keyFile); err == nil {
+					certificateReady = true
+					logging.Info("Valid TLS certificates found, will start with TLS enabled")
+				} else {
+					logging.Warn("Certificate files exist but are invalid: %v", err)
+				}
+			}
+		}
+
+		if !certificateReady {
+			logging.Info("TLS enabled but no valid certificates found - will start HTTP server first, then obtain certificates")
+		}
+	}
+
+	// Start with HTTP server if certificates are not ready, or if TLS is disabled
+	if !tlsEnabled || !certificateReady {
+		server = &http.Server{
+			Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
+			ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
+			WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
+			IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
+			Handler:      mux,
+		}
+	} else {
+		// Start with TLS server if certificates are ready
 		server = &http.Server{
 			Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerTLSPortKey)),
 			ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
@@ -231,27 +224,22 @@ func main() {
 				MinVersion: tls.VersionTLS12,
 			},
 		}
-	} else {
-		server = &http.Server{
-			Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
-			ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
-			WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
-			IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
-			Handler:      mux,
-		}
 	}
 
 	// Start server in a goroutine
+	serverStarted := make(chan bool, 1)
 	go func() {
 		logging.Info("Starting server...")
 		var err error
-		if config.GetBool(ServerTLSEnabledKey) {
+		if tlsEnabled && certificateReady {
 			certFile := config.GetString(ServerTLSCertFileKey)
 			keyFile := config.GetString(ServerTLSKeyFileKey)
-			logging.Info("Server will start with TLS on port %d", config.GetInt(ServerTLSPortKey))
+			logging.Info("Server starting with TLS on port %d", config.GetInt(ServerTLSPortKey))
+			serverStarted <- true
 			err = server.ListenAndServeTLS(certFile, keyFile)
 		} else {
-			logging.Info("Server will start without TLS on port %d", config.GetInt(ServerPortKey))
+			logging.Info("Server starting without TLS on port %d", config.GetInt(ServerPortKey))
+			serverStarted <- true
 			err = server.ListenAndServe()
 		}
 
@@ -260,6 +248,46 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	// Wait for server to start
+	<-serverStarted
+	logging.Info("Server started successfully")
+
+	// Now handle certificate obtainment if needed
+	if certManager != nil {
+		domain := config.GetString(certificate.CertDomainKey)
+
+		if tlsEnabled && !certificateReady {
+			logging.Info("Server is running, now obtaining TLS certificates...")
+
+			// Obtain certificate in background, then restart server with TLS
+			go func() {
+				if err := certManager.ObtainCertificate(domain); err != nil {
+					logging.Error("Failed to obtain certificate: %v", err)
+					return
+				}
+
+				logging.Info("Certificate obtained successfully!")
+
+				// TODO: Implement graceful server restart with TLS
+				// For now, log that manual restart is needed
+				logging.Info("Certificate ready - restart the application to enable TLS")
+
+			}()
+		} else if !tlsEnabled {
+			// For non-TLS mode, obtain certificate in background for future use
+			go func() {
+				if err := certManager.ObtainCertificate(domain); err != nil {
+					logging.Error("Failed to obtain certificate: %v", err)
+					return
+				}
+				logging.Info("Certificate obtained successfully in background")
+			}()
+		}
+
+		// Start renewal loop in background
+		go certManager.StartRenewalLoop(domain)
+	}
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
