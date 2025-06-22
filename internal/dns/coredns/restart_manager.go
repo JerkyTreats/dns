@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
@@ -72,13 +74,22 @@ func NewRestartManager() *RestartManager {
 		healthRetries = defaultHealthRetries
 	}
 
+	// Determine DNS server address based on environment
+	dnsServer := defaultDNSServer
+	if isDockerEnvironment() {
+		dnsServer = dockerDNSServer
+		logging.Info("Detected Docker environment, using DNS server: %s", dnsServer)
+	} else {
+		logging.Info("Using local DNS server: %s", dnsServer)
+	}
+
 	return &RestartManager{
 		restartCommand: restartCmd,
 		restartTimeout: restartTimeout,
 		healthTimeout:  healthTimeout,
 		healthRetries:  healthRetries,
 		healthDelay:    defaultHealthDelay,
-		dnsServer:      defaultDNSServer,
+		dnsServer:      dnsServer,
 	}
 }
 
@@ -340,4 +351,39 @@ func (rm *RestartManager) logRestartResult(result *RestartResult, totalTime time
 			logging.Error("Restart output: %s", result.RestartOutput)
 		}
 	}
+}
+
+// isDockerEnvironment detects if we're running inside a Docker container
+func isDockerEnvironment() bool {
+	// Check for Docker-specific environment indicators
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+
+	// Check /proc/1/cgroup for Docker container indicators
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		content := string(data)
+		if strings.Contains(content, "docker") || strings.Contains(content, "/docker-") {
+			return true
+		}
+	}
+
+	// Check hostname for Docker-like patterns (12-character hex)
+	if hostname, err := os.Hostname(); err == nil {
+		if len(hostname) == 12 && isHexString(hostname) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isHexString checks if a string contains only hexadecimal characters
+func isHexString(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
