@@ -1,4 +1,4 @@
-package coredns
+package healthcheck
 
 import (
 	"fmt"
@@ -8,15 +8,12 @@ import (
 	"time"
 )
 
-// isDockerEnvironment detects if the code is running inside a Docker container.
-// This helper is shared by multiple components (e.g., RestartManager, health checks).
-func isDockerEnvironment() bool {
-	// Check for a typical Docker environment file
+// IsDockerEnvironment detects if the code is running inside a Docker container.
+func IsDockerEnvironment() bool {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true
 	}
 
-	// Inspect cgroup information for Docker identifiers
 	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
 		content := string(data)
 		if strings.Contains(content, "docker") || strings.Contains(content, "/docker-") {
@@ -24,7 +21,6 @@ func isDockerEnvironment() bool {
 		}
 	}
 
-	// Detect 12-char hexadecimal hostnames (common with Docker containers)
 	if hostname, err := os.Hostname(); err == nil {
 		if len(hostname) == 12 && isHexString(hostname) {
 			return true
@@ -34,7 +30,6 @@ func isDockerEnvironment() bool {
 	return false
 }
 
-// isHexString returns true if the supplied string is purely hexadecimal.
 func isHexString(s string) bool {
 	for _, c := range s {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
@@ -45,6 +40,8 @@ func isHexString(s string) bool {
 }
 
 // DNSHealthChecker performs UDP-based health checks against a DNS server.
+// It implements the Checker interface.
+
 type DNSHealthChecker struct {
 	server  string
 	timeout time.Duration
@@ -61,6 +58,8 @@ func NewDNSHealthChecker(server string, timeout time.Duration, retries int, dela
 		delay:   delay,
 	}
 }
+
+func (hc *DNSHealthChecker) Name() string { return "coredns" }
 
 // CheckOnce performs a single UDP query to the configured DNS server.
 // It returns success bool, response time, and optional error.

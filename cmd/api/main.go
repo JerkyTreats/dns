@@ -17,6 +17,7 @@ import (
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/bootstrap"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/tailscale"
 )
@@ -45,6 +46,7 @@ var (
 	bootstrapManager *bootstrap.Manager
 	certManager      *certificate.Manager
 	dnsManager       *coredns.Manager
+	dnsChecker       healthcheck.Checker
 )
 
 func init() {
@@ -74,8 +76,19 @@ func main() {
 
 	dnsManager = newCoreDNSManager()
 
-	logging.Info("Waiting for CoreDNS to be ready...")
-	time.Sleep(5 * time.Second) // Allow docker-compose to start CoreDNS
+	// Initialise DNS health checker and actively wait for CoreDNS to be ready
+	dnsServer := "127.0.0.1:53"
+	if healthcheck.IsDockerEnvironment() {
+		dnsServer = "coredns:53"
+	}
+	dnsChecker = healthcheck.NewDNSHealthChecker(dnsServer, 10*time.Second, 10, 2*time.Second)
+
+	logging.Info("Waiting for CoreDNS to report healthy status...")
+	if !dnsChecker.WaitHealthy() {
+		logging.Error("CoreDNS did not become healthy within the expected time")
+		os.Exit(1)
+	}
+	logging.Info("CoreDNS is healthy")
 
 	var tlsEnabled = config.GetBool(ServerTLSEnabledKey)
 	var certificateReady = false
@@ -229,10 +242,30 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 			"status":  "healthy",
 			"message": "API is running",
 		},
-		"coredns": map[string]string{
-			"status":  "healthy",
-			"message": "CoreDNS is running",
-		},
+	}
+
+	// Dynamic CoreDNS health status
+	if dnsChecker != nil {
+		if ok, latency, err := dnsChecker.CheckOnce(); ok {
+			components["coredns"] = map[string]string{
+				"status":  "healthy",
+				"message": fmt.Sprintf("CoreDNS responded in %v", latency),
+			}
+		} else {
+			msg := "CoreDNS probe failed"
+			if err != nil {
+				msg = err.Error()
+			}
+			components["coredns"] = map[string]string{
+				"status":  "error",
+				"message": msg,
+			}
+		}
+	} else {
+		components["coredns"] = map[string]string{
+			"status":  "unknown",
+			"message": "DNS checker not initialized",
+		}
 	}
 
 	// Add bootstrap status if enabled

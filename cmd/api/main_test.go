@@ -34,8 +34,8 @@ func TestHealthCheckHandler(t *testing.T) {
 						"message": "API is running",
 					},
 					"coredns": map[string]interface{}{
-						"status":  "healthy",
-						"message": "CoreDNS is running",
+						"status":  "unknown",
+						"message": "DNS checker not initialized",
 					},
 					"bootstrap": map[string]interface{}{
 						"status":  "disabled",

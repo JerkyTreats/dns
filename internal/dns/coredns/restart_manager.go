@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
 )
 
@@ -32,7 +33,7 @@ type RestartManager struct {
 	lastRestartTime time.Time
 	restartCount    int
 	dnsServer       string // DNS server address for health checks
-	healthChecker   *DNSHealthChecker
+	healthChecker   healthcheck.Checker
 }
 
 // RestartResult represents the result of a restart operation
@@ -71,14 +72,14 @@ func NewRestartManager() *RestartManager {
 
 	// Determine DNS server address based on environment
 	dnsServer := defaultDNSServer
-	if isDockerEnvironment() {
+	if healthcheck.IsDockerEnvironment() {
 		dnsServer = dockerDNSServer
 		logging.Info("Detected Docker environment, using DNS server: %s", dnsServer)
 	} else {
 		logging.Info("Using local DNS server: %s", dnsServer)
 	}
 
-	hc := NewDNSHealthChecker(dnsServer, healthTimeout, healthRetries, defaultHealthDelay)
+	hc := healthcheck.NewDNSHealthChecker(dnsServer, healthTimeout, healthRetries, defaultHealthDelay)
 
 	return &RestartManager{
 		restartCommand: restartCmd,
