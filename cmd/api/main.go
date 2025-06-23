@@ -76,7 +76,15 @@ func main() {
 
 	dnsManager = newCoreDNSManager()
 
-	// Initialise DNS health checker and actively wait for CoreDNS to be ready
+	// Ensure a Corefile exists; if not, write a minimal one from the template so
+	// the CoreDNS container can start successfully on first deploy.
+	ensureCorefileExists(dnsManager)
+
+	// Potentially create internal zone before waiting for health so a usable
+	// Corefile is already written when bootstrap is enabled.
+	bootstrapManager = maybeBootstrap(dnsManager)
+
+	// Now actively wait for CoreDNS to become healthy.
 	dnsServer := "127.0.0.1:53"
 	if healthcheck.IsDockerEnvironment() {
 		dnsServer = "coredns:53"
@@ -104,53 +112,6 @@ func main() {
 
 		// Integrate certificate manager with ConfigManager for TLS enablement
 		certManager.SetCoreDNSManager(dnsManager)
-	}
-
-	bootstrapManager = maybeBootstrap(dnsManager)
-
-	// Step 8: Check if TLS certificates already exist
-	if tlsEnabled {
-		certFile := config.GetString(ServerTLSCertFileKey)
-		keyFile := config.GetString(ServerTLSKeyFileKey)
-
-		// Check if certificate files exist and are valid
-		if _, err := os.Stat(certFile); err == nil {
-			if _, err := os.Stat(keyFile); err == nil {
-				// Certificate files exist, try to load them to verify they're valid
-				if _, err := tls.LoadX509KeyPair(certFile, keyFile); err == nil {
-					certificateReady = true
-					logging.Info("Valid TLS certificates found, enabling TLS configuration...")
-
-					// Enable TLS in CoreDNS configuration
-					if err := dnsManager.EnableTLS(coredns.DNSDomainKey, certFile, keyFile); err != nil {
-						logging.Warn("Failed to enable TLS in CoreDNS configuration: %v", err)
-					} else {
-						logging.Info("TLS enabled in CoreDNS configuration")
-					}
-				} else {
-					logging.Warn("Certificate files exist but are invalid: %v", err)
-				}
-			}
-		}
-
-		// Step 9: Start certificate obtainment if certificates not ready (async)
-		if !certificateReady && certManager != nil {
-			logging.Info("Starting certificate obtainment process...")
-			go func() {
-				certDomain := config.GetString(certificate.CertDomainKey)
-				if err := certManager.ObtainCertificate(certDomain); err != nil {
-					logging.Error("Failed to obtain certificate: %v", err)
-				} else {
-					logging.Info("Certificate obtained successfully")
-				}
-
-				// Start renewal loop
-				if config.GetBool(certificate.CertRenewalEnabledKey) {
-					logging.Info("Starting certificate renewal loop...")
-					certManager.StartRenewalLoop(certDomain)
-				}
-			}()
-		}
 	}
 
 	// Create record handler
@@ -370,4 +331,27 @@ func maybeBootstrap(dnsMgr *coredns.Manager) *bootstrap.Manager {
 
 	logging.Info("Dynamic zone bootstrap completed successfully")
 	return bm
+}
+
+func ensureCorefileExists(dnsMgr *coredns.Manager) {
+	configPath := config.GetString(coredns.DNSConfigPathKey)
+	if _, err := os.Stat(configPath); err == nil {
+		return // already exists
+	}
+
+	templatePath := config.GetString(coredns.DNSTemplatePathKey)
+	if templatePath == "" {
+		templatePath = "configs/coredns/Corefile.template"
+	}
+	tmpl, err := os.ReadFile(templatePath)
+	if err != nil {
+		logging.Warn("Failed to read CoreDNS template to seed Corefile: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(configPath, tmpl, 0644); err != nil {
+		logging.Warn("Failed to write initial Corefile: %v", err)
+		return
+	}
+	logging.Info("Seeded initial Corefile at %s", configPath)
 }
