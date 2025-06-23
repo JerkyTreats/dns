@@ -37,7 +37,7 @@ func TestManager(t *testing.T) {
 
 	t.Run("AddRecord", func(t *testing.T) {
 		// Before adding a record, we need a zone. Let's create a dummy zone file.
-		zoneFileName := filepath.Join(zonesPath, "test-service.zone")
+		zoneFileName := filepath.Join(zonesPath, "test-service.test.local.zone")
 		err := os.MkdirAll(zonesPath, 0755)
 		require.NoError(t, err)
 		err = os.WriteFile(zoneFileName, []byte("$ORIGIN test-service.test.local.\n"), 0644)
@@ -107,7 +107,7 @@ func TestZoneValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify zone file was created
-		zoneFile := filepath.Join(zonesPath, "new-service.zone")
+		zoneFile := filepath.Join(zonesPath, "new-service.test.local.zone")
 		_, err = os.Stat(zoneFile)
 		require.NoError(t, err)
 
@@ -179,7 +179,7 @@ existing-zone.test.local:53 {
 		assert.NotContains(t, string(config), "removable-service.test.local:53")
 
 		// Verify zone file is removed
-		zoneFile := filepath.Join(zonesPath, "removable-service.zone")
+		zoneFile := filepath.Join(zonesPath, "removable-service.test.local.zone")
 		_, err = os.Stat(zoneFile)
 		assert.True(t, os.IsNotExist(err), "Zone file should be removed")
 	})

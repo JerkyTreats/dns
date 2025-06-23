@@ -18,6 +18,7 @@ import (
 	"github.com/jerkytreats/dns/internal/dns/bootstrap"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/jerkytreats/dns/internal/tailscale"
 )
 
 const (
@@ -71,13 +72,7 @@ func main() {
 	logging.Info("Application starting...")
 	defer logging.Sync()
 
-	configPath := config.GetString(coredns.DNSConfigPathKey)
-	templateKey := config.GetString(coredns.DNSTemplatePathKey)
-	zonePath := config.GetString(coredns.DNSZonesPathKey)
-	reloadCommand := config.GetStringSlice(coredns.DNSReloadCommandKey)
-	domain := config.GetString(coredns.DNSDomainKey)
-
-	dnsManager := coredns.NewManager(configPath, templateKey, zonePath, reloadCommand, domain)
+	dnsManager = newCoreDNSManager()
 
 	logging.Info("Waiting for CoreDNS to be ready...")
 	time.Sleep(5 * time.Second) // Allow docker-compose to start CoreDNS
@@ -98,40 +93,7 @@ func main() {
 		certManager.SetCoreDNSManager(dnsManager)
 	}
 
-	// if config.GetBool(BootstrapEnabledKey) {
-	// 	logging.Info("Bootstrap is enabled, initializing dynamic zone bootstrap...")
-
-	// 	// Create Tailscale client
-	// 	tailscaleClient, err := tailscale.NewClient()
-	// 	if err != nil {
-	// 		logging.Error("Failed to create Tailscale client: %v", err)
-	// 		os.Exit(1)
-	// 	}
-
-	// 	// Create bootstrap manager using the ConfigManager-integrated DNS manager
-	// 	bootstrapManager, err = bootstrap.NewManager(dnsManager, tailscaleClient)
-	// 	if err != nil {
-	// 		logging.Error("Failed to create bootstrap manager: %v", err)
-	// 		os.Exit(1)
-	// 	}
-
-	// 	logging.Info("Adding internal domain to dynamic configuration...")
-	// 	if err := configManager.AddDomain(domain, nil); err != nil {
-	// 		logging.Error("Failed to add internal domain: %v", err)
-	// 		os.Exit(1)
-	// 	}
-
-	// 	// Initialize the internal zone and bootstrap devices
-	// 	if err := bootstrapManager.EnsureInternalZone(); err != nil {
-	// 		logging.Error("Failed to bootstrap internal zone: %v", err)
-	// 		logging.Warn("Bootstrap failed, continuing without dynamic zone bootstrap")
-	// 		bootstrapManager = nil
-	// 	} else {
-	// 		logging.Info("Dynamic zone bootstrap completed successfully")
-	// 	}
-	// } else {
-	// 	logging.Info("Bootstrap is disabled")
-	// }
+	bootstrapManager = maybeBootstrap(dnsManager)
 
 	// Step 8: Check if TLS certificates already exist
 	if tlsEnabled {
@@ -325,4 +287,54 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+}
+
+// newCoreDNSManager constructs and returns a configured CoreDNS manager.
+func newCoreDNSManager() *coredns.Manager {
+	configPath := config.GetString(coredns.DNSConfigPathKey)
+	templatePath := config.GetString(coredns.DNSTemplatePathKey)
+	zonesPath := config.GetString(coredns.DNSZonesPathKey)
+	reloadCmd := config.GetStringSlice(coredns.DNSReloadCommandKey)
+	domain := config.GetString(coredns.DNSDomainKey)
+
+	return coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
+}
+
+// maybeBootstrap initialises dynamic zone bootstrap if it is enabled in config.
+// It returns the *bootstrap.Manager instance or nil if bootstrap is disabled or fails.
+func maybeBootstrap(dnsMgr *coredns.Manager) *bootstrap.Manager {
+	if !config.GetBool(BootstrapEnabledKey) {
+		logging.Info("Bootstrap is disabled")
+		return nil
+	}
+
+	logging.Info("Bootstrap is enabled, initializing dynamic zone bootstrap...")
+
+	tailscaleClient, err := tailscale.NewClient()
+	if err != nil {
+		logging.Error("Failed to create Tailscale client: %v", err)
+		return nil
+	}
+
+	bm, err := bootstrap.NewManager(dnsMgr, tailscaleClient)
+	if err != nil {
+		logging.Error("Failed to create bootstrap manager: %v", err)
+		return nil
+	}
+
+	// Add the base domain so that device records can be created.
+	baseDomain := config.GetString(coredns.DNSDomainKey)
+	if err := dnsMgr.AddDomain(baseDomain, nil); err != nil {
+		logging.Error("Failed to add internal domain: %v", err)
+		return nil
+	}
+
+	if err := bm.EnsureInternalZone(); err != nil {
+		logging.Error("Failed to bootstrap internal zone: %v", err)
+		logging.Warn("Bootstrap failed, continuing without dynamic zone bootstrap")
+		return nil
+	}
+
+	logging.Info("Dynamic zone bootstrap completed successfully")
+	return bm
 }

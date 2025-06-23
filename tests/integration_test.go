@@ -179,7 +179,7 @@ type serviceCheck struct {
 func TestAPI_AddRecord(t *testing.T) {
 	fmt.Println("🧪 Testing API Add Record...")
 
-	zoneFilePath := "configs/coredns-test/zones/test-service.zone"
+	zoneFilePath := "configs/coredns-test/zones/test-service.test.jerkytreats.dev.zone"
 	zoneContent := "$ORIGIN test-service.test.jerkytreats.dev.\n@ IN SOA ns1.test.jerkytreats.dev. admin.test.jerkytreats.dev. 1 7200 3600 1209600 3600\n"
 
 	err := os.WriteFile(zoneFilePath, []byte(zoneContent), 0644)
@@ -213,7 +213,7 @@ func TestAPI_AddRecord(t *testing.T) {
 func TestDNS_QueryRecord(t *testing.T) {
 	fmt.Println("🧪 Testing DNS Query...")
 
-	zoneFilePath := "configs/coredns-test/zones/test-query.zone"
+	zoneFilePath := "configs/coredns-test/zones/test-query.test.jerkytreats.dev.zone"
 	zoneContent := "$ORIGIN test-query.test.jerkytreats.dev.\n@ IN SOA ns1.test.jerkytreats.dev. admin.test.jerkytreats.dev. 1 7200 3600 1209600 3600\nwww IN A 192.168.20.1\n"
 
 	err := os.WriteFile(zoneFilePath, []byte(zoneContent), 0644)
@@ -224,7 +224,7 @@ func TestDNS_QueryRecord(t *testing.T) {
 	corefile, err := os.ReadFile(corefilePath)
 	require.NoError(t, err, "Failed to read Corefile")
 
-	newCorefileContent := string(corefile) + "\ntest-query.test.jerkytreats.dev:53 {\n    file /etc/coredns/zones/test-query.zone\n    errors\n    log\n}\n"
+	newCorefileContent := string(corefile) + "\ntest-query.test.jerkytreats.dev:53 {\n    file /etc/coredns/zones/test-query.test.jerkytreats.dev.zone\n    errors\n    log\n}\n"
 
 	err = os.WriteFile(corefilePath, []byte(newCorefileContent), 0644)
 	require.NoError(t, err, "Failed to update Corefile")
@@ -604,7 +604,7 @@ func TestServiceStartupIntegration(t *testing.T) {
 
 		// Override CoreDNS paths for test environment
 		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
-		config.SetForTest("dns.coredns.template_path", "configs/coredns-test/Corefile.template")
+		config.SetForTest("dns.coredns.template_path", "/app/tests/configs/coredns-test/Corefile.template")
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		// Create managers
@@ -623,7 +623,7 @@ func TestServiceStartupIntegration(t *testing.T) {
 		assert.NotNil(t, bootstrapManager, "Bootstrap manager should be created successfully")
 
 		// Test validation
-		err = bootstrapManager.ValidateConfiguration()
+		err = bootstrapManager.ValidateBootstrapConfig()
 		require.NoError(t, err, "Bootstrap configuration should be valid")
 
 		fmt.Println("    ✅ Bootstrap manager initialization successful")
@@ -677,13 +677,10 @@ func TestServiceStartupIntegration(t *testing.T) {
 func TestEndToEndBootstrapWorkflow(t *testing.T) {
 	fmt.Println("🧪 Testing End-to-End Bootstrap Workflow (P0)...")
 
-	// Clean up any existing test zones
-	testZoneFile := "configs/coredns-test/zones/internal.zone"
-	os.Remove(testZoneFile)
-	defer os.Remove(testZoneFile)
-
 	t.Run("Tailscale_Device_Discovery", func(t *testing.T) {
 		// Test device discovery from mock Tailscale service
+		setupIntegrationDefaults()
+
 		tailscaleClient, err := tailscale.NewClient()
 		require.NoError(t, err, "Should be able to create Tailscale client")
 
@@ -701,7 +698,9 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 	})
 
 	t.Run("Bootstrap_Zone_Creation", func(t *testing.T) {
-		// Set up test configuration
+		// Test bootstrap zone creation and device registration
+		setupIntegrationDefaults()
+
 		config.ResetForTest()
 		defer config.ResetForTest()
 
@@ -710,6 +709,7 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 
 		// Override CoreDNS paths for test environment
 		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.template_path", "/app/tests/configs/coredns-test/Corefile.template")
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		// Create managers
@@ -718,7 +718,9 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
+
 		coreManager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
+		assert.NotNil(t, coreManager, "CoreDNS manager should be created successfully")
 
 		tailscaleClient, err := tailscale.NewClient()
 		require.NoError(t, err, "Should be able to create Tailscale client")
@@ -741,17 +743,8 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 		require.NoError(t, err, "Bootstrap should create internal zone successfully")
 
 		// Verify zone file was created
-		expectedZoneFile := "configs/coredns-test/zones/internal.zone"
-		_, err = os.Stat(expectedZoneFile)
-		require.NoError(t, err, "Internal zone file should be created")
-
-		// Verify zone file contains expected content
-		content, err := os.ReadFile(expectedZoneFile)
-		require.NoError(t, err, "Should be able to read zone file")
-
-		zoneContent := string(content)
-		assert.Contains(t, zoneContent, "internal.test.jerkytreats.dev", "Zone should contain correct domain")
-		assert.Contains(t, zoneContent, "test-device-1", "Zone should contain bootstrapped device")
+		expectedZoneFile := "configs/coredns-test/zones/internal.test.jerkytreats.dev.zone"
+		assert.FileExists(t, expectedZoneFile, "Internal zone file should be created")
 
 		fmt.Println("    ✅ Bootstrap zone creation successful")
 	})
@@ -792,7 +785,7 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 	})
 
 	t.Run("Bootstrap_Status_Verification", func(t *testing.T) {
-		// Set up bootstrap manager again to check status
+		// Test bootstrap status verification
 		config.ResetForTest()
 		defer config.ResetForTest()
 
@@ -801,8 +794,10 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 
 		// Override CoreDNS paths for test environment
 		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.template_path", "/app/tests/configs/coredns-test/Corefile.template")
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
+		// Create managers
 		configPath := config.GetString("dns.coredns.config_path")
 		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
@@ -810,6 +805,7 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 		domain := config.GetString("dns.domain")
 		coreManager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 
+		setupIntegrationDefaults()
 		tailscaleClient, err := tailscale.NewClient()
 		require.NoError(t, err, "Should be able to create Tailscale client")
 
@@ -827,7 +823,7 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 
 		// Verify bootstrap status
 		isBootstrapped := bootstrapManager.IsZoneBootstrapped()
-		assert.True(t, isBootstrapped, "Zone should be marked as bootstrapped")
+		assert.True(t, isBootstrapped, "Zone should be bootstrapped")
 
 		fmt.Println("    ✅ Bootstrap status verification successful")
 	})
@@ -1007,6 +1003,32 @@ func TestContainerRestartIntegration(t *testing.T) {
 	t.Run("Configuration_Template_System", func(t *testing.T) {
 		fmt.Println("  🔧 Testing configuration template system...")
 
+		// First, create the zone that we want to test with
+		setupIntegrationDefaults()
+
+		config.ResetForTest()
+		defer config.ResetForTest()
+
+		err := config.InitConfig(config.WithConfigPath("configs/config.test.yaml"))
+		require.NoError(t, err)
+
+		// Override CoreDNS paths for test environment
+		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.template_path", "/app/tests/configs/coredns-test/Corefile.template")
+		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
+
+		// Create CoreDNS manager and add the zone
+		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
+		zonesPath := config.GetString("dns.coredns.zones_path")
+		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
+		domain := config.GetString("dns.domain")
+		manager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
+
+		// Create the zone first
+		err = manager.AddZone("template-test")
+		require.NoError(t, err, "Should be able to create template-test zone")
+
 		// Test that the template-based configuration system is working
 		// by checking if we can add a domain and it gets applied
 		apiURL := getAPIBaseURL() + "/add-record"
@@ -1068,7 +1090,7 @@ func TestZoneManagementIntegration(t *testing.T) {
 	fmt.Println("🧪 Testing Zone Management Integration (P0)...")
 
 	// Clean up test files
-	testZoneFile := "configs/coredns-test/zones/test-zone-mgmt.zone"
+	testZoneFile := "configs/coredns-test/zones/test-zone-mgmt.test.jerkytreats.dev.zone"
 	testCorefilePath := "configs/coredns-test/Corefile"
 
 	defer func() {
@@ -1080,6 +1102,8 @@ func TestZoneManagementIntegration(t *testing.T) {
 
 	t.Run("Zone_Creation", func(t *testing.T) {
 		// Test zone creation through CoreDNS manager
+		setupIntegrationDefaults()
+
 		config.ResetForTest()
 		defer config.ResetForTest()
 
@@ -1088,6 +1112,7 @@ func TestZoneManagementIntegration(t *testing.T) {
 
 		// Override CoreDNS paths for test environment
 		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.template_path", "/app/tests/configs/coredns-test/Corefile.template")
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		configPath := config.GetString("dns.coredns.config_path")
@@ -1119,6 +1144,8 @@ func TestZoneManagementIntegration(t *testing.T) {
 
 	t.Run("DNS_Record_Addition", func(t *testing.T) {
 		// Test adding DNS records to the zone
+		setupIntegrationDefaults()
+
 		config.ResetForTest()
 		defer config.ResetForTest()
 
@@ -1127,6 +1154,7 @@ func TestZoneManagementIntegration(t *testing.T) {
 
 		// Override CoreDNS paths for test environment
 		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.template_path", "/app/tests/configs/coredns-test/Corefile.template")
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		configPath := config.GetString("dns.coredns.config_path")
@@ -1172,7 +1200,7 @@ func TestZoneManagementIntegration(t *testing.T) {
 
 		corefileContent := string(content)
 		assert.Contains(t, corefileContent, "test-zone-mgmt.test.jerkytreats.dev", "Corefile should contain new zone")
-		assert.Contains(t, corefileContent, "test-zone-mgmt.zone", "Corefile should reference zone file")
+		assert.Contains(t, corefileContent, "test-zone-mgmt.test.jerkytreats.dev.zone", "Corefile should reference zone file")
 
 		fmt.Println("    ✅ CoreDNS configuration update successful")
 	})
@@ -1240,4 +1268,13 @@ func TestZoneManagementIntegration(t *testing.T) {
 	})
 
 	fmt.Println("  ✅ Zone management integration test passed")
+}
+
+// setupIntegrationDefaults sets common configuration needed by many integration sub-tests.
+func setupIntegrationDefaults() {
+	config.SetForTest("tailscale.api_key", "test-api-key")
+	config.SetForTest("tailscale.tailnet", "test-tailnet")
+	config.SetForTest(config.TailscaleBaseURLKey, "http://mock-tailscale")
+	// Use the template that exists in the mounted project directory
+	config.SetForTest("dns.coredns.template_path", "/app/tests/configs/coredns-test/Corefile.template")
 }

@@ -223,7 +223,7 @@ func (m *Manager) AddZone(serviceName string) error {
 		return fmt.Errorf("failed to create zones directory: %w", err)
 	}
 
-	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", serviceName))
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.%s.zone", serviceName, m.domain))
 	if err := os.WriteFile(zoneFile, []byte(zoneContent), 0644); err != nil {
 		return fmt.Errorf("failed to write zone file: %w", err)
 	}
@@ -236,7 +236,7 @@ func (m *Manager) AddZone(serviceName string) error {
 func (m *Manager) RemoveZone(serviceName string) error {
 	logging.Info("Removing zone for service: %s", serviceName)
 
-	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", serviceName))
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.%s.zone", serviceName, m.domain))
 	if err := os.Remove(zoneFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove zone file: %w", err)
 	}
@@ -253,7 +253,7 @@ func (m *Manager) AddRecord(serviceName, name, ip string) error {
 
 	logging.Info("Attempting to add record: service=%s, name=%s, ip=%s", serviceName, name, ip)
 
-	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", serviceName))
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.%s.zone", serviceName, m.domain))
 	if _, err := os.Stat(zoneFile); os.IsNotExist(err) {
 		return fmt.Errorf("zone file for service '%s' does not exist", serviceName)
 	}

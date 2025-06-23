@@ -31,7 +31,7 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	// Create a dummy zone file for the test service
 	err = os.MkdirAll(zonesPath, 0755)
 	require.NoError(t, err)
-	zoneFileName := filepath.Join(zonesPath, "test-service.zone")
+	zoneFileName := filepath.Join(zonesPath, "test-service.test.local.zone")
 	err = os.WriteFile(zoneFileName, []byte("$ORIGIN test-service.test.local."), 0644)
 	require.NoError(t, err)
 
