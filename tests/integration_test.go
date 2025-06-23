@@ -569,11 +569,12 @@ func TestServiceStartupIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
 
-		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		manager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 		assert.NotNil(t, manager, "CoreDNS manager should be created successfully")
 
 		fmt.Println("    ✅ CoreDNS manager initialization successful")
@@ -603,18 +604,21 @@ func TestServiceStartupIntegration(t *testing.T) {
 
 		// Override CoreDNS paths for test environment
 		config.SetForTest("dns.coredns.config_path", "configs/coredns-test/Corefile")
+		config.SetForTest("dns.coredns.template_path", "configs/coredns-test/Corefile.template")
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		// Create managers
 		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
-		coreManager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		coreManager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 
-		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
-		bootstrapConfig := config.GetBootstrapConfig()
-		bootstrapManager := bootstrap.NewManager(coreManager, tailscaleClient, bootstrapConfig)
+		tailscaleClient, err := tailscale.NewClient()
+		require.NoError(t, err, "Should be able to create Tailscale client")
+		bootstrapManager, err := bootstrap.NewManager(coreManager, tailscaleClient)
+		require.NoError(t, err, "Should be able to create bootstrap manager")
 
 		assert.NotNil(t, bootstrapManager, "Bootstrap manager should be created successfully")
 
@@ -680,7 +684,8 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 
 	t.Run("Tailscale_Device_Discovery", func(t *testing.T) {
 		// Test device discovery from mock Tailscale service
-		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
+		tailscaleClient, err := tailscale.NewClient()
+		require.NoError(t, err, "Should be able to create Tailscale client")
 
 		devices, err := tailscaleClient.ListDevices()
 		require.NoError(t, err, "Should be able to list devices from mock Tailscale")
@@ -709,12 +714,14 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 
 		// Create managers
 		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
-		coreManager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		coreManager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 
-		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
+		tailscaleClient, err := tailscale.NewClient()
+		require.NoError(t, err, "Should be able to create Tailscale client")
 
 		// Set up bootstrap config with test device
 		config.SetForTest("dns.internal.origin", "internal.test.jerkytreats.dev.")
@@ -726,8 +733,8 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 			},
 		})
 
-		bootstrapConfig := config.GetBootstrapConfig()
-		bootstrapManager := bootstrap.NewManager(coreManager, tailscaleClient, bootstrapConfig)
+		bootstrapManager, err := bootstrap.NewManager(coreManager, tailscaleClient)
+		require.NoError(t, err, "Should be able to create bootstrap manager")
 
 		// Test zone creation and device bootstrap
 		err = bootstrapManager.EnsureInternalZone()
@@ -797,12 +804,14 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
-		coreManager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		coreManager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 
-		tailscaleClient := tailscale.NewClientWithBaseURL("test-api-key", "test-tailnet", "http://mock-tailscale")
+		tailscaleClient, err := tailscale.NewClient()
+		require.NoError(t, err, "Should be able to create Tailscale client")
 
 		config.SetForTest("dns.internal.origin", "internal.test.jerkytreats.dev.")
 		config.SetForTest("dns.internal.bootstrap_devices", []map[string]interface{}{
@@ -813,8 +822,8 @@ func TestEndToEndBootstrapWorkflow(t *testing.T) {
 			},
 		})
 
-		bootstrapConfig := config.GetBootstrapConfig()
-		bootstrapManager := bootstrap.NewManager(coreManager, tailscaleClient, bootstrapConfig)
+		bootstrapManager, err := bootstrap.NewManager(coreManager, tailscaleClient)
+		require.NoError(t, err, "Should be able to create bootstrap manager")
 
 		// Verify bootstrap status
 		isBootstrapped := bootstrapManager.IsZoneBootstrapped()
@@ -1082,10 +1091,11 @@ func TestZoneManagementIntegration(t *testing.T) {
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
-		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		manager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 
 		// Create a new zone
 		err = manager.AddZone("test-zone-mgmt")
@@ -1120,10 +1130,11 @@ func TestZoneManagementIntegration(t *testing.T) {
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
-		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		manager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 
 		// Add a record to the zone
 		err = manager.AddRecord("test-zone-mgmt", "www", "192.168.100.1")
@@ -1211,10 +1222,11 @@ func TestZoneManagementIntegration(t *testing.T) {
 		config.SetForTest("dns.coredns.zones_path", "configs/coredns-test/zones")
 
 		configPath := config.GetString("dns.coredns.config_path")
+		templatePath := config.GetString("dns.coredns.template_path")
 		zonesPath := config.GetString("dns.coredns.zones_path")
 		reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
 		domain := config.GetString("dns.domain")
-		manager := coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
+		manager := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
 
 		// Remove the zone
 		err = manager.RemoveZone("test-zone-mgmt")

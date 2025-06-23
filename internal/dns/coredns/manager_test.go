@@ -28,16 +28,12 @@ func TestManager(t *testing.T) {
 `
 	_ = os.WriteFile(templatePath, []byte(templateContent), 0644)
 
-	// Create ConfigManager and link to Manager
-	cm := NewConfigManager(configPath, templatePath, "test.local", zonesPath)
-
 	// Mock reload script path (still used for Reload tests)
 	reloadScriptPath := filepath.Join(tempDir, "reload.sh")
 	reloadScriptContent := "#!/bin/sh\necho 'reloaded'"
 	_ = os.WriteFile(reloadScriptPath, []byte(reloadScriptContent), 0755)
 
-	manager := NewManager(configPath, zonesPath, []string{reloadScriptPath}, "test.local")
-	manager.SetConfigManager(cm)
+	manager := NewManager(configPath, templatePath, zonesPath, []string{reloadScriptPath}, "test.local")
 
 	t.Run("AddRecord", func(t *testing.T) {
 		// Before adding a record, we need a zone. Let's create a dummy zone file.
@@ -63,13 +59,13 @@ func TestManager(t *testing.T) {
 	})
 
 	t.Run("Reload with no command", func(t *testing.T) {
-		managerNoReload := NewManager(configPath, zonesPath, []string{}, "test.local")
+		managerNoReload := NewManager(configPath, templatePath, zonesPath, []string{}, "test.local")
 		err := managerNoReload.Reload()
 		assert.NoError(t, err, "Reload should not error when no command is configured")
 	})
 
 	t.Run("Reload with failing command", func(t *testing.T) {
-		managerFailingReload := NewManager(configPath, zonesPath, []string{"/bin/false"}, "test.local")
+		managerFailingReload := NewManager(configPath, templatePath, zonesPath, []string{"/bin/false"}, "test.local")
 		err := managerFailingReload.Reload()
 		assert.Error(t, err)
 		assert.True(t, strings.Contains(err.Error(), "reloading CoreDNS failed"), "Error message should indicate failure")
@@ -104,9 +100,7 @@ func TestZoneValidation(t *testing.T) {
     errors
 }
 `), 0644)
-	cm2 := NewConfigManager(configPath, templatePath2, "test.local", zonesPath)
-	manager := NewManager(configPath, zonesPath, []string{}, "test.local")
-	manager.SetConfigManager(cm2)
+	manager := NewManager(configPath, templatePath2, zonesPath, []string{}, "test.local")
 
 	t.Run("AddZone creates new zone", func(t *testing.T) {
 		err := manager.AddZone("new-service")

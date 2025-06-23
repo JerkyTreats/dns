@@ -3,8 +3,8 @@
 package config
 
 import (
-	"fmt"
-	"os" // Added for ToUpper
+	"fmt" // Added for ToUpper
+	"os"
 	"sync"
 	"time"
 
@@ -62,10 +62,33 @@ var (
 func getInstance() *Config {
 	instanceOnce.Do(func() {
 		instance = &Config{
-			searchPaths: []string{"./configs", os.ExpandEnv("$HOME/.phite")},
+			searchPaths: []string{"./configs"},
 		}
 	})
 	return instance
+}
+
+func FirstTimeInit(configFile *string) error {
+	// Initialize configuration
+	if *configFile != "" {
+		if err := InitConfig(WithConfigPath(*configFile)); err != nil {
+			fmt.Printf("Failed to initialize configuration: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		if err := InitConfig(); err != nil {
+			fmt.Printf("Failed to initialize configuration: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Check required configuration keys after initialization
+	if err := CheckRequiredKeys(); err != nil {
+		fmt.Printf("Configuration validation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	return nil
 }
 
 // InitConfig explicitly initializes the configuration with optional parameters
@@ -345,30 +368,6 @@ func ResetForTest() {
 	instance = nil
 	requiredKeys = []string{}
 	missingKeys = []string{}
-}
-
-// ValidateBootstrapConfig validates the bootstrap configuration
-func ValidateBootstrapConfig() error {
-	bootstrapConfig := GetBootstrapConfig()
-
-	if bootstrapConfig.Origin == "" {
-		return fmt.Errorf("dns.internal.origin is required")
-	}
-
-	if len(bootstrapConfig.Devices) == 0 {
-		return fmt.Errorf("at least one bootstrap device must be configured")
-	}
-
-	for i, device := range bootstrapConfig.Devices {
-		if device.Name == "" {
-			return fmt.Errorf("device %d: name is required", i)
-		}
-		if device.TailscaleName == "" {
-			return fmt.Errorf("device %d (%s): tailscale_name is required", i, device.Name)
-		}
-	}
-
-	return nil
 }
 
 // ValidateTailscaleConfig validates the Tailscale configuration

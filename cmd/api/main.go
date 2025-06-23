@@ -18,7 +18,6 @@ import (
 	"github.com/jerkytreats/dns/internal/dns/bootstrap"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/logging"
-	"github.com/jerkytreats/dns/internal/tailscale"
 )
 
 const (
@@ -38,14 +37,11 @@ const (
 
 	// Bootstrap
 	BootstrapEnabledKey = "dns.internal.enabled"
-	TailscaleAPIKeyKey  = "tailscale.api_key"
-	TailscaleTailnetKey = "tailscale.tailnet"
 )
 
 var (
 	// Global managers for health checks and TLS integration
 	bootstrapManager *bootstrap.Manager
-	configManager    *coredns.ConfigManager
 	certManager      *certificate.Manager
 	dnsManager       *coredns.Manager
 )
@@ -61,69 +57,31 @@ func init() {
 	config.RegisterRequiredKey(ServerTLSPortKey)
 	config.RegisterRequiredKey(ServerTLSCertFileKey)
 	config.RegisterRequiredKey(ServerTLSKeyFileKey)
-
-	// Bootstrap keys are only required if bootstrap is enabled
-	// We'll check these conditionally in main()
 }
 
 func main() {
-	// Command-line flag for config file
 	configFile := flag.String("config", "", "Path to the configuration file")
 	flag.Parse()
 
-	// Initialize configuration
-	if *configFile != "" {
-		if err := config.InitConfig(config.WithConfigPath(*configFile)); err != nil {
-			fmt.Printf("Failed to initialize configuration: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		if err := config.InitConfig(); err != nil {
-			fmt.Printf("Failed to initialize configuration: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	// Check required configuration keys after initialization
-	if err := config.CheckRequiredKeys(); err != nil {
-		fmt.Printf("Configuration validation failed: %v\n", err)
+	if err := config.FirstTimeInit(configFile); err != nil {
+		logging.Error("Failed to initialize configuration: %v", err)
 		os.Exit(1)
 	}
 
-	// Initialize logger
 	logging.Info("Application starting...")
 	defer logging.Sync()
 
-	// Step 1: Initialize Dynamic CoreDNS Configuration Manager
-	logging.Info("Initializing dynamic CoreDNS configuration management...")
-	configPath := config.GetString("dns.coredns.config_path")
-	templatePath := config.GetString(coredns.DNSTemplatePathKey)
-	if templatePath == "" {
-		// Default template path if not configured
-		templatePath = "configs/coredns/Corefile.template"
-	}
-	zonesPath := config.GetString("dns.coredns.zones_path")
+	configPath := config.GetString(coredns.DNSConfigPathKey)
+	templateKey := config.GetString(coredns.DNSTemplatePathKey)
+	zonePath := config.GetString(coredns.DNSZonesPathKey)
+	reloadCommand := config.GetStringSlice(coredns.DNSReloadCommandKey)
 	domain := config.GetString(coredns.DNSDomainKey)
 
-	configManager = coredns.NewConfigManager(configPath, templatePath, domain, zonesPath)
+	dnsManager := coredns.NewManager(configPath, templateKey, zonePath, reloadCommand, domain)
 
-	// Step 2: Generate minimal initial Corefile (no TLS, no domain-specific routes)
-	logging.Info("Generating initial CoreDNS configuration...")
-	if err := configManager.GenerateCorefile(); err != nil {
-		logging.Error("Failed to generate initial CoreDNS configuration: %v", err)
-		os.Exit(1)
-	}
-
-	// Step 3: Initialize CoreDNS manager with ConfigManager integration
-	reloadCmd := config.GetStringSlice("dns.coredns.reload_command")
-	dnsManager = coredns.NewManager(configPath, zonesPath, reloadCmd, domain)
-	dnsManager.SetConfigManager(configManager)
-
-	// Step 4: Wait for CoreDNS to be ready (managed by docker-compose)
 	logging.Info("Waiting for CoreDNS to be ready...")
 	time.Sleep(5 * time.Second) // Allow docker-compose to start CoreDNS
 
-	// Step 5: Initialize Certificate Manager (if TLS enabled)
 	var tlsEnabled = config.GetBool(ServerTLSEnabledKey)
 	var certificateReady = false
 
@@ -137,49 +95,43 @@ func main() {
 		}
 
 		// Integrate certificate manager with ConfigManager for TLS enablement
-		certManager.SetCoreDNSManager(configManager)
+		certManager.SetCoreDNSManager(dnsManager)
 	}
 
-	if config.GetBool(BootstrapEnabledKey) {
-		logging.Info("Bootstrap is enabled, initializing dynamic zone bootstrap...")
+	// if config.GetBool(BootstrapEnabledKey) {
+	// 	logging.Info("Bootstrap is enabled, initializing dynamic zone bootstrap...")
 
-		// Validate required bootstrap configuration
-		apiKey := config.GetString(TailscaleAPIKeyKey)
-		tailnet := config.GetString(TailscaleTailnetKey)
+	// 	// Create Tailscale client
+	// 	tailscaleClient, err := tailscale.NewClient()
+	// 	if err != nil {
+	// 		logging.Error("Failed to create Tailscale client: %v", err)
+	// 		os.Exit(1)
+	// 	}
 
-		// Create Tailscale client
-		baseURL := config.GetString(config.TailscaleBaseURLKey)
-		tailscaleClient, err := tailscale.NewClient(apiKey, tailnet, baseURL)
-		if err != nil {
-			logging.Error("Failed to create Tailscale client: %v", err)
-			os.Exit(1)
-		}
+	// 	// Create bootstrap manager using the ConfigManager-integrated DNS manager
+	// 	bootstrapManager, err = bootstrap.NewManager(dnsManager, tailscaleClient)
+	// 	if err != nil {
+	// 		logging.Error("Failed to create bootstrap manager: %v", err)
+	// 		os.Exit(1)
+	// 	}
 
-		// Create bootstrap manager using the ConfigManager-integrated DNS manager
-		bootstrapManager, err = bootstrap.NewManager(dnsManager, tailscaleClient)
-		if err != nil {
-			logging.Error("Failed to create bootstrap manager: %v", err)
-			os.Exit(1)
-		}
+	// 	logging.Info("Adding internal domain to dynamic configuration...")
+	// 	if err := configManager.AddDomain(domain, nil); err != nil {
+	// 		logging.Error("Failed to add internal domain: %v", err)
+	// 		os.Exit(1)
+	// 	}
 
-		// Step 7: Add internal domain configuration via ConfigManager
-		logging.Info("Adding internal domain to dynamic configuration...")
-		if err := configManager.AddDomain(domain, nil); err != nil {
-			logging.Error("Failed to add internal domain: %v", err)
-			os.Exit(1)
-		}
-
-		// Initialize the internal zone and bootstrap devices
-		if err := bootstrapManager.EnsureInternalZone(); err != nil {
-			logging.Error("Failed to bootstrap internal zone: %v", err)
-			logging.Warn("Bootstrap failed, continuing without dynamic zone bootstrap")
-			bootstrapManager = nil
-		} else {
-			logging.Info("Dynamic zone bootstrap completed successfully")
-		}
-	} else {
-		logging.Info("Bootstrap is disabled")
-	}
+	// 	// Initialize the internal zone and bootstrap devices
+	// 	if err := bootstrapManager.EnsureInternalZone(); err != nil {
+	// 		logging.Error("Failed to bootstrap internal zone: %v", err)
+	// 		logging.Warn("Bootstrap failed, continuing without dynamic zone bootstrap")
+	// 		bootstrapManager = nil
+	// 	} else {
+	// 		logging.Info("Dynamic zone bootstrap completed successfully")
+	// 	}
+	// } else {
+	// 	logging.Info("Bootstrap is disabled")
+	// }
 
 	// Step 8: Check if TLS certificates already exist
 	if tlsEnabled {
@@ -195,7 +147,7 @@ func main() {
 					logging.Info("Valid TLS certificates found, enabling TLS configuration...")
 
 					// Enable TLS in CoreDNS configuration
-					if err := configManager.EnableTLS(domain, certFile, keyFile); err != nil {
+					if err := dnsManager.EnableTLS(coredns.DNSDomainKey, certFile, keyFile); err != nil {
 						logging.Warn("Failed to enable TLS in CoreDNS configuration: %v", err)
 					} else {
 						logging.Info("TLS enabled in CoreDNS configuration")

@@ -35,7 +35,8 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = os.WriteFile(zoneFileName, []byte("$ORIGIN test-service.test.local."), 0644)
 	require.NoError(t, err)
 
-	manager := coredns.NewManager(configPath, zonesPath, []string{"echo", "reload"}, "test.local")
+	manager := coredns.NewManager(configPath, "", zonesPath, []string{}, "test.local")
+
 	return NewRecordHandler(manager)
 }
 

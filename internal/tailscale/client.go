@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
 )
 
@@ -20,6 +21,9 @@ const (
 
 	// HTTP client timeout
 	defaultTimeout = 30 * time.Second
+
+	TailscaleAPIKeyKey  = "tailscale.api_key"
+	TailscaleTailnetKey = "tailscale.tailnet"
 )
 
 // Client represents a Tailscale API client
@@ -44,8 +48,10 @@ type DevicesResponse struct {
 	Devices []Device `json:"devices"`
 }
 
-// NewClientWithBaseURL creates a new Tailscale API client with a custom base URL (for testing)
-func NewClient(apiKey, tailnet, baseURL string) (*Client, error) {
+func NewClient() (*Client, error) {
+	apiKey := config.GetString(TailscaleAPIKeyKey)
+	tailnet := config.GetString(TailscaleTailnetKey)
+
 	if apiKey == "" || apiKey == "${TAILSCALE_API_KEY}" {
 		errMsg := "tailscale.api_key is not configured or environment variable is not set"
 		logging.Error(errMsg)
@@ -57,6 +63,7 @@ func NewClient(apiKey, tailnet, baseURL string) (*Client, error) {
 		return nil, fmt.Errorf("%s", errMsg)
 	}
 
+	baseURL := config.GetString(config.TailscaleBaseURLKey)
 	if baseURL == "" {
 		baseURL = DefaultAPIBaseURL
 	}
