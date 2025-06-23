@@ -8,6 +8,18 @@
     errors
     log
     forward . /etc/resolv.conf
+
+    # Health check endpoint
+    health :8080
+
+    # Metrics endpoint for monitoring
+    prometheus :9153
+
+    # Cache configuration for better performance
+    cache 30
+
+    # Reload configuration for dynamic updates
+    reload
 }
 
 {{/* Dynamic domain configurations will be appended below */}}
@@ -38,15 +50,3 @@
 {{- end}}
 {{- end}}
 {{- end}}
-
-# Health check endpoint (optional)
-health :8080
-
-# Metrics endpoint for monitoring (optional)
-prometheus :9153
-
-# Cache configuration for better performance
-cache 30
-
-# Reload configuration for dynamic updates
-reload
