@@ -249,14 +249,14 @@ func TestFunctionalOptions(t *testing.T) {
 
 	// Create config file in second directory
 	configFile := filepath.Join(configDir2, "config.yaml")
-	configContent := `log_level: "ERROR"`
+	configContent := `test_value: "found_in_dir2"`
 	err = os.WriteFile(configFile, []byte(configContent), 0644)
 	assert.NoError(t, err)
 
-	// Test multiple options using only our search paths
+	// Test additive search paths using isolated paths to avoid project configs
 	err = InitConfig(WithOnlySearchPaths(configDir1, configDir2))
 	assert.NoError(t, err)
-	assert.Equal(t, "ERROR", GetString(LogLevelKey))
+	assert.Equal(t, "found_in_dir2", GetString("test_value"))
 }
 
 func TestConfigPathOverridesSearchPaths(t *testing.T) {
@@ -542,112 +542,6 @@ dns:
 	assert.Equal(t, []string{"macbook"}, config.Devices[1].Aliases)
 	assert.Equal(t, "MacBook development", config.Devices[1].Description)
 	assert.False(t, config.Devices[1].Enabled)
-}
-
-func TestValidateBootstrapConfig(t *testing.T) {
-	// Reset config before test
-	ResetForTest()
-	defer ResetForTest()
-
-	tests := []struct {
-		name          string
-		config        string
-		expectError   bool
-		errorContains string
-	}{
-		{
-			name: "Valid configuration",
-			config: `
-dns:
-  internal:
-    origin: "internal.test.local"
-    bootstrap_devices:
-      - name: "ns"
-        tailscale_name: "omnitron"
-        enabled: true
-`,
-			expectError: false,
-		},
-		{
-			name: "Missing origin",
-			config: `
-dns:
-  internal:
-    bootstrap_devices:
-      - name: "ns"
-        tailscale_name: "omnitron"
-        enabled: true
-`,
-			expectError:   true,
-			errorContains: "dns.internal.origin is required",
-		},
-		{
-			name: "No bootstrap devices",
-			config: `
-dns:
-  internal:
-    origin: "internal.test.local"
-    bootstrap_devices: []
-`,
-			expectError:   true,
-			errorContains: "at least one bootstrap device must be configured",
-		},
-		{
-			name: "Device missing name",
-			config: `
-dns:
-  internal:
-    origin: "internal.test.local"
-    bootstrap_devices:
-      - tailscale_name: "omnitron"
-        enabled: true
-`,
-			expectError:   true,
-			errorContains: "name is required",
-		},
-		{
-			name: "Device missing tailscale_name",
-			config: `
-dns:
-  internal:
-    origin: "internal.test.local"
-    bootstrap_devices:
-      - name: "ns"
-        enabled: true
-`,
-			expectError:   true,
-			errorContains: "tailscale_name is required",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Reset for each test
-			ResetForTest()
-
-			// Create temporary config file
-			tmpDir := t.TempDir()
-			configFile := filepath.Join(tmpDir, "config.yaml")
-			err := os.WriteFile(configFile, []byte(tt.config), 0644)
-			assert.NoError(t, err)
-
-			// Initialize config
-			err = InitConfig(WithConfigPath(configFile))
-			assert.NoError(t, err)
-
-			// Validate bootstrap config
-			err = ValidateBootstrapConfig()
-
-			if tt.expectError {
-				assert.Error(t, err)
-				if tt.errorContains != "" {
-					assert.Contains(t, err.Error(), tt.errorContains)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
 }
 
 func TestValidateTailscaleConfig(t *testing.T) {

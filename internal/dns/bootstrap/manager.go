@@ -68,13 +68,20 @@ type BootstrapResult struct {
 }
 
 // NewManager creates a new bootstrap manager
-func NewManager(corednsManager *coredns.Manager, tailscaleClient *tailscale.Client, bootstrapConfig config.BootstrapConfig) *Manager {
-	return &Manager{
+func NewManager(corednsManager *coredns.Manager, tailscaleClient *tailscale.Client) (*Manager, error) {
+	bootstrapConfig := config.GetBootstrapConfig()
+
+	m := &Manager{
 		corednsManager:  corednsManager,
 		tailscaleClient: tailscaleClient,
 		config:          bootstrapConfig,
 		ipCache:         make(map[string]*cachedIP),
 	}
+	if err := m.ValidateBootstrapConfig(); err != nil {
+		return nil, fmt.Errorf("bootstrap configuration validation failed: %w", err)
+	}
+
+	return m, nil
 }
 
 // EnsureInternalZone ensures the internal zone exists and bootstraps devices
@@ -342,26 +349,8 @@ func (m *Manager) IsZoneBootstrapped() bool {
 	return true
 }
 
-// ValidateConfiguration validates the Tailscale connection and bootstrap config
-func (m *Manager) ValidateConfiguration() error {
-	logging.Info("Validating bootstrap configuration")
-
-	// Validate Tailscale connection
-	if err := m.tailscaleClient.ValidateConnection(); err != nil {
-		return fmt.Errorf("Tailscale connection validation failed: %w", err)
-	}
-
-	// Validate bootstrap configuration - use manager's config
-	if err := m.validateLocalBootstrapConfig(); err != nil {
-		return fmt.Errorf("bootstrap configuration validation failed: %w", err)
-	}
-
-	logging.Info("Bootstrap configuration validation successful")
-	return nil
-}
-
 // validateLocalBootstrapConfig validates the manager's bootstrap configuration
-func (m *Manager) validateLocalBootstrapConfig() error {
+func (m *Manager) ValidateBootstrapConfig() error {
 	if m.config.Origin == "" {
 		return fmt.Errorf("dns.internal.origin is required")
 	}

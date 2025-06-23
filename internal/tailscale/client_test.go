@@ -56,7 +56,11 @@ func TestTailscaleClient_ListDevices(t *testing.T) {
 	server := setupMockTailscaleAPI(t)
 	defer server.Close()
 
-	client := NewClientWithBaseURL("test-api-key", "test-tailnet", server.URL)
+	client, err := NewClient("test-api-key", "test-tailnet", server.URL)
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
 
 	devices, err := client.ListDevices()
 	if err != nil {
@@ -87,7 +91,11 @@ func TestTailscaleClient_GetDevice(t *testing.T) {
 	server := setupMockTailscaleAPI(t)
 	defer server.Close()
 
-	client := NewClientWithBaseURL("test-api-key", "test-tailnet", server.URL)
+	client, err := NewClient("test-api-key", "test-tailnet", server.URL)
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
 
 	tests := []struct {
 		name         string
@@ -147,7 +155,11 @@ func TestTailscaleClient_GetDeviceIP(t *testing.T) {
 	server := setupMockTailscaleAPI(t)
 	defer server.Close()
 
-	client := NewClientWithBaseURL("test-api-key", "test-tailnet", server.URL)
+	client, err := NewClient("test-api-key", "test-tailnet", server.URL)
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
 
 	tests := []struct {
 		name          string
@@ -207,7 +219,11 @@ func TestTailscaleClient_IsDeviceOnline(t *testing.T) {
 	server := setupMockTailscaleAPI(t)
 	defer server.Close()
 
-	client := NewClientWithBaseURL("test-api-key", "test-tailnet", server.URL)
+	client, err := NewClient("test-api-key", "test-tailnet", server.URL)
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
 
 	tests := []struct {
 		name           string
@@ -258,8 +274,18 @@ func TestTailscaleClient_IsDeviceOnline(t *testing.T) {
 }
 
 func TestTailscaleClient_HandleAPIErrors(t *testing.T) {
-	// Test server that returns HTTP errors
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// First create a client with a working mock server for initialization
+	workingServer := setupMockTailscaleAPI(t)
+	defer workingServer.Close()
+
+	client, err := NewClient("test-api-key", "test-tailnet", workingServer.URL)
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
+
+	// Test server that returns HTTP errors for specific test cases
+	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Test-Case") {
 		case "unauthorized":
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -272,9 +298,7 @@ func TestTailscaleClient_HandleAPIErrors(t *testing.T) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 		}
 	}))
-	defer server.Close()
-
-	client := NewClientWithBaseURL("test-api-key", "test-tailnet", server.URL)
+	defer errorServer.Close()
 
 	tests := []struct {
 		name      string
@@ -300,12 +324,17 @@ func TestTailscaleClient_HandleAPIErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set test case header for mock server
-			client.client = &http.Client{
-				Transport: &testTransport{testCase: tt.testCase},
+			// Create a new client instance for this test case
+			testClient := &Client{
+				apiKey:  client.apiKey,
+				tailnet: client.tailnet,
+				baseURL: errorServer.URL,
+				client: &http.Client{
+					Transport: &testTransport{testCase: tt.testCase},
+				},
 			}
 
-			_, err := client.ListDevices()
+			_, err := testClient.ListDevices()
 
 			if tt.expectErr && err == nil {
 				t.Errorf("Expected error, got nil")
@@ -322,15 +351,23 @@ func TestTailscaleClient_ValidateConnection(t *testing.T) {
 	server := setupMockTailscaleAPI(t)
 	defer server.Close()
 
-	client := NewClientWithBaseURL("test-api-key", "test-tailnet", server.URL)
+	client, err := NewClient("test-api-key", "test-tailnet", server.URL)
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
 
-	err := client.ValidateConnection()
+	err = client.ValidateConnection()
 	if err != nil {
 		t.Errorf("ValidateConnection() error = %v", err)
 	}
 
 	// Test with invalid URL
-	badClient := NewClientWithBaseURL("test-api-key", "test-tailnet", "http://invalid-url")
+	badClient, err := NewClient("test-api-key", "test-tailnet", "http://invalid-url")
+	if err != nil {
+		// Expected error for invalid URL
+		return
+	}
 	err = badClient.ValidateConnection()
 	if err == nil {
 		t.Errorf("Expected error for invalid URL, got nil")

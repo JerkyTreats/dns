@@ -44,14 +44,24 @@ type DevicesResponse struct {
 	Devices []Device `json:"devices"`
 }
 
-// NewClient creates a new Tailscale API client
-func NewClient(apiKey, tailnet string) *Client {
-	return NewClientWithBaseURL(apiKey, tailnet, DefaultAPIBaseURL)
-}
-
 // NewClientWithBaseURL creates a new Tailscale API client with a custom base URL (for testing)
-func NewClientWithBaseURL(apiKey, tailnet, baseURL string) *Client {
-	return &Client{
+func NewClient(apiKey, tailnet, baseURL string) (*Client, error) {
+	if apiKey == "" || apiKey == "${TAILSCALE_API_KEY}" {
+		errMsg := "tailscale.api_key is not configured or environment variable is not set"
+		logging.Error(errMsg)
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+	if tailnet == "" || tailnet == "${TAILSCALE_TAILNET}" {
+		errMsg := "tailscale.tailnet is not configured or environment variable is not set"
+		logging.Error(errMsg)
+		return nil, fmt.Errorf("%s", errMsg)
+	}
+
+	if baseURL == "" {
+		baseURL = DefaultAPIBaseURL
+	}
+
+	client := &Client{
 		apiKey:  apiKey,
 		tailnet: tailnet,
 		baseURL: baseURL,
@@ -59,6 +69,13 @@ func NewClientWithBaseURL(apiKey, tailnet, baseURL string) *Client {
 			Timeout: defaultTimeout,
 		},
 	}
+
+	if err := client.ValidateConnection(); err != nil {
+		logging.Error("Bootstrap configuration validation failed: %v", err)
+		return nil, err
+	}
+
+	return client, nil
 }
 
 // ListDevices retrieves all devices from the Tailscale tailnet

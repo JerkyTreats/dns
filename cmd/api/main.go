@@ -140,7 +140,6 @@ func main() {
 		certManager.SetCoreDNSManager(configManager)
 	}
 
-	// Step 6: Initialize bootstrap if enabled
 	if config.GetBool(BootstrapEnabledKey) {
 		logging.Info("Bootstrap is enabled, initializing dynamic zone bootstrap...")
 
@@ -148,39 +147,18 @@ func main() {
 		apiKey := config.GetString(TailscaleAPIKeyKey)
 		tailnet := config.GetString(TailscaleTailnetKey)
 
-		if apiKey == "" || apiKey == "${TAILSCALE_API_KEY}" {
-			logging.Error("Bootstrap enabled but tailscale.api_key is not configured or environment variable is not set")
-			os.Exit(1)
-		}
-		if tailnet == "" || tailnet == "${TAILSCALE_TAILNET}" {
-			logging.Error("Bootstrap enabled but tailscale.tailnet is not configured or environment variable is not set")
-			os.Exit(1)
-		}
-
-		// Validate bootstrap configuration
-		if err := config.ValidateBootstrapConfig(); err != nil {
-			logging.Error("Bootstrap configuration validation failed: %v", err)
-			os.Exit(1)
-		}
-
 		// Create Tailscale client
 		baseURL := config.GetString(config.TailscaleBaseURLKey)
-		var tailscaleClient *tailscale.Client
-		if baseURL != "" {
-			tailscaleClient = tailscale.NewClientWithBaseURL(apiKey, tailnet, baseURL)
-		} else {
-			tailscaleClient = tailscale.NewClient(apiKey, tailnet)
+		tailscaleClient, err := tailscale.NewClient(apiKey, tailnet, baseURL)
+		if err != nil {
+			logging.Error("Failed to create Tailscale client: %v", err)
+			os.Exit(1)
 		}
 
-		// Get bootstrap configuration
-		bootstrapConfig := config.GetBootstrapConfig()
-
 		// Create bootstrap manager using the ConfigManager-integrated DNS manager
-		bootstrapManager = bootstrap.NewManager(dnsManager, tailscaleClient, bootstrapConfig)
-
-		// Validate Tailscale connection and configuration
-		if err := bootstrapManager.ValidateConfiguration(); err != nil {
-			logging.Error("Bootstrap validation failed: %v", err)
+		bootstrapManager, err = bootstrap.NewManager(dnsManager, tailscaleClient)
+		if err != nil {
+			logging.Error("Failed to create bootstrap manager: %v", err)
 			os.Exit(1)
 		}
 
@@ -194,8 +172,6 @@ func main() {
 		// Initialize the internal zone and bootstrap devices
 		if err := bootstrapManager.EnsureInternalZone(); err != nil {
 			logging.Error("Failed to bootstrap internal zone: %v", err)
-			// Decide whether this should be fatal or continue
-			// For now, we'll continue with a warning to avoid breaking existing deployments
 			logging.Warn("Bootstrap failed, continuing without dynamic zone bootstrap")
 			bootstrapManager = nil
 		} else {
