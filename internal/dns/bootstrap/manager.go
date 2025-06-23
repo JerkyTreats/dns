@@ -124,6 +124,13 @@ func (m *Manager) EnsureInternalZone() error {
 func (m *Manager) createInternalZoneIfNeeded(zoneName string) error {
 	logging.Debug("Creating internal zone if needed: %s", zoneName)
 
+	// If zoneName is empty, the origin equals the base domain, which is
+	// already registered elsewhere. Nothing to create.
+	if zoneName == "" {
+		logging.Info("Origin matches base domain; no additional internal zone needed")
+		return nil
+	}
+
 	// Attempt to create the zone
 	// The CoreDNS manager should handle the case where zone already exists
 	if err := m.corednsManager.AddZone(zoneName); err != nil {
@@ -389,15 +396,24 @@ func (m *Manager) logBootstrapResult(result *BootstrapResult) {
 
 // extractZoneName extracts the zone name from an origin (removes trailing dot)
 func extractZoneName(origin string) string {
-	zoneName := strings.TrimSuffix(origin, ".")
-	if zoneName == "" {
-		return ""
+	// Remove any trailing dot that may be present.
+	trimmed := strings.TrimSuffix(origin, ".")
+
+	// If a base domain is configured and the origin ends with it, strip that
+	// suffix so we only return the sub-zone portion (e.g. "internal").
+	baseDomain := config.GetString(coredns.DNSDomainKey)
+
+	if baseDomain != "" && strings.HasSuffix(trimmed, baseDomain) {
+		suffix := baseDomain
+		// Make sure we also remove the separating dot if present.
+		if strings.HasSuffix(trimmed, "."+suffix) {
+			suffix = "." + suffix
+		}
+		zone := strings.TrimSuffix(trimmed, suffix)
+		zone = strings.TrimSuffix(zone, ".")
+		return zone
 	}
 
-	parts := strings.Split(zoneName, ".")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-
-	return zoneName
+	// Fallback: return the whole (trimmed) origin.
+	return trimmed
 }
