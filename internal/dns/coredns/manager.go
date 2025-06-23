@@ -97,66 +97,19 @@ func (m *Manager) AddZone(serviceName string) error {
 		return fmt.Errorf("failed to write zone file: %w", err)
 	}
 
-	// Use ConfigManager if available, otherwise fall back to direct config update
-	if m.configManager != nil {
-		logging.Info("Using ConfigManager to add domain: %s.%s", serviceName, m.domain)
-		if err := m.configManager.AddDomain(fmt.Sprintf("%s.%s", serviceName, m.domain), nil); err != nil {
-			os.Remove(zoneFile)
-			return fmt.Errorf("failed to add domain via ConfigManager: %w", err)
-		}
-	} else {
-		// Fallback to direct config update for backward compatibility
-		if err := m.updateConfig(serviceName); err != nil {
-			os.Remove(zoneFile)
-			return fmt.Errorf("failed to update CoreDNS config: %w", err)
-		}
+	// Require dynamic ConfigManager to be present; legacy path removed.
+	if m.configManager == nil {
+		os.Remove(zoneFile)
+		return fmt.Errorf("config manager not set; legacy direct CoreDNS edits are no longer supported")
+	}
 
-		if err := m.Reload(); err != nil {
-			return fmt.Errorf("failed to reload CoreDNS: %w", err)
-		}
+	logging.Info("Using ConfigManager to add domain: %s.%s", serviceName, m.domain)
+	if err := m.configManager.AddDomain(fmt.Sprintf("%s.%s", serviceName, m.domain), nil); err != nil {
+		os.Remove(zoneFile)
+		return fmt.Errorf("failed to add domain via ConfigManager: %w", err)
 	}
 
 	return nil
-}
-
-// updateConfig updates the CoreDNS configuration to include the new zone
-func (m *Manager) updateConfig(serviceName string) error {
-	config, err := os.ReadFile(m.configPath)
-	if err != nil {
-		logging.Error("Failed to read CoreDNS config: %v", err)
-		return fmt.Errorf("failed to read CoreDNS config: %w", err)
-	}
-
-	// Check if zone already exists in the configuration
-	zoneName := fmt.Sprintf("%s.%s:53", serviceName, m.domain)
-	if m.zoneExistsInConfig(string(config), zoneName) {
-		logging.Debug("Zone %s already exists in CoreDNS config", zoneName)
-		return nil // Zone already exists, no need to add it again
-	}
-
-	zoneConfig := fmt.Sprintf(`
-%s.%s:53 {
-    file %s/%s.zone
-    errors
-    log
-}
-`, serviceName, m.domain, m.zonesPath, serviceName)
-
-	newConfig := string(config) + zoneConfig
-
-	if err := os.WriteFile(m.configPath, []byte(newConfig), 0644); err != nil {
-		logging.Error("Failed to write CoreDNS config: %v", err)
-		return fmt.Errorf("failed to write CoreDNS config: %w", err)
-	}
-
-	return nil
-}
-
-// zoneExistsInConfig checks if a zone already exists in the CoreDNS configuration
-func (m *Manager) zoneExistsInConfig(config, zoneName string) bool {
-	// Look for the zone name followed by whitespace and opening brace
-	pattern := regexp.MustCompile(fmt.Sprintf(`(?m)^%s\s*\{`, regexp.QuoteMeta(zoneName)))
-	return pattern.MatchString(config)
 }
 
 // AddRecord adds a new DNS record and reloads CoreDNS.
@@ -288,4 +241,10 @@ func (m *Manager) removeFromConfig(serviceName string) error {
 // Record represents a DNS record for the template.
 type Record struct {
 	Name string
+}
+
+// zoneExistsInConfig checks if a zone already exists in the CoreDNS configuration
+func (m *Manager) zoneExistsInConfig(config, zoneName string) bool {
+	pattern := regexp.MustCompile(fmt.Sprintf(`(?m)^%s\s*\{`, regexp.QuoteMeta(zoneName)))
+	return pattern.MatchString(config)
 }

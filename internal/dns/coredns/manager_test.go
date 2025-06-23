@@ -18,15 +18,26 @@ func TestManager(t *testing.T) {
 
 	configPath := filepath.Join(tempDir, "Corefile")
 	zonesPath := filepath.Join(tempDir, "zones")
+
+	// Prepare Corefile template required by ConfigManager
+	templatePath := filepath.Join(tempDir, "Corefile.template")
+	templateContent := `. {
+    errors
+    log
+}
+`
+	_ = os.WriteFile(templatePath, []byte(templateContent), 0644)
+
+	// Create ConfigManager and link to Manager
+	cm := NewConfigManager(configPath, templatePath, "test.local", zonesPath)
+
+	// Mock reload script path (still used for Reload tests)
 	reloadScriptPath := filepath.Join(tempDir, "reload.sh")
-
-	// Create a mock reload script
 	reloadScriptContent := "#!/bin/sh\necho 'reloaded'"
-	err = os.WriteFile(reloadScriptPath, []byte(reloadScriptContent), 0755)
-	require.NoError(t, err)
+	_ = os.WriteFile(reloadScriptPath, []byte(reloadScriptContent), 0755)
 
-	// Create test manager
 	manager := NewManager(configPath, zonesPath, []string{reloadScriptPath}, "test.local")
+	manager.SetConfigManager(cm)
 
 	t.Run("AddRecord", func(t *testing.T) {
 		// Before adding a record, we need a zone. Let's create a dummy zone file.
@@ -87,7 +98,15 @@ func TestZoneValidation(t *testing.T) {
 	err = os.WriteFile(configPath, []byte(initialConfig), 0644)
 	require.NoError(t, err)
 
+	// Create template and config manager for validation tests
+	templatePath2 := filepath.Join(tempDir, "Corefile.template2")
+	_ = os.WriteFile(templatePath2, []byte(`. {
+    errors
+}
+`), 0644)
+	cm2 := NewConfigManager(configPath, templatePath2, "test.local", zonesPath)
 	manager := NewManager(configPath, zonesPath, []string{}, "test.local")
+	manager.SetConfigManager(cm2)
 
 	t.Run("AddZone creates new zone", func(t *testing.T) {
 		err := manager.AddZone("new-service")

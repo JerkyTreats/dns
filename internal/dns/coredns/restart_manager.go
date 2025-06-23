@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
-	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
@@ -32,12 +29,10 @@ const (
 type RestartManager struct {
 	restartCommand  []string
 	restartTimeout  time.Duration
-	healthTimeout   time.Duration
-	healthRetries   int
-	healthDelay     time.Duration
 	lastRestartTime time.Time
 	restartCount    int
 	dnsServer       string // DNS server address for health checks
+	healthChecker   *DNSHealthChecker
 }
 
 // RestartResult represents the result of a restart operation
@@ -83,13 +78,13 @@ func NewRestartManager() *RestartManager {
 		logging.Info("Using local DNS server: %s", dnsServer)
 	}
 
+	hc := NewDNSHealthChecker(dnsServer, healthTimeout, healthRetries, defaultHealthDelay)
+
 	return &RestartManager{
 		restartCommand: restartCmd,
 		restartTimeout: restartTimeout,
-		healthTimeout:  healthTimeout,
-		healthRetries:  healthRetries,
-		healthDelay:    defaultHealthDelay,
 		dnsServer:      dnsServer,
+		healthChecker:  hc,
 	}
 }
 
@@ -145,6 +140,12 @@ func (rm *RestartManager) RestartCoreDNSWithRollback(backupConfigPath string) er
 
 // IsHealthy checks if CoreDNS is responding to DNS queries
 func (rm *RestartManager) IsHealthy() bool {
+	// If no restart command is configured, assume healthy since we rely on CoreDNS reload plugin
+	if len(rm.restartCommand) == 0 {
+		logging.Debug("No restart command configured - assuming healthy (CoreDNS reload plugin)")
+		return true
+	}
+
 	result := rm.performHealthCheck()
 	return result.Success
 }
@@ -186,7 +187,9 @@ func (rm *RestartManager) performRestart() *RestartResult {
 		result.Success = true
 		result.RestartTime = 0
 		result.RestartOutput = "no restart needed - CoreDNS reload plugin handles config changes"
-		result.HealthStatus = "healthy"
+		result.HealthStatus = "healthy - relying on CoreDNS reload plugin"
+		// Skip health checks entirely when no restart is needed
+		result.HealthCheckTime = 0
 		return result
 	}
 
@@ -216,7 +219,7 @@ func (rm *RestartManager) performRestart() *RestartResult {
 
 	// Perform health check
 	healthStart := time.Now()
-	if !rm.waitForHealthy() {
+	if !rm.healthChecker.WaitHealthy() {
 		result.Error = fmt.Errorf("health check failed after restart")
 		result.HealthStatus = "service not responding after restart"
 		return result
@@ -229,91 +232,20 @@ func (rm *RestartManager) performRestart() *RestartResult {
 	return result
 }
 
-// performHealthCheck checks if CoreDNS is responding properly
+// performHealthCheck delegates to DNSHealthChecker for a single check and wraps
+// the result in a RestartResult for legacy callers.
 func (rm *RestartManager) performHealthCheck() *RestartResult {
-	result := &RestartResult{}
-	healthStart := time.Now()
-
-	// Test DNS resolution
-	conn, err := net.DialTimeout("udp", rm.dnsServer, rm.healthTimeout)
+	ok, dur, err := rm.healthChecker.CheckOnce()
+	status := "healthy"
 	if err != nil {
-		result.Error = fmt.Errorf("failed to connect to DNS server: %w", err)
-		result.HealthStatus = "connection failed"
-		return result
+		status = err.Error()
 	}
-	defer conn.Close()
-
-	// Set read timeout
-	conn.SetReadDeadline(time.Now().Add(rm.healthTimeout))
-
-	// Send a simple DNS query (query for root)
-	query := []byte{
-		0x12, 0x34, // ID
-		0x01, 0x00, // Flags (standard query)
-		0x00, 0x01, // Questions
-		0x00, 0x00, // Answer RRs
-		0x00, 0x00, // Authority RRs
-		0x00, 0x00, // Additional RRs
-		0x00,       // Root label
-		0x00, 0x01, // Type A
-		0x00, 0x01, // Class IN
+	return &RestartResult{
+		Success:         ok,
+		HealthCheckTime: dur,
+		Error:           err,
+		HealthStatus:    status,
 	}
-
-	if _, err := conn.Write(query); err != nil {
-		result.Error = fmt.Errorf("failed to send DNS query: %w", err)
-		result.HealthStatus = "query send failed"
-		return result
-	}
-
-	// Read response
-	response := make([]byte, 512)
-	n, err := conn.Read(response)
-	if err != nil {
-		result.Error = fmt.Errorf("failed to read DNS response: %w", err)
-		result.HealthStatus = "response read failed"
-		return result
-	}
-
-	// Basic validation of response
-	if n < 12 {
-		result.Error = fmt.Errorf("DNS response too short: %d bytes", n)
-		result.HealthStatus = "invalid response"
-		return result
-	}
-
-	// Check if response ID matches query ID
-	if response[0] != 0x12 || response[1] != 0x34 {
-		result.Error = fmt.Errorf("DNS response ID mismatch")
-		result.HealthStatus = "response ID mismatch"
-		return result
-	}
-
-	result.HealthCheckTime = time.Since(healthStart)
-	result.Success = true
-	result.HealthStatus = "healthy"
-
-	return result
-}
-
-// waitForHealthy waits for CoreDNS to become healthy with retries
-func (rm *RestartManager) waitForHealthy() bool {
-	for i := 0; i < rm.healthRetries; i++ {
-		if i > 0 {
-			logging.Debug("Health check attempt %d/%d", i+1, rm.healthRetries)
-			time.Sleep(rm.healthDelay)
-		}
-
-		result := rm.performHealthCheck()
-		if result.Success {
-			logging.Debug("Health check passed on attempt %d", i+1)
-			return true
-		}
-
-		logging.Debug("Health check failed: %v", result.Error)
-	}
-
-	logging.Error("Health check failed after %d attempts", rm.healthRetries)
-	return false
 }
 
 // rollbackConfiguration attempts to rollback to a previous configuration
@@ -351,39 +283,4 @@ func (rm *RestartManager) logRestartResult(result *RestartResult, totalTime time
 			logging.Error("Restart output: %s", result.RestartOutput)
 		}
 	}
-}
-
-// isDockerEnvironment detects if we're running inside a Docker container
-func isDockerEnvironment() bool {
-	// Check for Docker-specific environment indicators
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-
-	// Check /proc/1/cgroup for Docker container indicators
-	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		content := string(data)
-		if strings.Contains(content, "docker") || strings.Contains(content, "/docker-") {
-			return true
-		}
-	}
-
-	// Check hostname for Docker-like patterns (12-character hex)
-	if hostname, err := os.Hostname(); err == nil {
-		if len(hostname) == 12 && isHexString(hostname) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isHexString checks if a string contains only hexadecimal characters
-func isHexString(s string) bool {
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
 }

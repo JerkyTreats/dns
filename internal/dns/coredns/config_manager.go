@@ -27,8 +27,6 @@ type DomainConfig struct {
 	TLSConfig *TLSConfig
 	ZoneFile  string
 	Enabled   bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
 }
 
 // ConfigManager manages dynamic CoreDNS configuration generation
@@ -68,75 +66,24 @@ func NewConfigManager(basePath, templatePath, domain, zonesPath string) *ConfigM
 	return cm
 }
 
-// GenerateCorefile generates the complete Corefile from template and domain configurations
+// GenerateCorefile regenerates the Corefile and writes it to disk.
+// It is safe for concurrent use; a read lock is taken while rendering.
 func (cm *ConfigManager) GenerateCorefile() error {
 	cm.domainsMutex.RLock()
 	defer cm.domainsMutex.RUnlock()
 
-	logging.Info("Generating dynamic Corefile from template")
-
-	// Read template file
-	templateContent, err := os.ReadFile(cm.templatePath)
+	rendered, err := cm.renderCorefile()
 	if err != nil {
-		logging.Error("Failed to read Corefile template: %v", err)
-		return fmt.Errorf("failed to read template: %w", err)
+		return err
 	}
 
-	// Parse template
-	tmpl, err := template.New("corefile").Parse(string(templateContent))
-	if err != nil {
-		logging.Error("Failed to parse Corefile template: %v", err)
-		return fmt.Errorf("failed to parse template: %w", err)
+	if err := cm.validateRendered(rendered); err != nil {
+		logging.Error("Rendered Corefile failed validation: %v", err)
+		return err
 	}
 
-	// Prepare template data
-	templateData := struct {
-		BaseDomain  string
-		Domains     []*DomainConfig
-		ZonesPath   string
-		GeneratedAt string
-		Version     int
-	}{
-		BaseDomain:  cm.domain,
-		Domains:     cm.getDomainList(),
-		ZonesPath:   cm.zonesPath,
-		GeneratedAt: time.Now().Format("2006-01-02 15:04:05 MST"),
-		Version:     cm.configVersion + 1, // Next version since we're generating
-	}
-
-	// Execute template
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, templateData); err != nil {
-		logging.Error("Failed to execute Corefile template: %v", err)
-		return fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	// Add dynamic domain configurations
-	dynamicConfig := cm.generateDynamicConfigInternal()
-	if dynamicConfig != "" {
-		buf.WriteString("\n# Dynamic domain configurations\n")
-		buf.WriteString(dynamicConfig)
-	}
-
-	// Write to temporary file first for validation
-	tempPath := cm.basePath + ".tmp"
-	if err := os.WriteFile(tempPath, buf.Bytes(), 0644); err != nil {
-		logging.Error("Failed to write temporary Corefile: %v", err)
-		return fmt.Errorf("failed to write temporary config: %w", err)
-	}
-
-	// Validate configuration syntax (basic validation)
-	if err := cm.validateConfig(tempPath); err != nil {
-		os.Remove(tempPath)
-		logging.Error("Generated Corefile failed validation: %v", err)
-		return fmt.Errorf("config validation failed: %w", err)
-	}
-
-	// Move temporary file to final location
-	if err := os.Rename(tempPath, cm.basePath); err != nil {
-		os.Remove(tempPath)
-		logging.Error("Failed to move Corefile to final location: %v", err)
-		return fmt.Errorf("failed to finalize config: %w", err)
+	if err := cm.writeConfigBytes(rendered); err != nil {
+		return err
 	}
 
 	cm.lastGenerated = time.Now()
@@ -165,8 +112,6 @@ func (cm *ConfigManager) AddDomain(domain string, tlsConfig *TLSConfig) error {
 		TLSConfig: tlsConfig,
 		ZoneFile:  filepath.Join(cm.zonesPath, domain+".zone"),
 		Enabled:   true,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
 	}
 
 	// Set TLS port if TLS is configured
@@ -241,7 +186,6 @@ func (cm *ConfigManager) EnableTLS(domain, certPath, keyPath string) error {
 	}
 
 	domainConfig.TLSConfig = tlsConfig
-	domainConfig.UpdatedAt = time.Now()
 
 	// Regenerate and apply configuration
 	if err := cm.applyConfiguration(); err != nil {
@@ -269,7 +213,6 @@ func (cm *ConfigManager) DisableTLS(domain string) error {
 
 	// Remove TLS configuration
 	domainConfig.TLSConfig = nil
-	domainConfig.UpdatedAt = time.Now()
 
 	// Regenerate and apply configuration
 	if err := cm.applyConfiguration(); err != nil {
@@ -328,13 +271,24 @@ func (cm *ConfigManager) SetRestartManager(rm RestartManagerInterface) {
 	cm.restartManager = rm
 }
 
-// applyConfiguration generates and applies the complete configuration
-// This method should be called from within a locked context
+// applyConfiguration must be called with the domainsMutex already LOCKED.
+// It renders, validates, writes the Corefile and restarts CoreDNS.
 func (cm *ConfigManager) applyConfiguration() error {
-	// Generate configuration without acquiring locks (we're already locked)
-	if err := cm.generateCorefileInternal(); err != nil {
-		return fmt.Errorf("failed to generate configuration: %w", err)
+	rendered, err := cm.renderCorefile()
+	if err != nil {
+		return err
 	}
+
+	if err := cm.validateRendered(rendered); err != nil {
+		return err
+	}
+
+	if err := cm.writeConfigBytes(rendered); err != nil {
+		return err
+	}
+
+	cm.lastGenerated = time.Now()
+	cm.configVersion++
 
 	// Restart CoreDNS with new configuration
 	if err := cm.RestartCoreDNS(); err != nil {
@@ -344,27 +298,23 @@ func (cm *ConfigManager) applyConfiguration() error {
 	return nil
 }
 
-// generateCorefileInternal generates the Corefile without acquiring locks
-// This is used internally when locks are already held
-func (cm *ConfigManager) generateCorefileInternal() error {
-	logging.Info("Generating dynamic Corefile from template")
-
+// renderCorefile renders the Corefile using the current state. Callers must
+// ensure they hold at least a read lock if concurrent access is possible.
+func (cm *ConfigManager) renderCorefile() ([]byte, error) {
 	// Read template file
 	templateContent, err := os.ReadFile(cm.templatePath)
 	if err != nil {
 		logging.Error("Failed to read Corefile template: %v", err)
-		return fmt.Errorf("failed to read template: %w", err)
+		return nil, fmt.Errorf("failed to read template: %w", err)
 	}
 
-	// Parse template
 	tmpl, err := template.New("corefile").Parse(string(templateContent))
 	if err != nil {
 		logging.Error("Failed to parse Corefile template: %v", err)
-		return fmt.Errorf("failed to parse template: %w", err)
+		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
 
-	// Prepare template data
-	templateData := struct {
+	data := struct {
 		BaseDomain  string
 		Domains     []*DomainConfig
 		ZonesPath   string
@@ -375,48 +325,50 @@ func (cm *ConfigManager) generateCorefileInternal() error {
 		Domains:     cm.getDomainListInternal(),
 		ZonesPath:   cm.zonesPath,
 		GeneratedAt: time.Now().Format("2006-01-02 15:04:05 MST"),
-		Version:     cm.configVersion + 1, // Next version since we're generating
+		Version:     cm.configVersion + 1,
 	}
 
-	// Execute template
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, templateData); err != nil {
-		logging.Error("Failed to execute Corefile template: %v", err)
-		return fmt.Errorf("failed to execute template: %w", err)
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	// Add dynamic domain configurations
-	dynamicConfig := cm.generateDynamicConfigInternal()
-	if dynamicConfig != "" {
+	dyn := cm.generateDynamicConfigInternal()
+	if dyn != "" {
 		buf.WriteString("\n# Dynamic domain configurations\n")
-		buf.WriteString(dynamicConfig)
+		buf.WriteString(dyn)
 	}
 
-	// Write to temporary file first for validation
+	return buf.Bytes(), nil
+}
+
+// writeConfigBytes writes the rendered config to a tmp file then atomically
+// moves it to the final location.
+func (cm *ConfigManager) writeConfigBytes(b []byte) error {
 	tempPath := cm.basePath + ".tmp"
-	if err := os.WriteFile(tempPath, buf.Bytes(), 0644); err != nil {
-		logging.Error("Failed to write temporary Corefile: %v", err)
+	if err := os.WriteFile(tempPath, b, 0644); err != nil {
 		return fmt.Errorf("failed to write temporary config: %w", err)
 	}
 
-	// Validate configuration syntax (basic validation)
-	if err := cm.validateConfig(tempPath); err != nil {
-		os.Remove(tempPath)
-		logging.Error("Generated Corefile failed validation: %v", err)
-		return fmt.Errorf("config validation failed: %w", err)
-	}
-
-	// Move temporary file to final location
 	if err := os.Rename(tempPath, cm.basePath); err != nil {
 		os.Remove(tempPath)
-		logging.Error("Failed to move Corefile to final location: %v", err)
 		return fmt.Errorf("failed to finalize config: %w", err)
 	}
+	return nil
+}
 
-	cm.lastGenerated = time.Now()
-	cm.configVersion++
+// validateRendered performs quick sanity checks on the rendered config.
+func (cm *ConfigManager) validateRendered(content []byte) error {
+	s := string(content)
 
-	logging.Info("Successfully generated Corefile (version %d)", cm.configVersion)
+	if strings.Contains(s, "{{") || strings.Contains(s, "}}") {
+		return fmt.Errorf("template variables not resolved")
+	}
+
+	if strings.Count(s, "{") != strings.Count(s, "}") {
+		return fmt.Errorf("unbalanced braces in configuration")
+	}
+
 	return nil
 }
 
@@ -467,43 +419,4 @@ func (cm *ConfigManager) getDomainListInternal() []*DomainConfig {
 		}
 	}
 	return domains
-}
-
-// getDomainList returns a list of domain configurations for template use
-func (cm *ConfigManager) getDomainList() []*DomainConfig {
-	var domains []*DomainConfig
-	for _, domainConfig := range cm.domains {
-		if domainConfig.Enabled {
-			domains = append(domains, domainConfig)
-		}
-	}
-	return domains
-}
-
-// validateConfig performs basic validation on the generated configuration
-func (cm *ConfigManager) validateConfig(configPath string) error {
-	// Read the generated configuration
-	content, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to read config for validation: %w", err)
-	}
-
-	configStr := string(content)
-
-	// Basic syntax validation
-	if strings.Contains(configStr, "{{") || strings.Contains(configStr, "}}") {
-		return fmt.Errorf("template variables not resolved")
-	}
-
-	// Check for balanced braces
-	openBraces := strings.Count(configStr, "{")
-	closeBraces := strings.Count(configStr, "}")
-	if openBraces != closeBraces {
-		return fmt.Errorf("unbalanced braces in configuration: %d open, %d close", openBraces, closeBraces)
-	}
-
-	// TODO: Add more sophisticated validation (e.g., CoreDNS syntax validation)
-
-	logging.Debug("Configuration validation passed")
-	return nil
 }
