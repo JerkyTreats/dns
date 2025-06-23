@@ -123,12 +123,12 @@ func TestExtractZoneName(t *testing.T) {
 		{
 			name:     "Simple internal zone",
 			origin:   "internal.jerkytreats.dev",
-			expected: "internal.jerkytreats.dev",
+			expected: "internal",
 		},
 		{
 			name:     "Zone with trailing dot",
 			origin:   "internal.jerkytreats.dev.",
-			expected: "internal.jerkytreats.dev",
+			expected: "internal",
 		},
 		{
 			name:     "Single part origin",

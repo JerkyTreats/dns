@@ -291,7 +291,13 @@ func newCoreDNSManager() *coredns.Manager {
 	reloadCmd := config.GetStringSlice(coredns.DNSReloadCommandKey)
 	domain := config.GetString(coredns.DNSDomainKey)
 
-	return coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
+	dnsMgr := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
+
+	// Add base domain so zone files can refer to it.
+	baseDomain := config.GetString(coredns.DNSDomainKey)
+	_ = dnsMgr.AddDomain(baseDomain, nil)
+
+	return dnsMgr
 }
 
 // maybeBootstrap initialises dynamic zone bootstrap if it is enabled in config.
