@@ -112,6 +112,23 @@ func main() {
 
 		// Integrate certificate manager with ConfigManager for TLS enablement
 		certManager.SetCoreDNSManager(dnsManager)
+
+		// Attempt to obtain/renew certificate upfront so TLS can be enabled
+		domain := config.GetString(certificate.CertDomainKey)
+		if domain == "" {
+			logging.Warn("certificate.domain not configured – skipping certificate obtainment")
+		} else {
+			if err := certManager.ObtainCertificate(domain); err != nil {
+				logging.Error("Certificate obtain failed: %v", err)
+			} else {
+				certificateReady = true
+
+				// Start background renewal loop if enabled in config
+				if config.GetBool(certificate.CertRenewalEnabledKey) {
+					go certManager.StartRenewalLoop(domain)
+				}
+			}
+		}
 	}
 
 	// Create record handler
