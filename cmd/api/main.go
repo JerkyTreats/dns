@@ -316,13 +316,6 @@ func maybeBootstrap(dnsMgr *coredns.Manager) *bootstrap.Manager {
 		return nil
 	}
 
-	// Add the base domain so that device records can be created.
-	baseDomain := config.GetString(coredns.DNSDomainKey)
-	if err := dnsMgr.AddDomain(baseDomain, nil); err != nil {
-		logging.Error("Failed to add internal domain: %v", err)
-		return nil
-	}
-
 	if err := bm.EnsureInternalZone(); err != nil {
 		logging.Error("Failed to bootstrap internal zone: %v", err)
 		logging.Warn("Bootstrap failed, continuing without dynamic zone bootstrap")

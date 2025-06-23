@@ -390,16 +390,5 @@ func (m *Manager) logBootstrapResult(result *BootstrapResult) {
 // extractZoneName extracts the zone name from an origin (removes trailing dot)
 func extractZoneName(origin string) string {
 	zoneName := strings.TrimSuffix(origin, ".")
-	if zoneName == "" {
-		return ""
-	}
-
-	// For internal zones, we typically want just the subdomain part
-	// e.g., "internal.jerkytreats.dev" -> "internal"
-	parts := strings.Split(zoneName, ".")
-	if len(parts) > 0 {
-		return parts[0]
-	}
-
 	return zoneName
 }
