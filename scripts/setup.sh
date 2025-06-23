@@ -289,7 +289,7 @@ if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
     echo
     log "Cloudflare DNS provider selected. A Cloudflare API token is required."
     echo "Please create a token with DNS:Edit permission for the 'jerkytreats.dev' zone."
-    read -p "CLOUDFLARE_API_TOKEN (will be stored locally in .env): " -s CF_TOKEN
+    read -p "Cloudflare API Token: " -s CF_TOKEN
     echo
 
     if [ -z "$CF_TOKEN" ]; then
@@ -297,8 +297,14 @@ if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
         exit 1
     fi
 
-    echo "CLOUDFLARE_API_TOKEN=$CF_TOKEN" >> .env
-    log "Saved Cloudflare token to .env (git-ignored)."
+    # Insert token into certificate section
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "/dns_provider: cloudflare/a\  cloudflare_api_token: \"$CF_TOKEN\"" configs/config.yaml
+    else
+        sed -i "/dns_provider: cloudflare/a\  cloudflare_api_token: \"$CF_TOKEN\"" configs/config.yaml
+    fi
+
+    log "Cloudflare token added to configs/config.yaml (git-ignored)."
 fi
 
 log "Setup script completed successfully!"
