@@ -130,6 +130,11 @@ if [ -z "$LETSENCRYPT_EMAIL" ]; then
     exit 1
 fi
 
+# Ask whether to use Cloudflare as public DNS provider for ACME
+echo "Do you want to use Cloudflare for ACME DNS challenges (cloudflare DNS-01)? (y/n) [n]:"
+read -p "Use Cloudflare: " USE_CLOUDFLARE
+USE_CLOUDFLARE=${USE_CLOUDFLARE:-n}
+
 # Ask about environment (production vs staging)
 echo "Do you want to use Let's Encrypt production certificates? (y/n) [n]:"
 echo "Note: Use 'n' for development/testing to avoid rate limits"
@@ -163,6 +168,9 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     sed -i '' "s|LETSENCRYPT_URL_PLACEHOLDER|$LETSENCRYPT_URL|g" configs/config.yaml
     sed -i '' "s/TAILSCALE_API_KEY_PLACEHOLDER/$TAILSCALE_API_KEY/g" configs/config.yaml
     sed -i '' "s/TAILSCALE_TAILNET_PLACEHOLDER/$TAILSCALE_TAILNET/g" configs/config.yaml
+    if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
+        sed -i '' "/provider: \"lego\"/a\  dns_provider: cloudflare" configs/config.yaml
+    fi
     # Only enable TLS if using production certificates
     if [[ $TLS_ENABLED == "true" ]]; then
         sed -i '' "s/enabled: false/enabled: true/g" configs/config.yaml
@@ -174,6 +182,9 @@ else
     sed -i "s|LETSENCRYPT_URL_PLACEHOLDER|$LETSENCRYPT_URL|g" configs/config.yaml
     sed -i "s/TAILSCALE_API_KEY_PLACEHOLDER/$TAILSCALE_API_KEY/g" configs/config.yaml
     sed -i "s/TAILSCALE_TAILNET_PLACEHOLDER/$TAILSCALE_TAILNET/g" configs/config.yaml
+    if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
+        sed -i "/provider: \"lego\"/a\  dns_provider: cloudflare" configs/config.yaml
+    fi
     # Only enable TLS if using production certificates
     if [[ $TLS_ENABLED == "true" ]]; then
         sed -i "s/enabled: false/enabled: true/g" configs/config.yaml
@@ -272,5 +283,22 @@ echo "- ./scripts/start.sh     # Start existing services"
 echo "- docker-compose logs -f # View logs"
 echo "- docker-compose down    # Stop services"
 echo
+
+# Step 6: Handle Cloudflare token in .env if needed
+if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
+    echo
+    log "Cloudflare DNS provider selected. A Cloudflare API token is required."
+    echo "Please create a token with DNS:Edit permission for the 'jerkytreats.dev' zone."
+    read -p "CLOUDFLARE_API_TOKEN (will be stored locally in .env): " -s CF_TOKEN
+    echo
+
+    if [ -z "$CF_TOKEN" ]; then
+        error "Cloudflare API token cannot be empty when Cloudflare provider is selected."
+        exit 1
+    fi
+
+    echo "CLOUDFLARE_API_TOKEN=$CF_TOKEN" >> .env
+    log "Saved Cloudflare token to .env (git-ignored)."
+fi
 
 log "Setup script completed successfully!"

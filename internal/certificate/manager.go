@@ -16,8 +16,10 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/challenge/dns01"
 	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
@@ -36,6 +38,8 @@ const (
 	CertRenewalCheckIntervalKey = "certificate.renewal.check_interval"
 	CertDNSResolversKey         = "certificate.dns_resolvers"
 	CertDNSTimeoutKey           = "certificate.dns_timeout"
+	CertDNSProviderKey          = "certificate.dns_provider"
+	CertCloudflareTokenKey      = "certificate.cloudflare_api_token"
 )
 
 func init() {
@@ -84,7 +88,45 @@ func NewManager() (*Manager, error) {
 	keyPath := config.GetString(CertKeyFileKey)
 	zonesPath := config.GetString("dns.coredns.zones_path")
 
-	dnsProvider := coredns.NewDNSProvider(zonesPath)
+	var (
+		dnsProvider challenge.Provider
+		err         error
+	)
+
+	providerType := config.GetString(CertDNSProviderKey)
+	if providerType == "" {
+		providerType = "coredns"
+	}
+
+	switch providerType {
+	case "cloudflare":
+		logging.Info("Using Cloudflare DNS provider for ACME challenges")
+
+		// Prefer env var for security; fall back to config key
+		cfToken := os.Getenv("CLOUDFLARE_API_TOKEN")
+		if cfToken == "" {
+			cfToken = config.GetString(CertCloudflareTokenKey)
+		}
+
+		if cfToken == "" {
+			return nil, fmt.Errorf("cloudflare api token not provided via CLOUDFLARE_API_TOKEN env var or %s config key", CertCloudflareTokenKey)
+		}
+
+		cfConfig := cloudflare.NewDefaultConfig()
+		cfConfig.AuthToken = cfToken
+
+		dnsProvider, err = cloudflare.NewDNSProviderConfig(cfConfig)
+		if err != nil {
+			return nil, fmt.Errorf("could not create Cloudflare DNS provider: %w", err)
+		}
+
+	case "coredns":
+		logging.Info("Using internal CoreDNS provider for ACME challenges")
+		dnsProvider = coredns.NewDNSProvider(zonesPath)
+
+	default:
+		return nil, fmt.Errorf("unsupported certificate.dns_provider value: %s", providerType)
+	}
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
