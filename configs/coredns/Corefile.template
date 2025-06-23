@@ -20,7 +20,7 @@
 
 # Configuration for {{.Domain}}
 {{.Domain}}:{{.Port}} {
-    file {{.ZoneFile}} {{.Domain}}
+    file {{.ZoneFile}} {{.Domain}}.
     errors
     log
 }
@@ -29,7 +29,7 @@
 # TLS configuration for {{.Domain}}
 {{.Domain}}:{{.TLSConfig.Port}} {
     tls {{.TLSConfig.CertFile}} {{.TLSConfig.KeyFile}}
-    file {{.ZoneFile}} {{.Domain}}
+    file {{.ZoneFile}} {{.Domain}}.
     errors
     log
 }
