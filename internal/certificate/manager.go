@@ -221,6 +221,9 @@ func NewManager() (*Manager, error) {
 	logging.Info("Adding DNS timeout for DNS01 challenge: %v", dnsTimeout)
 	dns01Options = append(dns01Options, dns01.AddDNSTimeout(dnsTimeout))
 
+	// Add exponential back-off propagation checks (respecting dnsTimeout)
+	dns01Options = append(dns01Options, exponentialBackoff(dnsTimeout))
+
 	// Disable complete propagation requirement for container environments
 	// This helps avoid issues where Docker's internal DNS differs from public DNS
 	logging.Info("Disabling complete propagation requirement for container compatibility")
@@ -391,4 +394,42 @@ func GetCertificateInfo(certPath string) (*x509.Certificate, error) {
 	}
 
 	return cert, nil
+}
+
+// exponentialBackoff returns a dns01.ChallengeOption that wraps lego's default
+// pre-check with an exponential back-off wait loop. The first re-try happens
+// after 2 s and the delay doubles every probe up to 32 s. The overall timeout
+// is bounded by the dnsTimeout that the caller already configured. If the
+// record does not propagate before the deadline the check returns false with
+// a descriptive error, allowing lego to continue polling until its own global
+// timeout triggers.
+func exponentialBackoff(timeout time.Duration) dns01.ChallengeOption {
+	const maxStep = 32 * time.Second
+
+	return dns01.WrapPreCheck(func(_ string, fqdn, value string, check dns01.PreCheckFunc) (bool, error) {
+		deadline := time.Now().Add(timeout)
+		wait := 2 * time.Second
+
+		for {
+			ok, err := check(fqdn, value)
+			if ok {
+				return true, nil
+			}
+
+			if time.Now().After(deadline) {
+				if err == nil {
+					err = fmt.Errorf("DNS propagation timed out after %v", timeout)
+				}
+				return false, err
+			}
+
+			time.Sleep(wait)
+			if wait < maxStep {
+				wait *= 2
+				if wait > maxStep {
+					wait = maxStep
+				}
+			}
+		}
+	})
 }

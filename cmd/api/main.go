@@ -98,37 +98,48 @@ func main() {
 	}
 	logging.Info("CoreDNS is healthy")
 
-	var tlsEnabled = config.GetBool(ServerTLSEnabledKey)
-	var certificateReady = false
+	tlsEnabled := config.GetBool(ServerTLSEnabledKey)
 
-	if config.GetBool(certificate.CertRenewalEnabledKey) {
-		logging.Info("Initializing certificate manager with CoreDNS integration...")
-		var err error
-		certManager, err = certificate.NewManager()
-		if err != nil {
-			logging.Error("Failed to create certificate manager: %v", err)
-			os.Exit(1)
-		}
+	// Channel that will be closed once a certificate has been successfully obtained.
+	var certReadyCh chan struct{}
 
-		// Integrate certificate manager with ConfigManager for TLS enablement
-		certManager.SetCoreDNSManager(dnsManager)
+	if tlsEnabled && config.GetBool(certificate.CertRenewalEnabledKey) {
+		certReadyCh = make(chan struct{})
 
-		// Attempt to obtain/renew certificate upfront so TLS can be enabled
-		domain := config.GetString(certificate.CertDomainKey)
-		if domain == "" {
-			logging.Warn("certificate.domain not configured – skipping certificate obtainment")
-		} else {
+		// Launch certificate obtainment in background so the HTTP server can
+		// start immediately.
+		go func() {
+			logging.Info("Initializing certificate manager with CoreDNS integration...")
+
+			var err error
+			certManager, err = certificate.NewManager()
+			if err != nil {
+				logging.Error("Failed to create certificate manager: %v", err)
+				return
+			}
+
+			// Integrate certificate manager with ConfigManager for TLS enablement
+			certManager.SetCoreDNSManager(dnsManager)
+
+			domain := config.GetString(certificate.CertDomainKey)
+			if domain == "" {
+				logging.Warn("certificate.domain not configured – skipping certificate obtainment")
+				return
+			}
+
 			if err := certManager.ObtainCertificate(domain); err != nil {
 				logging.Error("Certificate obtain failed: %v", err)
-			} else {
-				certificateReady = true
-
-				// Start background renewal loop if enabled in config
-				if config.GetBool(certificate.CertRenewalEnabledKey) {
-					go certManager.StartRenewalLoop(domain)
-				}
+				return
 			}
-		}
+
+			// Signal the main routine that the certificate is ready.
+			close(certReadyCh)
+
+			// Start background renewal loop if enabled
+			if config.GetBool(certificate.CertRenewalEnabledKey) {
+				go certManager.StartRenewalLoop(domain)
+			}
+		}()
 	}
 
 	// Create record handler
@@ -139,30 +150,15 @@ func main() {
 	mux.HandleFunc("/health", healthCheckHandler)
 	mux.HandleFunc("/add-record", recordHandler.AddRecord)
 
-	// Step 10: Create and start API server
+	// Step 10: Create and start initial HTTP server (always plain HTTP).
 	var server *http.Server
 
-	// Start with HTTP server if certificates are not ready, or if TLS is disabled
-	if !tlsEnabled || !certificateReady {
-		server = &http.Server{
-			Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
-			ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
-			WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
-			IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
-			Handler:      mux,
-		}
-	} else {
-		// Start with TLS server if certificates are ready
-		server = &http.Server{
-			Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerTLSPortKey)),
-			ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
-			WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
-			IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
-			Handler:      mux,
-			TLSConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			},
-		}
+	server = &http.Server{
+		Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
+		ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
+		WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
+		IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
+		Handler:      mux,
 	}
 
 	// Start server in a goroutine
@@ -170,17 +166,9 @@ func main() {
 	go func() {
 		logging.Info("Starting server...")
 		var err error
-		if tlsEnabled && certificateReady {
-			certFile := config.GetString(ServerTLSCertFileKey)
-			keyFile := config.GetString(ServerTLSKeyFileKey)
-			logging.Info("Server starting with TLS on port %d", config.GetInt(ServerTLSPortKey))
-			serverStarted <- true
-			err = server.ListenAndServeTLS(certFile, keyFile)
-		} else {
-			logging.Info("Server starting without TLS on port %d", config.GetInt(ServerPortKey))
-			serverStarted <- true
-			err = server.ListenAndServe()
-		}
+		logging.Info("Server starting without TLS on port %d", config.GetInt(ServerPortKey))
+		serverStarted <- true
+		err = server.ListenAndServe()
 
 		if err != nil && err != http.ErrServerClosed {
 			logging.Error("Failed to start server: %v", err)
@@ -191,6 +179,42 @@ func main() {
 	// Wait for server to start
 	<-serverStarted
 	logging.Info("Server started successfully")
+
+	// If TLS is enabled and we have a certificate goroutine, switch to HTTPS
+	if tlsEnabled && certReadyCh != nil {
+		go func() {
+			<-certReadyCh
+
+			logging.Info("Certificate obtained – switching server to HTTPS")
+
+			// Gracefully stop the HTTP server
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = server.Shutdown(ctx)
+			cancel()
+
+			// Build HTTPS server with same handler
+			httpsSrv := &http.Server{
+				Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerTLSPortKey)),
+				ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
+				WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
+				IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
+				Handler:      mux,
+				TLSConfig: &tls.Config{
+					MinVersion: tls.VersionTLS12,
+				},
+			}
+
+			// Update the server pointer so shutdown logic hits the right instance later.
+			server = httpsSrv
+
+			certFile := config.GetString(ServerTLSCertFileKey)
+			keyFile := config.GetString(ServerTLSKeyFileKey)
+			logging.Info("HTTPS server now listening on port %d", config.GetInt(ServerTLSPortKey))
+			if err := httpsSrv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+				logging.Error("HTTPS server error: %v", err)
+			}
+		}()
+	}
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
