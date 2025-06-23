@@ -12,9 +12,6 @@
     # Health check endpoint
     health :8080
 
-    # Metrics endpoint for monitoring
-    prometheus :9153
-
     # Cache configuration for better performance
     cache 30
 
