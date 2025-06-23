@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	cfapi "github.com/cloudflare/cloudflare-go"
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/challenge"
@@ -114,6 +116,27 @@ func NewManager() (*Manager, error) {
 
 		cfConfig := cloudflare.NewDefaultConfig()
 		cfConfig.AuthToken = cfToken
+
+		// Attempt to resolve ZoneID automatically based on certificate domain
+		domainForCert := config.GetString(CertDomainKey)
+		if domainForCert != "" {
+			// Use Cloudflare API to find matching zone ID by walking up labels
+			api, apiErr := cfapi.NewWithAPIToken(cfToken, cfapi.HTTPClient(&http.Client{Timeout: 10 * time.Second}))
+			if apiErr == nil {
+				zoneCandidate := domainForCert
+				for {
+					id, zidErr := api.ZoneIDByName(zoneCandidate)
+					if zidErr == nil {
+						logging.Info("Discovered Cloudflare ZoneID %s for %s (not set in config; lego auto-detects)", id, zoneCandidate)
+						break
+					}
+					if !strings.Contains(zoneCandidate, ".") {
+						break // cannot strip further
+					}
+					zoneCandidate = zoneCandidate[strings.Index(zoneCandidate, ".")+1:]
+				}
+			}
+		}
 
 		dnsProvider, err = cloudflare.NewDNSProviderConfig(cfConfig)
 		if err != nil {
