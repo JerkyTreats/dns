@@ -389,12 +389,6 @@ func (m *Manager) renderCorefile() ([]byte, error) {
 		return nil, fmt.Errorf("failed to execute template: %w", err)
 	}
 
-	dyn := m.generateDynamicConfigInternal()
-	if dyn != "" {
-		buf.WriteString("\n# Dynamic domain configurations\n")
-		buf.WriteString(dyn)
-	}
-
 	return buf.Bytes(), nil
 }
 

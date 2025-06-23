@@ -99,6 +99,19 @@ func TestZoneValidation(t *testing.T) {
 	_ = os.WriteFile(templatePath2, []byte(`. {
     errors
 }
+
+{{range .Domains}}
+{{if .Enabled}}
+
+# Configuration for {{.Domain}}
+{{.Domain}}:{{.Port}} {
+    file {{.ZoneFile}} {{.Domain}}
+    errors
+    log
+}
+
+{{end}}
+{{end}}
 `), 0644)
 	manager := NewManager(configPath, templatePath2, zonesPath, []string{}, "test.local")
 
