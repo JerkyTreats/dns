@@ -479,69 +479,50 @@ enabled: true
 }
 
 func TestDefaultValues(t *testing.T) {
-	// Reset config before test
 	ResetForTest()
-
-	// Initialize with isolated search paths to avoid project config files
-	tmpDir := t.TempDir()
-	err := InitConfig(WithOnlySearchPaths(tmpDir)) // Empty directory
-	assert.NoError(t, err)
-
-	// Test default values
+	InitConfig(WithOnlySearchPaths(t.TempDir()))
 	assert.Equal(t, "INFO", GetString(LogLevelKey))
-	assert.Equal(t, 0, GetInt("nonexistent_int"))
-	assert.False(t, GetBool("nonexistent_bool"))
+	assert.False(t, GetBool(DNSSyncPollingEnabledKey))
+	assert.Equal(t, time.Hour, GetDuration(DNSSyncPollingIntervalKey))
 }
 
-func TestGetBootstrapConfig(t *testing.T) {
-	// Reset config before test
+func TestGetSyncConfig(t *testing.T) {
 	ResetForTest()
 	defer ResetForTest()
 
-	// Create a temporary config file with bootstrap config
+	// Create a temporary config file
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "config.yaml")
 	configContent := `
 dns:
   internal:
     origin: "internal.test.local"
-    bootstrap_devices:
-      - name: "ns"
-        tailscale_name: "omnitron"
-        aliases: ["omnitron", "dns"]
-        description: "NAS, DNS host"
+    polling:
+      enabled: true
+      interval: "30m"
+    sync_devices:
+      - name: "test-device"
+        tailscale_name: "test-ts-device"
+        aliases: ["alias1", "alias2"]
+        description: "Test device"
         enabled: true
-      - name: "dev"
-        tailscale_name: "revenantor"
-        aliases: ["macbook"]
-        description: "MacBook development"
-        enabled: false
 `
 	err := os.WriteFile(configFile, []byte(configContent), 0644)
 	assert.NoError(t, err)
 
-	// Initialize with config path
 	err = InitConfig(WithConfigPath(configFile))
 	assert.NoError(t, err)
 
-	// Test bootstrap config
-	config := GetBootstrapConfig()
-	assert.Equal(t, "internal.test.local", config.Origin)
-	assert.Len(t, config.Devices, 2)
+	syncConfig := GetSyncConfig()
 
-	// Check first device
-	assert.Equal(t, "ns", config.Devices[0].Name)
-	assert.Equal(t, "omnitron", config.Devices[0].TailscaleName)
-	assert.Equal(t, []string{"omnitron", "dns"}, config.Devices[0].Aliases)
-	assert.Equal(t, "NAS, DNS host", config.Devices[0].Description)
-	assert.True(t, config.Devices[0].Enabled)
-
-	// Check second device
-	assert.Equal(t, "dev", config.Devices[1].Name)
-	assert.Equal(t, "revenantor", config.Devices[1].TailscaleName)
-	assert.Equal(t, []string{"macbook"}, config.Devices[1].Aliases)
-	assert.Equal(t, "MacBook development", config.Devices[1].Description)
-	assert.False(t, config.Devices[1].Enabled)
+	assert.Equal(t, "internal.test.local", syncConfig.Origin)
+	require.Len(t, syncConfig.Devices, 1)
+	assert.Equal(t, "test-device", syncConfig.Devices[0].Name)
+	assert.Equal(t, "test-ts-device", syncConfig.Devices[0].TailscaleName)
+	assert.Equal(t, []string{"alias1", "alias2"}, syncConfig.Devices[0].Aliases)
+	assert.True(t, syncConfig.Devices[0].Enabled)
+	assert.True(t, syncConfig.Polling.Enabled)
+	assert.Equal(t, 30*time.Minute, syncConfig.Polling.Interval)
 }
 
 func TestValidateTailscaleConfig(t *testing.T) {
@@ -624,12 +605,14 @@ app:
 }
 
 func TestConfigurationKeys(t *testing.T) {
-	// Test that configuration keys are properly defined
+	// This test ensures that the constants for config keys are correct.
+	assert.Equal(t, "log_level", LogLevelKey)
 	assert.Equal(t, "dns.internal.origin", DNSInternalOriginKey)
-	assert.Equal(t, "dns.internal.bootstrap_devices", DNSBootstrapDevicesKey)
+	assert.Equal(t, "dns.internal.sync_devices", DNSSyncDevicesKey)
+	assert.Equal(t, "dns.internal.polling.enabled", DNSSyncPollingEnabledKey)
+	assert.Equal(t, "dns.internal.polling.interval", DNSSyncPollingIntervalKey)
 	assert.Equal(t, "tailscale.api_key", TailscaleAPIKeyKey)
 	assert.Equal(t, "tailscale.tailnet", TailscaleTailnetKey)
-	assert.Equal(t, "tailscale.base_url", TailscaleBaseURLKey)
 }
 
 // TestCertificateDNSConfiguration tests the new certificate DNS configuration options

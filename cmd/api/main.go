@@ -15,11 +15,11 @@ import (
 	"github.com/jerkytreats/dns/internal/api/handler"
 	"github.com/jerkytreats/dns/internal/certificate"
 	"github.com/jerkytreats/dns/internal/config"
-	"github.com/jerkytreats/dns/internal/dns/bootstrap"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/tailscale"
+	"github.com/jerkytreats/dns/internal/tailscale/sync"
 )
 
 const (
@@ -37,16 +37,16 @@ const (
 	ServerTLSCertFileKey  = "server.tls.cert_file"
 	ServerTLSKeyFileKey   = "server.tls.key_file"
 
-	// Bootstrap
-	BootstrapEnabledKey = "dns.internal.enabled"
+	// Sync
+	SyncEnabledKey = "dns.internal.enabled"
 )
 
 var (
 	// Global managers for health checks and TLS integration
-	bootstrapManager *bootstrap.Manager
-	certManager      *certificate.Manager
-	dnsManager       *coredns.Manager
-	dnsChecker       healthcheck.Checker
+	syncManager *sync.Manager
+	certManager *certificate.Manager
+	dnsManager  *coredns.Manager
+	dnsChecker  healthcheck.Checker
 )
 
 func init() {
@@ -81,8 +81,8 @@ func main() {
 	ensureCorefileExists(dnsManager)
 
 	// Potentially create internal zone before waiting for health so a usable
-	// Corefile is already written when bootstrap is enabled.
-	bootstrapManager = maybeBootstrap(dnsManager)
+	// Corefile is already written when sync is enabled.
+	syncManager = maybeSync(dnsManager)
 
 	// Now actively wait for CoreDNS to become healthy.
 	dnsServer := "127.0.0.1:53"
@@ -249,28 +249,28 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add bootstrap status if enabled
-	if config.GetBool(BootstrapEnabledKey) {
-		if bootstrapManager != nil && bootstrapManager.IsZoneBootstrapped() {
-			components["bootstrap"] = map[string]string{
+	// Add sync status if enabled
+	if config.GetBool(SyncEnabledKey) {
+		if syncManager != nil && syncManager.IsZoneSynced() {
+			components["sync"] = map[string]string{
 				"status":  "healthy",
-				"message": "Dynamic zone bootstrap is active",
+				"message": "Dynamic zone sync is active",
 			}
-		} else if bootstrapManager != nil {
-			components["bootstrap"] = map[string]string{
+		} else if syncManager != nil {
+			components["sync"] = map[string]string{
 				"status":  "warning",
-				"message": "Bootstrap manager created but zone not bootstrapped",
+				"message": "Sync manager created but zone not synced",
 			}
 		} else {
-			components["bootstrap"] = map[string]string{
+			components["sync"] = map[string]string{
 				"status":  "error",
-				"message": "Bootstrap enabled but manager failed to initialize",
+				"message": "Sync enabled but manager failed to initialize",
 			}
 		}
 	} else {
-		components["bootstrap"] = map[string]string{
+		components["sync"] = map[string]string{
 			"status":  "disabled",
-			"message": "Dynamic zone bootstrap is disabled",
+			"message": "Dynamic zone sync is disabled",
 		}
 	}
 
@@ -320,15 +320,15 @@ func newCoreDNSManager() *coredns.Manager {
 	return dnsMgr
 }
 
-// maybeBootstrap initialises dynamic zone bootstrap if it is enabled in config.
-// It returns the *bootstrap.Manager instance or nil if bootstrap is disabled or fails.
-func maybeBootstrap(dnsMgr *coredns.Manager) *bootstrap.Manager {
-	if !config.GetBool(BootstrapEnabledKey) {
-		logging.Info("Bootstrap is disabled")
+// maybeSync initialises dynamic zone sync if it is enabled in config.
+// It returns the *sync.Manager instance or nil if sync is disabled or fails.
+func maybeSync(dnsMgr *coredns.Manager) *sync.Manager {
+	if !config.GetBool(SyncEnabledKey) {
+		logging.Info("Sync is disabled")
 		return nil
 	}
 
-	logging.Info("Bootstrap is enabled, initializing dynamic zone bootstrap...")
+	logging.Info("Sync is enabled, initializing dynamic zone sync...")
 
 	tailscaleClient, err := tailscale.NewClient()
 	if err != nil {
@@ -336,20 +336,25 @@ func maybeBootstrap(dnsMgr *coredns.Manager) *bootstrap.Manager {
 		return nil
 	}
 
-	bm, err := bootstrap.NewManager(dnsMgr, tailscaleClient)
+	sm, err := sync.NewManager(dnsMgr, tailscaleClient)
 	if err != nil {
-		logging.Error("Failed to create bootstrap manager: %v", err)
+		logging.Error("Failed to create sync manager: %v", err)
 		return nil
 	}
 
-	if err := bm.EnsureInternalZone(); err != nil {
-		logging.Error("Failed to bootstrap internal zone: %v", err)
-		logging.Warn("Bootstrap failed, continuing without dynamic zone bootstrap")
+	if err := sm.EnsureInternalZone(); err != nil {
+		logging.Error("Failed to sync internal zone: %v", err)
+		logging.Warn("Sync failed, continuing without dynamic zone sync")
 		return nil
 	}
 
-	logging.Info("Dynamic zone bootstrap completed successfully")
-	return bm
+	syncConfig := config.GetSyncConfig()
+	if syncConfig.Polling.Enabled {
+		sm.StartPolling(syncConfig.Polling.Interval)
+	}
+
+	logging.Info("Dynamic zone sync completed successfully")
+	return sm
 }
 
 func ensureCorefileExists(dnsMgr *coredns.Manager) {

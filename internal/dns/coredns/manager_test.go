@@ -49,7 +49,7 @@ func TestManager(t *testing.T) {
 		// Verify the content of the zone file
 		content, err := os.ReadFile(zoneFileName)
 		require.NoError(t, err)
-		expectedRecord := "test-record\tIN\tA\t127.0.0.1"
+		expectedRecord := "test-record\tIN A\t127.0.0.1"
 		assert.Contains(t, string(content), expectedRecord)
 	})
 

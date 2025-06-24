@@ -15,9 +15,11 @@ import (
 const (
 	LogLevelKey = "log_level"
 
-	// DNS Bootstrap configuration keys
-	DNSInternalOriginKey   = "dns.internal.origin"
-	DNSBootstrapDevicesKey = "dns.internal.bootstrap_devices"
+	// DNS Sync configuration keys
+	DNSInternalOriginKey      = "dns.internal.origin"
+	DNSSyncDevicesKey         = "dns.internal.sync_devices"
+	DNSSyncPollingEnabledKey  = "dns.internal.polling.enabled"
+	DNSSyncPollingIntervalKey = "dns.internal.polling.interval"
 
 	// Tailscale configuration keys
 	TailscaleAPIKeyKey  = "tailscale.api_key"
@@ -25,8 +27,8 @@ const (
 	TailscaleBaseURLKey = "tailscale.base_url" // Optional, for testing
 )
 
-// BootstrapDevice represents a device configuration for bootstrap
-type BootstrapDevice struct {
+// SyncDevice represents a device configuration for sync
+type SyncDevice struct {
 	Name          string   `yaml:"name" mapstructure:"name"`
 	TailscaleName string   `yaml:"tailscale_name" mapstructure:"tailscale_name"`
 	Aliases       []string `yaml:"aliases,omitempty" mapstructure:"aliases"`
@@ -34,10 +36,17 @@ type BootstrapDevice struct {
 	Enabled       bool     `yaml:"enabled" mapstructure:"enabled"`
 }
 
-// BootstrapConfig represents the bootstrap configuration section
-type BootstrapConfig struct {
-	Origin  string            `yaml:"origin" mapstructure:"origin"`
-	Devices []BootstrapDevice `yaml:"bootstrap_devices" mapstructure:"bootstrap_devices"`
+// PollingConfig represents the polling configuration section
+type PollingConfig struct {
+	Enabled  bool          `yaml:"enabled" mapstructure:"enabled"`
+	Interval time.Duration `yaml:"interval" mapstructure:"interval"`
+}
+
+// SyncConfig represents the sync configuration section
+type SyncConfig struct {
+	Origin  string        `yaml:"origin" mapstructure:"origin"`
+	Devices []SyncDevice  `yaml:"sync_devices" mapstructure:"sync_devices"`
+	Polling PollingConfig `yaml:"polling" mapstructure:"polling"`
 }
 
 // Config holds the configuration state and provides thread-safe access
@@ -172,6 +181,8 @@ func (c *Config) loadConfig() (*viper.Viper, error) {
 
 	v.AutomaticEnv()
 	v.SetDefault(LogLevelKey, "INFO")
+	v.SetDefault(DNSSyncPollingEnabledKey, false)
+	v.SetDefault(DNSSyncPollingIntervalKey, "1h")
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -289,18 +300,20 @@ func GetDuration(key string) time.Duration {
 	return cfg.viper.GetDuration(key)
 }
 
-// GetBootstrapConfig returns the bootstrap configuration
-func GetBootstrapConfig() BootstrapConfig {
+// GetSyncConfig returns the sync configuration
+func GetSyncConfig() SyncConfig {
 	cfg := getInstance()
 	_ = cfg.ensureInitialized()
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 
-	var bootstrapConfig BootstrapConfig
+	var syncConfig SyncConfig
 	if cfg.viper != nil {
-		cfg.viper.UnmarshalKey("dns.internal", &bootstrapConfig)
+		if err := cfg.viper.UnmarshalKey("dns.internal", &syncConfig); err != nil {
+			fmt.Printf("Error unmarshalling sync config: %v\n", err)
+		}
 	}
-	return bootstrapConfig
+	return syncConfig
 }
 
 // RegisterRequiredKey adds a key to the list of required configuration keys.

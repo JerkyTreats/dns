@@ -37,9 +37,9 @@ func TestHealthCheckHandler(t *testing.T) {
 						"status":  "unknown",
 						"message": "DNS checker not initialized",
 					},
-					"bootstrap": map[string]interface{}{
+					"sync": map[string]interface{}{
 						"status":  "disabled",
-						"message": "Dynamic zone bootstrap is disabled",
+						"message": "Dynamic zone sync is disabled",
 					},
 				},
 			},

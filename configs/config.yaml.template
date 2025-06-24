@@ -19,11 +19,14 @@ server:
 
 dns:
   domain: INTERNAL_DOMAIN_PLACEHOLDER
-  # Dynamic bootstrap configuration
+  # Dynamic sync configuration
   internal:
-    enabled: true  # Set to false to disable bootstrap
+    enabled: true  # Set to false to disable sync
     origin: "INTERNAL_DOMAIN_PLACEHOLDER"
-    bootstrap_devices:
+    polling:
+      enabled: true
+      interval: "1h"
+    sync_devices:
       - name: "ns"
         tailscale_name: "omnitron"  # Change to your Tailscale device name
         aliases: ["omnitron", "dns"]

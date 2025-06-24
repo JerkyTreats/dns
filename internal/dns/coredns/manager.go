@@ -246,31 +246,114 @@ func (m *Manager) RemoveZone(serviceName string) error {
 
 // ------------------- Record helpers -------------------- //
 
-// AddRecord appends an A record to the zone file and triggers a CoreDNS reload (not full restart).
+// AddRecord upserts an A record in the zone file.
+// If a record for the name exists, its IP is updated. Otherwise, a new record is added.
+// It then triggers a CoreDNS reload.
 func (m *Manager) AddRecord(serviceName, name, ip string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logging.Info("Attempting to add record: service=%s, name=%s, ip=%s", serviceName, name, ip)
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.%s.zone", serviceName, m.domain))
+
+	content, err := os.ReadFile(zoneFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("zone file %s does not exist. A zone must be created before adding records", zoneFile)
+		}
+		return fmt.Errorf("failed to read zone file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
+	recordExists := false
+	ipIsCurrent := false
+
+	recordPattern := regexp.MustCompile(fmt.Sprintf(`^%s\s+IN\s+A\s+`, regexp.QuoteMeta(name)))
+
+	for _, line := range lines {
+		if recordPattern.MatchString(line) {
+			recordExists = true
+			// Existing record found, let's check the IP
+			parts := strings.Fields(line)
+			if len(parts) > 0 && parts[len(parts)-1] == ip {
+				ipIsCurrent = true
+				logging.Debug("Record for %s (%s) is already up-to-date in %s", name, ip, zoneFile)
+			}
+			// Don't add the old line to newLines, we will add the new/correct one later.
+			// This handles both IP updates and removes duplicate old entries.
+		} else if strings.TrimSpace(line) != "" {
+			// Keep other lines
+			newLines = append(newLines, line)
+		}
+	}
+
+	// Add the new or updated record
+	newRecord := fmt.Sprintf("%s\tIN A\t%s", name, ip)
+	newLines = append(newLines, newRecord)
+
+	// If the record was already present and correct, no need to write file or reload.
+	if recordExists && ipIsCurrent {
+		return nil
+	}
+
+	// Write the updated content back to the zone file
+	output := strings.Join(newLines, "\n") + "\n"
+	if err := os.WriteFile(zoneFile, []byte(output), 0644); err != nil {
+		return fmt.Errorf("failed to write updated zone file: %w", err)
+	}
+
+	if !recordExists {
+		logging.Info("Added new record to %s: %s -> %s", zoneFile, name, ip)
+	} else {
+		logging.Info("Updated record in %s: %s -> %s", zoneFile, name, ip)
+	}
+
+	return m.Reload()
+}
+
+// RemoveRecord removes an A record from the zone file and triggers a CoreDNS reload.
+func (m *Manager) RemoveRecord(serviceName, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logging.Info("Removing record from service: %s, name: %s", serviceName, name)
 
 	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.%s.zone", serviceName, m.domain))
 	if _, err := os.Stat(zoneFile); os.IsNotExist(err) {
 		return fmt.Errorf("zone file for service '%s' does not exist", serviceName)
 	}
 
-	recordContent := fmt.Sprintf("%s\tIN\tA\t%s\n", name, ip)
-
-	f, err := os.OpenFile(zoneFile, os.O_APPEND|os.O_WRONLY, 0644)
+	content, err := os.ReadFile(zoneFile)
 	if err != nil {
-		return fmt.Errorf("failed to open zone file: %w", err)
-	}
-	defer f.Close()
-
-	if _, err := f.WriteString(recordContent); err != nil {
-		return fmt.Errorf("failed to write record to zone file: %w", err)
+		return fmt.Errorf("failed to read zone file: %w", err)
 	}
 
-	logging.Info("Record for %s.%s.%s -> %s added to zone file.", name, serviceName, m.domain, ip)
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
+	recordExists := false
+
+	recordPattern := regexp.MustCompile(fmt.Sprintf(`^%s\s+IN\s+A\s+`, regexp.QuoteMeta(name)))
+
+	for _, line := range lines {
+		if recordPattern.MatchString(line) {
+			recordExists = true
+		} else if strings.TrimSpace(line) != "" {
+			newLines = append(newLines, line)
+		}
+	}
+
+	if !recordExists {
+		logging.Debug("Record for %s does not exist in %s", name, zoneFile)
+		return nil
+	}
+
+	// Write the updated content back to the zone file
+	output := strings.Join(newLines, "\n") + "\n"
+	if err := os.WriteFile(zoneFile, []byte(output), 0644); err != nil {
+		return fmt.Errorf("failed to write updated zone file: %w", err)
+	}
+
+	logging.Info("Removed record from %s: %s", zoneFile, name)
 
 	return m.Reload()
 }

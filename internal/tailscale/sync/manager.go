@@ -1,5 +1,5 @@
-// Package bootstrap provides dynamic zone bootstrapping using Tailscale device discovery.
-package bootstrap
+// Package sync provides dynamic zone synchronization using Tailscale device discovery.
+package sync
 
 import (
 	"fmt"
@@ -24,19 +24,19 @@ const (
 	retryDelay = 2 * time.Second
 )
 
-// Manager handles dynamic zone bootstrapping with Tailscale integration
+// Manager handles dynamic zone synchronization with Tailscale integration
 type Manager struct {
 	corednsManager  *coredns.Manager
 	tailscaleClient *tailscale.Client
-	config          config.BootstrapConfig
+	config          config.SyncConfig
 
 	// IP cache to reduce Tailscale API calls
 	ipCache    map[string]*cachedIP
 	cacheMutex sync.RWMutex
 
-	// Bootstrap state
-	bootstrapped bool
-	mu           sync.Mutex
+	// Sync state
+	synced bool
+	mu     sync.Mutex
 }
 
 // cachedIP represents a cached IP address with TTL
@@ -48,7 +48,7 @@ type cachedIP struct {
 
 // DeviceResolution represents the result of resolving a device
 type DeviceResolution struct {
-	Device  config.BootstrapDevice
+	Device  config.SyncDevice
 	IP      string
 	Online  bool
 	Error   error
@@ -56,8 +56,8 @@ type DeviceResolution struct {
 	Reason  string
 }
 
-// BootstrapResult represents the overall bootstrap operation result
-type BootstrapResult struct {
+// SyncResult represents the overall sync operation result
+type SyncResult struct {
 	Success         bool
 	TotalDevices    int
 	ResolvedDevices int
@@ -67,29 +67,29 @@ type BootstrapResult struct {
 	Error           error
 }
 
-// NewManager creates a new bootstrap manager
+// NewManager creates a new sync manager
 func NewManager(corednsManager *coredns.Manager, tailscaleClient *tailscale.Client) (*Manager, error) {
-	bootstrapConfig := config.GetBootstrapConfig()
+	syncConfig := config.GetSyncConfig()
 
 	m := &Manager{
 		corednsManager:  corednsManager,
 		tailscaleClient: tailscaleClient,
-		config:          bootstrapConfig,
+		config:          syncConfig,
 		ipCache:         make(map[string]*cachedIP),
 	}
-	if err := m.ValidateBootstrapConfig(); err != nil {
-		return nil, fmt.Errorf("bootstrap configuration validation failed: %w", err)
+	if err := m.ValidateConfig(); err != nil {
+		return nil, fmt.Errorf("sync configuration validation failed: %w", err)
 	}
 
 	return m, nil
 }
 
-// EnsureInternalZone ensures the internal zone exists and bootstraps devices
+// EnsureInternalZone ensures the internal zone exists and syncs devices
 func (m *Manager) EnsureInternalZone() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logging.Info("Ensuring internal zone exists and is bootstrapped")
+	logging.Info("Ensuring internal zone exists and is synced")
 
 	// Check if zone already exists by attempting to add a test record
 	zoneName := extractZoneName(m.config.Origin)
@@ -102,19 +102,19 @@ func (m *Manager) EnsureInternalZone() error {
 		return fmt.Errorf("failed to create internal zone: %w", err)
 	}
 
-	// Bootstrap devices
-	result, err := m.bootstrapDevices(zoneName)
+	// Sync devices
+	result, err := m.syncDevices(zoneName)
 	if err != nil {
-		return fmt.Errorf("failed to bootstrap devices: %w", err)
+		return fmt.Errorf("failed to sync devices: %w", err)
 	}
 
-	m.logBootstrapResult(result)
-	m.bootstrapped = true
+	m.logSyncResult(result)
+	m.synced = true
 
 	if result.FailedDevices > 0 {
-		logging.Warn("Bootstrap completed with %d failed devices", result.FailedDevices)
+		logging.Warn("Sync completed with %d failed devices", result.FailedDevices)
 	} else {
-		logging.Info("Bootstrap completed successfully")
+		logging.Info("Sync completed successfully")
 	}
 
 	return nil
@@ -135,7 +135,7 @@ func (m *Manager) createInternalZoneIfNeeded(zoneName string) error {
 	// The CoreDNS manager should handle the case where zone already exists
 	if err := m.corednsManager.AddZone(zoneName); err != nil {
 		// Check if this is an "already exists" error by trying to add a test record
-		testErr := m.corednsManager.AddRecord(zoneName, "_bootstrap_test", "127.0.0.1")
+		testErr := m.corednsManager.AddRecord(zoneName, "_sync_test", "127.0.0.1")
 		if testErr == nil {
 			// Zone exists and we can add records, so original error was likely "zone already exists"
 			logging.Debug("Internal zone already exists: %s", zoneName)
@@ -148,14 +148,14 @@ func (m *Manager) createInternalZoneIfNeeded(zoneName string) error {
 	return nil
 }
 
-// bootstrapDevices resolves device IPs and creates DNS records
-func (m *Manager) bootstrapDevices(zoneName string) (*BootstrapResult, error) {
-	result := &BootstrapResult{
+// syncDevices resolves device IPs and creates DNS records
+func (m *Manager) syncDevices(zoneName string) (*SyncResult, error) {
+	result := &SyncResult{
 		TotalDevices: len(m.config.Devices),
 		Resolutions:  make([]DeviceResolution, 0, len(m.config.Devices)),
 	}
 
-	logging.Info("Bootstrapping %d devices for zone %s", len(m.config.Devices), zoneName)
+	logging.Info("Syncing %d devices for zone %s", len(m.config.Devices), zoneName)
 
 	for _, device := range m.config.Devices {
 		resolution := m.resolveDevice(device, zoneName)
@@ -179,7 +179,7 @@ func (m *Manager) bootstrapDevices(zoneName string) (*BootstrapResult, error) {
 }
 
 // resolveDevice resolves a single device and creates its DNS records
-func (m *Manager) resolveDevice(device config.BootstrapDevice, zoneName string) DeviceResolution {
+func (m *Manager) resolveDevice(device config.SyncDevice, zoneName string) DeviceResolution {
 	resolution := DeviceResolution{Device: device}
 
 	// Check if device is enabled
@@ -208,7 +208,7 @@ func (m *Manager) resolveDevice(device config.BootstrapDevice, zoneName string) 
 		return resolution
 	}
 
-	logging.Info("Successfully bootstrapped device %s (%s) -> %s", device.Name, device.TailscaleName, ip)
+	logging.Info("Successfully synced device %s (%s) -> %s", device.Name, device.TailscaleName, ip)
 	return resolution
 }
 
@@ -241,7 +241,7 @@ func (m *Manager) resolveDeviceIPWithRetry(tailscaleName string) (string, error)
 }
 
 // createDeviceRecords creates DNS records for a device and its aliases
-func (m *Manager) createDeviceRecords(zoneName string, device config.BootstrapDevice, ip string) error {
+func (m *Manager) createDeviceRecords(zoneName string, device config.SyncDevice, ip string) error {
 	// Create primary record
 	if err := m.corednsManager.AddRecord(zoneName, device.Name, ip); err != nil {
 		return fmt.Errorf("failed to add primary record for %s: %w", device.Name, err)
@@ -291,13 +291,31 @@ func (m *Manager) cacheIP(deviceName, ip string, ttl time.Duration) {
 	}
 }
 
+// StartPolling starts a background goroutine to periodically refresh device IPs.
+func (m *Manager) StartPolling(interval time.Duration) {
+	logging.Info("Starting Tailscale device polling every %v", interval)
+	ticker := time.NewTicker(interval)
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				logging.Info("Polling Tailscale for device updates...")
+				if err := m.RefreshDeviceIPs(); err != nil {
+					logging.Error("Error during scheduled device IP refresh: %v", err)
+				}
+			}
+		}
+	}()
+}
+
 // RefreshDeviceIPs refreshes IP addresses for all devices from Tailscale
 func (m *Manager) RefreshDeviceIPs() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !m.bootstrapped {
-		return fmt.Errorf("zone not bootstrapped yet")
+	if !m.synced {
+		return fmt.Errorf("zone not synced yet")
 	}
 
 	logging.Info("Refreshing device IPs from Tailscale")
@@ -312,12 +330,12 @@ func (m *Manager) RefreshDeviceIPs() error {
 		return fmt.Errorf("invalid origin format: %s", m.config.Origin)
 	}
 
-	result, err := m.bootstrapDevices(zoneName)
+	result, err := m.syncDevices(zoneName)
 	if err != nil {
 		return fmt.Errorf("failed to refresh device IPs: %w", err)
 	}
 
-	m.logBootstrapResult(result)
+	m.logSyncResult(result)
 
 	if result.FailedDevices > 0 {
 		return fmt.Errorf("refresh completed with %d failed devices", result.FailedDevices)
@@ -327,14 +345,14 @@ func (m *Manager) RefreshDeviceIPs() error {
 	return nil
 }
 
-// IsZoneBootstrapped returns whether the zone has been bootstrapped
-func (m *Manager) IsZoneBootstrapped() bool {
+// IsZoneSynced returns whether the zone has been synced
+func (m *Manager) IsZoneSynced() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// If corednsManager is nil (e.g., in tests), return the internal state
 	if m.corednsManager == nil {
-		return m.bootstrapped
+		return m.synced
 	}
 
 	// Check if zone file exists and has content
@@ -344,26 +362,26 @@ func (m *Manager) IsZoneBootstrapped() bool {
 	}
 
 	// Try to add a test record to see if zone exists and is accessible
-	testErr := m.corednsManager.AddRecord(zoneName, "_bootstrap_test", "127.0.0.1")
+	testErr := m.corednsManager.AddRecord(zoneName, "_sync_test", "127.0.0.1")
 	if testErr != nil {
 		// Zone doesn't exist or isn't accessible
 		return false
 	}
 
-	// If we can add records, the zone is bootstrapped
+	// If we can add records, the zone is synced
 	// Update our internal state to match reality
-	m.bootstrapped = true
+	m.synced = true
 	return true
 }
 
-// validateLocalBootstrapConfig validates the manager's bootstrap configuration
-func (m *Manager) ValidateBootstrapConfig() error {
+// ValidateConfig validates the manager's sync configuration
+func (m *Manager) ValidateConfig() error {
 	if m.config.Origin == "" {
 		return fmt.Errorf("dns.internal.origin is required")
 	}
 
 	if len(m.config.Devices) == 0 {
-		return fmt.Errorf("at least one bootstrap device must be configured")
+		return fmt.Errorf("at least one sync device must be configured")
 	}
 
 	for i, device := range m.config.Devices {
@@ -378,9 +396,9 @@ func (m *Manager) ValidateBootstrapConfig() error {
 	return nil
 }
 
-// logBootstrapResult logs the results of a bootstrap operation
-func (m *Manager) logBootstrapResult(result *BootstrapResult) {
-	logging.Info("Bootstrap result: %d total, %d resolved, %d skipped, %d failed",
+// logSyncResult logs the results of a sync operation
+func (m *Manager) logSyncResult(result *SyncResult) {
+	logging.Info("Sync result: %d total, %d resolved, %d skipped, %d failed",
 		result.TotalDevices, result.ResolvedDevices, result.SkippedDevices, result.FailedDevices)
 
 	for _, resolution := range result.Resolutions {
@@ -394,26 +412,23 @@ func (m *Manager) logBootstrapResult(result *BootstrapResult) {
 	}
 }
 
-// extractZoneName extracts the zone name from an origin (removes trailing dot)
+// extractZoneName extracts the service name from the origin FQDN.
+// For example, "internal.example.com" becomes "internal".
+// This service name is then used to construct the zone file path and CoreDNS config.
 func extractZoneName(origin string) string {
-	// Remove any trailing dot that may be present.
-	trimmed := strings.TrimSuffix(origin, ".")
+	// Trim trailing dot if present for consistent parsing
+	origin = strings.TrimSuffix(origin, ".")
 
-	// If a base domain is configured and the origin ends with it, strip that
-	// suffix so we only return the sub-zone portion (e.g. "internal").
-	baseDomain := config.GetString(coredns.DNSDomainKey)
+	// Split the FQDN into its labels
+	parts := strings.Split(origin, ".")
 
-	if baseDomain != "" && strings.HasSuffix(trimmed, baseDomain) {
-		suffix := baseDomain
-		// Make sure we also remove the separating dot if present.
-		if strings.HasSuffix(trimmed, "."+suffix) {
-			suffix = "." + suffix
-		}
-		zone := strings.TrimSuffix(trimmed, suffix)
-		zone = strings.TrimSuffix(zone, ".")
-		return zone
+	// A valid bootstrap origin must be a subdomain of a base domain,
+	// e.g., "internal.example.com" has 3 parts. An origin that is just
+	// "example.com" (2 parts) is not a valid internal zone origin.
+	if len(parts) < 3 {
+		return ""
 	}
 
-	// Fallback: return the whole (trimmed) origin.
-	return trimmed
+	// The service name is the first label of the FQDN.
+	return parts[0]
 }
