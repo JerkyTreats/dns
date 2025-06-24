@@ -1,7 +1,6 @@
 package certificate
 
 import (
-	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -84,91 +83,6 @@ type Manager struct {
 	}
 }
 
-// DebuggingDNSProvider wraps a challenge.Provider to add verbose logging
-// and verification for the DNS-01 challenge process.
-type DebuggingDNSProvider struct {
-	wrappedProvider challenge.Provider
-	cfAPIToken      string
-	cfZoneID        string
-}
-
-// NewDebuggingDNSProvider creates a new DNS provider that wraps an existing
-// provider with Cloudflare-specific verification and logging.
-func NewDebuggingDNSProvider(provider challenge.Provider, token, zoneID string) (*DebuggingDNSProvider, error) {
-	if token == "" || zoneID == "" {
-		return nil, fmt.Errorf("Cloudflare API token and Zone ID are required for the debugging provider")
-	}
-	return &DebuggingDNSProvider{
-		wrappedProvider: provider,
-		cfAPIToken:      token,
-		cfZoneID:        zoneID,
-	}, nil
-}
-
-// Present creates the DNS record and then verifies its existence via the Cloudflare API.
-func (d *DebuggingDNSProvider) Present(domain, token, keyAuth string) error {
-	logging.Info("[DEBUG] Attempting to present DNS-01 challenge for domain: %s", domain)
-	err := d.wrappedProvider.Present(domain, token, keyAuth)
-	if err != nil {
-		logging.Error("[DEBUG] Wrapped provider failed to present challenge: %v", err)
-		return err
-	}
-	logging.Info("[DEBUG] Wrapped provider 'Present' call completed. Now verifying record existence directly with Cloudflare API.")
-
-	// Construct the FQDN for the TXT record
-	fqdn := fmt.Sprintf("_acme-challenge.%s", domain)
-
-	// Poll Cloudflare API to confirm the record was created
-	return d.verifyRecordCreation(fqdn)
-}
-
-// CleanUp removes the DNS record.
-func (d *DebuggingDNSProvider) CleanUp(domain, token, keyAuth string) error {
-	logging.Info("[DEBUG] Cleaning up DNS-01 challenge for domain: %s", domain)
-	return d.wrappedProvider.CleanUp(domain, token, keyAuth)
-}
-
-func (d *DebuggingDNSProvider) verifyRecordCreation(fqdn string) error {
-	logging.Info("[DEBUG] Verifying creation of TXT record: %s", fqdn)
-	api, err := cfapi.NewWithAPIToken(d.cfAPIToken)
-	if err != nil {
-		return fmt.Errorf("failed to create cloudflare api client for verification: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("verification timed out for record %s: %w", fqdn, ctx.Err())
-		case <-ticker.C:
-			logging.Info("[DEBUG] Polling Cloudflare API for record: %s", fqdn)
-			// We need to list records and filter by name, as there's no direct 'get by name'
-			records, _, err := api.ListDNSRecords(ctx, cfapi.ZoneIdentifier(d.cfZoneID), cfapi.ListDNSRecordsParams{Name: fqdn, Type: "TXT"})
-			if err != nil {
-				logging.Warn("[DEBUG] Error polling for record, will retry: %v", err)
-				continue
-			}
-
-			if len(records) > 0 {
-				for _, rec := range records {
-					logging.Info("[DEBUG] SUCCESS: Found matching TXT record in Cloudflare Zone.")
-					logging.Info("[DEBUG]   - ID:      %s", rec.ID)
-					logging.Info("[DEBUG]   - Name:    %s", rec.Name)
-					logging.Info("[DEBUG]   - Content: %s", rec.Content)
-					logging.Info("[DEBUG]   - TTL:     %d", rec.TTL)
-				}
-				return nil // Success
-			}
-			logging.Info("[DEBUG] Record %s not found yet, retrying...", fqdn)
-		}
-	}
-}
-
 // NewManager creates a new certificate manager.
 func NewManager() (*Manager, error) {
 	logging.Info("Creating certificate manager")
@@ -205,7 +119,6 @@ func NewManager() (*Manager, error) {
 		cfConfig := cloudflare.NewDefaultConfig()
 		cfConfig.AuthToken = cfToken
 
-		var discoveredZoneID string
 		// Attempt to resolve ZoneID automatically based on certificate domain
 		domainForCert := config.GetString(CertDomainKey)
 		if domainForCert != "" {
@@ -216,8 +129,7 @@ func NewManager() (*Manager, error) {
 				for {
 					id, zidErr := api.ZoneIDByName(zoneCandidate)
 					if zidErr == nil {
-						logging.Info("Discovered Cloudflare ZoneID %s for %s", id, zoneCandidate)
-						discoveredZoneID = id
+						logging.Info("Discovered Cloudflare ZoneID %s for %s (not set in config; lego auto-detects)", id, zoneCandidate)
 						break
 					}
 					if !strings.Contains(zoneCandidate, ".") {
@@ -228,20 +140,9 @@ func NewManager() (*Manager, error) {
 			}
 		}
 
-		if discoveredZoneID == "" {
-			return nil, fmt.Errorf("could not auto-discover Cloudflare ZoneID for domain %s", domainForCert)
-		}
-
 		dnsProvider, err = cloudflare.NewDNSProviderConfig(cfConfig)
 		if err != nil {
 			return nil, fmt.Errorf("could not create Cloudflare DNS provider: %w", err)
-		}
-
-		// Wrap the provider with our debugging and verification layer
-		logging.Info("[DEBUG] Wrapping Cloudflare provider with API verification layer.")
-		dnsProvider, err = NewDebuggingDNSProvider(dnsProvider, cfToken, discoveredZoneID)
-		if err != nil {
-			return nil, fmt.Errorf("could not create debugging DNS provider: %w", err)
 		}
 
 	case "coredns":
@@ -352,26 +253,14 @@ func (m *Manager) SetCoreDNSManager(configManager interface {
 	m.corednsConfigManager = configManager
 }
 
-// ObtainCertificate obtains a new certificate if one does not already exist.
+// ObtainCertificate requests a certificate for the given domain.
 func (m *Manager) ObtainCertificate(domain string) error {
-	if _, err := os.Stat(m.certPath); err == nil {
-		logging.Info("Certificate already exists, skipping obtainment for domain: %s", domain)
-		return nil
-	}
-
-	if m.user.GetRegistration() == nil {
-		reg, err := m.legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-		if err != nil {
-			return fmt.Errorf("could not register user: %w", err)
-		}
-		m.user.Registration = reg
-		logging.Info("Successfully registered user: %s", m.user.Email)
-	}
-
+	// We're requesting a SAN certificate for the domain and a wildcard
 	request := certificate.ObtainRequest{
-		Domains: []string{domain, "*." + domain},
+		Domains: []string{"*." + domain},
 		Bundle:  true,
 	}
+
 	certs, err := m.legoClient.Certificate.Obtain(request)
 	if err != nil {
 		return fmt.Errorf("could not obtain certificate: %w", err)
