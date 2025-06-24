@@ -119,7 +119,6 @@ func NewManager() (*Manager, error) {
 
 		cfConfig := cloudflare.NewDefaultConfig()
 		cfConfig.AuthToken = cfToken
-		cfConfig.PropagationTimeout = 2 * time.Minute
 
 		var discoveredZoneID string
 		// Attempt to resolve ZoneID automatically based on certificate domain
@@ -242,6 +241,11 @@ func NewManager() (*Manager, error) {
 	// This helps avoid issues where Docker's internal DNS differs from public DNS
 	logging.Info("Disabling complete propagation requirement for container compatibility")
 	dns01Options = append(dns01Options, dns01.DisableCompletePropagationRequirement())
+
+	// Add exponential backoff for pre-check to wait for propagation
+	propagationTimeout := 5 * time.Minute
+	logging.Info("Adding exponential backoff for pre-check with a timeout of %v", propagationTimeout)
+	dns01Options = append(dns01Options, exponentialBackoff(propagationTimeout))
 
 	// Set the DNS01 provider with the configured options
 	err = client.Challenge.SetDNS01Provider(dnsProvider, dns01Options...)
@@ -520,12 +524,21 @@ func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
 		// It's better to try and proceed than to fail here if cleanup has an issue.
 		logging.Warn("[CLEANUP] Failed to proactively clean up records, proceeding anyway: %v", err)
 	} else {
-		// As you suggested, wait for propagation after deletion.
+		// Wait for propagation after deletion.
 		logging.Info("[CLEANUP] Waiting 10 seconds for deletion to propagate...")
 		time.Sleep(10 * time.Second)
 	}
 
-	return d.wrappedProvider.Present(domain, token, keyAuth)
+	logging.Info("[PROPAGATION] Calling wrapped provider to create TXT record...")
+	err = d.wrappedProvider.Present(domain, token, keyAuth)
+	if err != nil {
+		return err
+	}
+
+	logging.Info("[PROPAGATION] Waiting 120 seconds before starting challenge verification to ensure propagation.")
+	time.Sleep(120 * time.Second)
+
+	return nil
 }
 
 // CleanUp delegates to the wrapped provider.
