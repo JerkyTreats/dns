@@ -255,7 +255,16 @@ func (m *Manager) SetCoreDNSManager(configManager interface {
 
 // ObtainCertificate requests a certificate for the given domain.
 func (m *Manager) ObtainCertificate(domain string) error {
-	// We're requesting a SAN certificate for the domain and a wildcard
+	// Ensure the user is registered before obtaining a certificate.
+	if m.user.GetRegistration() == nil {
+		reg, err := m.legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return fmt.Errorf("could not register user: %w", err)
+		}
+		m.user.Registration = reg
+		logging.Info("Successfully registered user: %s", m.user.Email)
+	}
+
 	request := certificate.ObtainRequest{
 		Domains: []string{"*." + domain},
 		Bundle:  true,
