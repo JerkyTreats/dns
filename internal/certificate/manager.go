@@ -1,6 +1,7 @@
 package certificate
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -119,6 +120,7 @@ func NewManager() (*Manager, error) {
 		cfConfig := cloudflare.NewDefaultConfig()
 		cfConfig.AuthToken = cfToken
 
+		var discoveredZoneID string
 		// Attempt to resolve ZoneID automatically based on certificate domain
 		domainForCert := config.GetString(CertDomainKey)
 		if domainForCert != "" {
@@ -129,7 +131,8 @@ func NewManager() (*Manager, error) {
 				for {
 					id, zidErr := api.ZoneIDByName(zoneCandidate)
 					if zidErr == nil {
-						logging.Info("Discovered Cloudflare ZoneID %s for %s (not set in config; lego auto-detects)", id, zoneCandidate)
+						logging.Info("Discovered Cloudflare ZoneID %s for %s", id, zoneCandidate)
+						discoveredZoneID = id
 						break
 					}
 					if !strings.Contains(zoneCandidate, ".") {
@@ -140,9 +143,20 @@ func NewManager() (*Manager, error) {
 			}
 		}
 
+		if discoveredZoneID == "" {
+			return nil, fmt.Errorf("could not auto-discover Cloudflare ZoneID for domain %s", domainForCert)
+		}
+
 		dnsProvider, err = cloudflare.NewDNSProviderConfig(cfConfig)
 		if err != nil {
 			return nil, fmt.Errorf("could not create Cloudflare DNS provider: %w", err)
+		}
+
+		// Wrap the provider with our proactive cleanup layer.
+		logging.Info("[SETUP] Wrapping Cloudflare provider with proactive cleanup layer.")
+		dnsProvider, err = NewCleaningDNSProvider(dnsProvider, cfToken, discoveredZoneID)
+		if err != nil {
+			return nil, fmt.Errorf("could not create cleaning DNS provider: %w", err)
 		}
 
 	case "coredns":
@@ -475,4 +489,80 @@ func exponentialBackoff(timeout time.Duration) dns01.ChallengeOption {
 			}
 		}
 	})
+}
+
+// CleaningDNSProvider wraps a challenge.Provider to ensure no stale TXT records
+// exist before a new challenge is presented.
+type CleaningDNSProvider struct {
+	wrappedProvider challenge.Provider
+	cfAPIToken      string
+	cfZoneID        string
+}
+
+// NewCleaningDNSProvider creates a new provider that cleans up old records.
+func NewCleaningDNSProvider(provider challenge.Provider, token, zoneID string) (*CleaningDNSProvider, error) {
+	if token == "" || zoneID == "" {
+		return nil, fmt.Errorf("Cloudflare API token and Zone ID are required for the cleaning provider")
+	}
+	return &CleaningDNSProvider{
+		wrappedProvider: provider,
+		cfAPIToken:      token,
+		cfZoneID:        zoneID,
+	}, nil
+}
+
+// Present ensures old records are removed before creating the new one.
+func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
+	fqdn := fmt.Sprintf("_acme-challenge.%s", domain)
+	logging.Info("[CLEANUP] Proactively cleaning up any stale TXT records for %s", fqdn)
+
+	err := d.cleanupRecords(fqdn)
+	if err != nil {
+		// Log the error but don't fail the whole process.
+		// It's better to try and proceed than to fail here if cleanup has an issue.
+		logging.Warn("[CLEANUP] Failed to proactively clean up records, proceeding anyway: %v", err)
+	} else {
+		// As you suggested, wait for propagation after deletion.
+		logging.Info("[CLEANUP] Waiting 10 seconds for deletion to propagate...")
+		time.Sleep(10 * time.Second)
+	}
+
+	return d.wrappedProvider.Present(domain, token, keyAuth)
+}
+
+// CleanUp delegates to the wrapped provider.
+func (d *CleaningDNSProvider) CleanUp(domain, token, keyAuth string) error {
+	return d.wrappedProvider.CleanUp(domain, token, keyAuth)
+}
+
+func (d *CleaningDNSProvider) cleanupRecords(fqdn string) error {
+	api, err := cfapi.NewWithAPIToken(d.cfAPIToken)
+	if err != nil {
+		return fmt.Errorf("failed to create cloudflare api client for cleanup: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	records, _, err := api.ListDNSRecords(ctx, cfapi.ZoneIdentifier(d.cfZoneID), cfapi.ListDNSRecordsParams{Name: fqdn, Type: "TXT"})
+	if err != nil {
+		return fmt.Errorf("failed to list DNS records for cleanup: %w", err)
+	}
+
+	if len(records) == 0 {
+		logging.Info("[CLEANUP] No stale records found for %s. Good.", fqdn)
+		return nil
+	}
+
+	logging.Info("[CLEANUP] Found %d stale record(s) for %s. Deleting them now.", len(records), fqdn)
+	for _, rec := range records {
+		logging.Info("[CLEANUP] Deleting record ID %s with content: %s", rec.ID, rec.Content)
+		err := api.DeleteDNSRecord(ctx, cfapi.ZoneIdentifier(d.cfZoneID), rec.ID)
+		if err != nil {
+			// Log the specific failure but continue trying to delete others.
+			logging.Warn("[CLEANUP] Failed to delete record ID %s: %v", rec.ID, err)
+		}
+	}
+
+	return nil
 }
