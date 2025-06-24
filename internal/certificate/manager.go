@@ -116,7 +116,7 @@ func (d *DebuggingDNSProvider) Present(domain, token, keyAuth string) error {
 	logging.Info("[DEBUG] Wrapped provider 'Present' call completed. Now verifying record existence directly with Cloudflare API.")
 
 	// Construct the FQDN for the TXT record
-	fqdn := dns01.ToFqdn(domain)
+	fqdn := fmt.Sprintf("_acme-challenge.%s", domain)
 
 	// Poll Cloudflare API to confirm the record was created
 	return d.verifyRecordCreation(fqdn)
