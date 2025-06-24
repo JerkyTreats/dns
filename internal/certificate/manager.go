@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	mathrand "math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -295,6 +296,51 @@ func (m *Manager) ObtainCertificate(domain string) error {
 	return nil
 }
 
+// ObtainCertificateWithRetry obtains a certificate with exponential backoff retry logic.
+// This method will keep retrying until successful or max retries is reached.
+// Returns an error if max retries is reached and certificate obtainment fails.
+func (m *Manager) ObtainCertificateWithRetry(domain string) error {
+	const (
+		initialDelay = 5 * time.Second
+		maxDelay     = 5 * time.Minute
+		maxRetries   = 10 // Set a reasonable max retry limit
+	)
+
+	delay := initialDelay
+	attempt := 1
+
+	for {
+		logging.Info("Certificate obtainment attempt %d for domain: %s", attempt, domain)
+
+		err := m.ObtainCertificate(domain)
+		if err == nil {
+			logging.Info("Certificate successfully obtained for domain: %s", domain)
+			return nil
+		}
+
+		logging.Error("Certificate obtainment failed (attempt %d): %v", attempt, err)
+
+		if attempt >= maxRetries {
+			logging.Error("Certificate obtainment failed after %d attempts, giving up", attempt)
+			return fmt.Errorf("certificate obtainment failed after %d attempts: %w", attempt, err)
+		}
+
+		logging.Info("Retrying certificate obtainment in %v", delay)
+		time.Sleep(delay)
+
+		// Exponential backoff with jitter
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+		// Add jitter (±25%)
+		jitter := time.Duration(float64(delay) * 0.25 * (2*mathrand.Float64() - 1))
+		delay += jitter
+
+		attempt++
+	}
+}
+
 // StartRenewalLoop starts a ticker to periodically check and renew the certificate.
 func (m *Manager) StartRenewalLoop(domain string) {
 	logging.Info("Starting certificate renewal loop")
@@ -350,13 +396,12 @@ func (m *Manager) checkAndRenew(domain string, renewalInterval time.Duration) {
 
 	logging.Info("Removed old certificate and key for domain: %s", domain)
 
-	if err := m.ObtainCertificate(domain); err != nil {
-		logging.Error("Failed to obtain new certificate for domain %s: %v", domain, err)
+	// Use retry logic for certificate renewal
+	if err := m.ObtainCertificateWithRetry(domain); err != nil {
+		logging.Error("Certificate renewal failed after retries: %v", err)
 		return
 	}
-
-	logging.Info("Successfully renewed certificate for domain: %s", domain)
-	// Note: TLS enablement is handled in ObtainCertificate method
+	logging.Info("Certificate renewal process completed for domain: %s", domain)
 }
 
 func (m *Manager) saveCertificate(certs *certificate.Resource) error {

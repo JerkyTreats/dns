@@ -109,35 +109,14 @@ func main() {
 		// Launch certificate obtainment in background so the HTTP server can
 		// start immediately.
 		go func() {
-			logging.Info("Initializing certificate manager with CoreDNS integration...")
-
-			var err error
-			certManager, err = certificate.NewManager()
-			if err != nil {
-				logging.Error("Failed to create certificate manager: %v", err)
-				return
-			}
-
-			// Integrate certificate manager with ConfigManager for TLS enablement
-			certManager.SetCoreDNSManager(dnsManager)
-
-			domain := config.GetString(certificate.CertDomainKey)
-			if domain == "" {
-				logging.Warn("certificate.domain not configured – skipping certificate obtainment")
-				return
-			}
-
-			if err := certManager.ObtainCertificate(domain); err != nil {
-				logging.Error("Certificate obtain failed: %v", err)
-				return
-			}
-
-			// Signal the main routine that the certificate is ready.
-			close(certReadyCh)
-
-			// Start background renewal loop if enabled
-			if config.GetBool(certificate.CertRenewalEnabledKey) {
-				go certManager.StartRenewalLoop(domain)
+			for {
+				if err := runCertificateProcess(dnsManager, certReadyCh); err != nil {
+					logging.Error("Certificate process failed, restarting in 30 seconds: %v", err)
+					time.Sleep(30 * time.Second)
+					continue
+				}
+				// If we get here, the certificate process completed successfully
+				break
 			}
 		}()
 	}
@@ -394,4 +373,39 @@ func ensureCorefileExists(dnsMgr *coredns.Manager) {
 		return
 	}
 	logging.Info("Seeded initial Corefile at %s", configPath)
+}
+
+func runCertificateProcess(dnsMgr *coredns.Manager, certReadyCh chan struct{}) error {
+	logging.Info("Initializing certificate manager with CoreDNS integration...")
+
+	var err error
+	certManager, err = certificate.NewManager()
+	if err != nil {
+		logging.Error("Failed to create certificate manager: %v", err)
+		return err
+	}
+
+	// Integrate certificate manager with ConfigManager for TLS enablement
+	certManager.SetCoreDNSManager(dnsMgr)
+
+	domain := config.GetString(certificate.CertDomainKey)
+	if domain == "" {
+		logging.Warn("certificate.domain not configured – skipping certificate obtainment")
+		return nil
+	}
+
+	// Use retry logic for certificate obtainment
+	if err := certManager.ObtainCertificateWithRetry(domain); err != nil {
+		return err
+	}
+
+	// Signal the main routine that the certificate is ready.
+	close(certReadyCh)
+
+	// Start background renewal loop if enabled
+	if config.GetBool(certificate.CertRenewalEnabledKey) {
+		go certManager.StartRenewalLoop(domain)
+	}
+
+	return nil
 }
