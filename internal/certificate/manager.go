@@ -119,6 +119,7 @@ func NewManager() (*Manager, error) {
 
 		cfConfig := cloudflare.NewDefaultConfig()
 		cfConfig.AuthToken = cfToken
+		cfConfig.PropagationTimeout = 2 * time.Minute
 
 		var discoveredZoneID string
 		// Attempt to resolve ZoneID automatically based on certificate domain
@@ -236,9 +237,6 @@ func NewManager() (*Manager, error) {
 	// Add DNS timeout configuration
 	logging.Info("Adding DNS timeout for DNS01 challenge: %v", dnsTimeout)
 	dns01Options = append(dns01Options, dns01.AddDNSTimeout(dnsTimeout))
-
-	// Add exponential back-off propagation checks (respecting dnsTimeout)
-	dns01Options = append(dns01Options, exponentialBackoff(dnsTimeout))
 
 	// Disable complete propagation requirement for container environments
 	// This helps avoid issues where Docker's internal DNS differs from public DNS
