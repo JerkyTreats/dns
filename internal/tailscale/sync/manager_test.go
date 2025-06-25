@@ -53,7 +53,7 @@ func (m *MockTailscaleClient) ListDevices() ([]tailscale.Device, error) {
 func TestNewManager(t *testing.T) {
 	// Because NewManager gets config globally, we need to set it for the test.
 	config.ResetForTest()
-	config.SetForTest("dns.internal.origin", "internal.jerkytreats.dev")
+	config.SetForTest("dns.internal.origin", "test.example.com")
 
 	mockCoredns := &MockCorednsManager{}
 	mockTailscale := &MockTailscaleClient{}
@@ -69,7 +69,7 @@ func TestNewManager(t *testing.T) {
 
 func TestSyncDevices(t *testing.T) {
 	config.ResetForTest()
-	config.SetForTest("dns.internal.origin", "internal.jerkytreats.dev")
+	config.SetForTest("dns.internal.origin", "test.example.com")
 
 	t.Run("successful sync with new and updated devices", func(t *testing.T) {
 		mockCoredns := &MockCorednsManager{}

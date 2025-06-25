@@ -666,3 +666,44 @@ func (d *CleaningDNSProvider) cleanupRecords(fqdn string) error {
 
 	return nil
 }
+
+// RestoreTLSWithExistingCertificates checks for existing certificates and enables TLS
+// without attempting to obtain new certificates. This is useful when certificates
+// already exist but the DNS configuration was reset.
+func (m *Manager) RestoreTLSWithExistingCertificates(domain string) error {
+	logging.Info("Attempting to restore TLS configuration with existing certificates for domain: %s", domain)
+
+	// Check if certificate files exist
+	if _, err := os.Stat(m.certPath); os.IsNotExist(err) {
+		return fmt.Errorf("certificate file not found at %s", m.certPath)
+	}
+
+	if _, err := os.Stat(m.keyPath); os.IsNotExist(err) {
+		return fmt.Errorf("private key file not found at %s", m.keyPath)
+	}
+
+	// Validate certificate is not expired
+	certInfo, err := GetCertificateInfo(m.certPath)
+	if err != nil {
+		return fmt.Errorf("failed to read certificate info: %w", err)
+	}
+
+	if time.Now().After(certInfo.NotAfter) {
+		return fmt.Errorf("certificate has expired on %v", certInfo.NotAfter)
+	}
+
+	logging.Info("Found valid certificate for domain %s, expires on %v", domain, certInfo.NotAfter)
+
+	// Enable TLS in CoreDNS configuration
+	if m.corednsConfigManager != nil {
+		logging.Info("Enabling TLS in CoreDNS configuration for domain: %s", domain)
+		if err := m.corednsConfigManager.EnableTLS(domain, m.certPath, m.keyPath); err != nil {
+			return fmt.Errorf("failed to enable TLS in CoreDNS configuration: %w", err)
+		}
+		logging.Info("Successfully enabled TLS in CoreDNS configuration for domain: %s", domain)
+	} else {
+		return fmt.Errorf("CoreDNS configuration manager not set")
+	}
+
+	return nil
+}

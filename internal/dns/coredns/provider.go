@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
 )
 
@@ -22,8 +23,10 @@ func (d *DNSProvider) Present(domain, token, keyAuth string) error {
 
 	fqdn, value := dns01.GetRecord(domain, keyAuth)
 
-	challengeContent := fmt.Sprintf(`$ORIGIN _acme-challenge.internal.jerkytreats.dev.
-@	60 IN	TXT	"%s"`, value)
+	// Use configured domain instead of hardcoded value
+	configuredDomain := config.GetString(DNSDomainKey)
+	challengeContent := fmt.Sprintf(`$ORIGIN _acme-challenge.%s.
+@	60 IN	TXT	"%s"`, configuredDomain, value)
 
 	challengeFile := d.getChallengeFilePath(fqdn)
 
@@ -63,7 +66,7 @@ func (d *DNSProvider) CleanUp(domain, token, keyAuth string) error {
 }
 
 func (d *DNSProvider) getChallengeFilePath(fqdn string) string {
-	// Always create the static ACME challenge zone file that matches the Corefile configuration
-	// This should be _acme-challenge.internal.jerkytreats.dev.zone regardless of the domain
-	return filepath.Join(d.zonesPath, "_acme-challenge.internal.jerkytreats.dev.zone")
+	// Use configured domain for the ACME challenge zone file
+	configuredDomain := config.GetString(DNSDomainKey)
+	return filepath.Join(d.zonesPath, fmt.Sprintf("_acme-challenge.%s.zone", configuredDomain))
 }

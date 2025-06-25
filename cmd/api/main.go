@@ -461,9 +461,18 @@ func runCertificateProcess(dnsMgr *coredns.Manager, certReadyCh chan struct{}) e
 		return nil
 	}
 
-	// Use retry logic for certificate obtainment
-	if err := certManager.ObtainCertificateWithRetry(domain); err != nil {
-		return err
+	// First, try to restore TLS configuration with existing certificates
+	logging.Info("Checking for existing certificates for domain: %s", domain)
+	if err := certManager.RestoreTLSWithExistingCertificates(domain); err != nil {
+		logging.Warn("Could not restore existing certificates: %v", err)
+		logging.Info("Attempting to obtain new certificate...")
+
+		// Use retry logic for certificate obtainment only if restore failed
+		if err := certManager.ObtainCertificateWithRetry(domain); err != nil {
+			return err
+		}
+	} else {
+		logging.Info("Successfully restored TLS configuration with existing certificates")
 	}
 
 	// Signal the main routine that the certificate is ready.
