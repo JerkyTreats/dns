@@ -75,7 +75,36 @@ func main() {
 	logging.Info("Application starting...")
 	defer logging.Sync()
 
-	dnsManager = newCoreDNSManager()
+	// Initialize Tailscale client early for coordination
+	var tailscaleClient *tailscale.Client
+	var currentDeviceIP string
+
+	// Try to initialize Tailscale client (required for proper NS records)
+	logging.Info("Initializing Tailscale client for NS record configuration...")
+	client, err := tailscale.NewClient()
+	if err != nil {
+		logging.Error("Failed to initialize Tailscale client: %v", err)
+		logging.Error("Tailscale client is required for proper NS record configuration")
+		logging.Error("Without Tailscale IP, NS records would point to 127.0.0.1, making DNS unusable for external clients")
+		os.Exit(1)
+	}
+
+	tailscaleClient = client
+	currentDeviceIP, err = tailscaleClient.GetCurrentDeviceIP()
+	if err != nil {
+		logging.Error("Failed to get current device Tailscale IP: %v", err)
+		logging.Error("Current device's Tailscale IP is required for proper NS record configuration")
+		logging.Error("Without Tailscale IP, NS records would point to 127.0.0.1, making DNS unusable for external clients")
+		logging.Error("Possible causes:")
+		logging.Error("  1. Current device is not connected to Tailscale network")
+		logging.Error("  2. Current device hostname doesn't match Tailscale device name")
+		logging.Error("  3. Tailscale API configuration is incorrect")
+		os.Exit(1)
+	}
+
+	logging.Info("Tailscale client initialized successfully, device IP: %s", currentDeviceIP)
+
+	dnsManager = newCoreDNSManager(currentDeviceIP)
 
 	// Ensure a Corefile exists; if not, write a minimal one from the template so
 	// the CoreDNS container can start successfully on first deploy.
@@ -182,7 +211,7 @@ func main() {
 	// Start sync process in background (non-blocking)
 	logging.Info("Starting sync process in background...")
 	go func() {
-		if sm := maybeSync(dnsManager); sm != nil {
+		if sm := maybeSync(dnsManager, tailscaleClient); sm != nil {
 			syncManager = sm
 			logging.Info("Background sync process completed successfully")
 		} else {
@@ -384,13 +413,13 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // newCoreDNSManager constructs and returns a configured CoreDNS manager.
-func newCoreDNSManager() *coredns.Manager {
+func newCoreDNSManager(currentDeviceIP string) *coredns.Manager {
 	configPath := config.GetString(coredns.DNSConfigPathKey)
 	templatePath := config.GetString(coredns.DNSTemplatePathKey)
 	zonesPath := config.GetString(coredns.DNSZonesPathKey)
 	domain := config.GetString(coredns.DNSDomainKey)
 
-	dnsMgr := coredns.NewManager(configPath, templatePath, zonesPath, domain)
+	dnsMgr := coredns.NewManager(configPath, templatePath, zonesPath, domain, currentDeviceIP)
 
 	// Add base domain so zone files can refer to it.
 	baseDomain := config.GetString(coredns.DNSDomainKey)
@@ -401,7 +430,7 @@ func newCoreDNSManager() *coredns.Manager {
 
 // maybeSync initialises dynamic zone sync if it is enabled in config.
 // It returns the *sync.Manager instance or nil if sync is disabled or fails.
-func maybeSync(dnsMgr *coredns.Manager) *sync.Manager {
+func maybeSync(dnsMgr *coredns.Manager, tailscaleClient *tailscale.Client) *sync.Manager {
 	if !config.GetBool(SyncEnabledKey) {
 		logging.Info("Sync is disabled")
 		return nil
@@ -409,10 +438,15 @@ func maybeSync(dnsMgr *coredns.Manager) *sync.Manager {
 
 	logging.Info("Sync is enabled, initializing dynamic zone sync...")
 
-	tailscaleClient, err := tailscale.NewClient()
-	if err != nil {
-		logging.Error("Failed to create Tailscale client: %v", err)
-		return nil
+	// If we don't have a Tailscale client from main, try to create one
+	if tailscaleClient == nil {
+		logging.Info("No Tailscale client provided, attempting to create one for sync...")
+		var err error
+		tailscaleClient, err = tailscale.NewClient()
+		if err != nil {
+			logging.Error("Failed to create Tailscale client for sync: %v", err)
+			return nil
+		}
 	}
 
 	sm, err := sync.NewManager(dnsMgr, tailscaleClient)

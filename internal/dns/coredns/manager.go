@@ -88,13 +88,24 @@ type Manager struct {
 
 	// Dependencies
 	restartManager RestartManagerInterface
+
+	// NS server IP for zone file generation
+	nsIP string
 }
 
 // NewManager creates a new CoreDNS manager.
 // NOTE: this replaces both the old Manager and ConfigManager constructors.
-func NewManager(configPath, templatePath, zonesPath string, domain string) *Manager {
+// nsIP is the IP address to use for NS records in zone files. If empty, defaults to 127.0.0.1 (mainly for tests)
+func NewManager(configPath, templatePath, zonesPath string, domain string, nsIP string) *Manager {
 	if templatePath == "" {
 		templatePath = "configs/coredns/Corefile.template"
+	}
+
+	if nsIP == "" {
+		nsIP = "127.0.0.1"
+		logging.Warn("No NS IP provided, using fallback: %s (this should only happen in tests)", nsIP)
+	} else {
+		logging.Info("Using NS IP for zone files: %s", nsIP)
 	}
 
 	manager := &Manager{
@@ -104,6 +115,7 @@ func NewManager(configPath, templatePath, zonesPath string, domain string) *Mana
 		zonesPath:      zonesPath,
 		domains:        make(map[string]*DomainConfig),
 		restartManager: NewRestartManager(),
+		nsIP:           nsIP,
 	}
 
 	// Load existing domains from Corefile if it exists
@@ -270,13 +282,6 @@ func (m *Manager) AddZone(serviceName string) error {
 	admin := fmt.Sprintf("admin.%s.", m.domain)
 	serial := generateSerial()
 
-	// Determine the appropriate IP for the NS record
-	// In Docker environments, use the service name; otherwise use localhost
-	nsIP := "127.0.0.1"
-
-	// Import the healthcheck package at the top if not already imported
-	// to access IsDockerEnvironment()
-
 	// Create a proper zone file with correct formatting and NS record structure
 	zoneContent := fmt.Sprintf(`$ORIGIN %s
 @	3600 IN	SOA %s %s (
@@ -291,7 +296,7 @@ func (m *Manager) AddZone(serviceName string) error {
 ; NS record definition - points to this DNS server
 ns	IN A	%s
 
-`, zoneDomain, ns, admin, serial, ns, nsIP)
+`, zoneDomain, ns, admin, serial, ns, m.nsIP)
 
 	if err := os.MkdirAll(m.zonesPath, 0755); err != nil {
 		return fmt.Errorf("failed to create zones directory: %w", err)

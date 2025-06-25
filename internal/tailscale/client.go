@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -182,4 +183,60 @@ func (c *Client) ValidateConnection() error {
 		return fmt.Errorf("failed to connect to Tailscale API: %w", err)
 	}
 	return nil
+}
+
+// GetCurrentDeviceIP retrieves the Tailscale IP address of the current device
+// It identifies the current device by matching the system hostname
+func (c *Client) GetCurrentDeviceIP() (string, error) {
+	devices, err := c.ListDevices()
+	if err != nil {
+		return "", fmt.Errorf("failed to list devices to find current device: %w", err)
+	}
+
+	// Get the current system hostname
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("failed to get system hostname: %w", err)
+	}
+
+	logging.Debug("Looking for current device with hostname: %s", hostname)
+
+	// Try to find the current device by matching hostname
+	for _, device := range devices {
+		// Try exact hostname match first
+		if device.Hostname == hostname {
+			if !device.Online {
+				return "", fmt.Errorf("current device '%s' is offline", hostname)
+			}
+
+			// Find the Tailscale IP (typically 100.x.x.x range)
+			for _, addr := range device.Addresses {
+				if strings.HasPrefix(addr, "100.") {
+					logging.Info("Found current device Tailscale IP: %s", addr)
+					return addr, nil
+				}
+			}
+			return "", fmt.Errorf("no Tailscale IP found for current device '%s'", hostname)
+		}
+
+		// Try hostname without domain suffix match
+		deviceShortName := strings.Split(device.Hostname, ".")[0]
+		systemShortName := strings.Split(hostname, ".")[0]
+		if deviceShortName == systemShortName {
+			if !device.Online {
+				return "", fmt.Errorf("current device '%s' is offline", hostname)
+			}
+
+			// Find the Tailscale IP (typically 100.x.x.x range)
+			for _, addr := range device.Addresses {
+				if strings.HasPrefix(addr, "100.") {
+					logging.Info("Found current device Tailscale IP: %s (matched by short hostname)", addr)
+					return addr, nil
+				}
+			}
+			return "", fmt.Errorf("no Tailscale IP found for current device '%s'", hostname)
+		}
+	}
+
+	return "", fmt.Errorf("current device with hostname '%s' not found in Tailscale network", hostname)
 }
