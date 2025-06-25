@@ -311,6 +311,49 @@ func (m *Manager) AddRecord(serviceName, name, ip string) error {
 	return m.Reload()
 }
 
+// DropRecord removes a specific A record from a zone file.
+func (m *Manager) DropRecord(serviceName, name, ip string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logging.Info("Dropping record: %s IN A %s from zone %s", name, ip, serviceName)
+
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.%s.zone", serviceName, m.domain))
+
+	content, err := os.ReadFile(zoneFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logging.Warn("Zone file not found, cannot drop record: %s", zoneFile)
+			return nil
+		}
+		return fmt.Errorf("failed to read zone file %s: %w", zoneFile, err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
+	recordFound := false
+
+	// Regex to match the record line, tolerant of whitespace variations.
+	recordLineRegex := regexp.MustCompile(fmt.Sprintf(`^\s*%s\s+IN\s+A\s+%s\s*$`, regexp.QuoteMeta(name), regexp.QuoteMeta(ip)))
+
+	for _, line := range lines {
+		if recordLineRegex.MatchString(line) {
+			logging.Debug("Dropping line from zone %s: %s", serviceName, line)
+			recordFound = true
+			continue // Skip this line
+		}
+		newLines = append(newLines, line)
+	}
+
+	if !recordFound {
+		logging.Info("Record for %s with IP %s not found in zone %s, nothing to do", name, ip, serviceName)
+		return nil
+	}
+
+	newContent := strings.Join(newLines, "\n")
+	return os.WriteFile(zoneFile, []byte(newContent), 0644)
+}
+
 // RemoveRecord removes an A record from the zone file and triggers a CoreDNS reload.
 func (m *Manager) RemoveRecord(serviceName, name string) error {
 	m.mu.Lock()

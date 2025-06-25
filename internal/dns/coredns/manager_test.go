@@ -53,6 +53,41 @@ func TestManager(t *testing.T) {
 		assert.Contains(t, string(content), expectedRecord)
 	})
 
+	t.Run("DropRecord", func(t *testing.T) {
+		// Setup: Create a zone file with a couple of records
+		zoneFileName := filepath.Join(zonesPath, "test-service-drop.test.local.zone")
+		initialContent := `$ORIGIN test-service-drop.test.local.
+@	3600 IN	SOA ns1.test.local. admin.test.local. ( 2024061601 7200 3600 1209600 3600 )
+@	3600 IN	NS ns1.test.local.
+record-to-keep	IN A	192.168.1.1
+record-to-drop	IN A	192.168.1.2
+`
+		err := os.MkdirAll(zonesPath, 0755)
+		require.NoError(t, err)
+		err = os.WriteFile(zoneFileName, []byte(initialContent), 0644)
+		require.NoError(t, err)
+
+		// Action: Drop one of the records
+		err = manager.DropRecord("test-service-drop", "record-to-drop", "192.168.1.2")
+		require.NoError(t, err)
+
+		// Verification
+		content, err := os.ReadFile(zoneFileName)
+		require.NoError(t, err)
+		contentStr := string(content)
+
+		assert.NotContains(t, contentStr, "record-to-drop	IN A	192.168.1.2")
+		assert.Contains(t, contentStr, "record-to-keep	IN A	192.168.1.1")
+
+		// Test dropping a non-existent record
+		err = manager.DropRecord("test-service-drop", "non-existent-record", "1.2.3.4")
+		require.NoError(t, err)
+
+		contentAfterBogusDrop, err := os.ReadFile(zoneFileName)
+		require.NoError(t, err)
+		assert.Equal(t, string(content), string(contentAfterBogusDrop), "Dropping a non-existent record should not change the file")
+	})
+
 	t.Run("Reload", func(t *testing.T) {
 		err := manager.Reload()
 		require.NoError(t, err)

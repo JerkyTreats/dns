@@ -1,236 +1,111 @@
-package sync_test
+// Package sync provides dynamic zone synchronization using Tailscale device discovery.
+package sync
 
 import (
+	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/jerkytreats/dns/internal/config"
-	"github.com/jerkytreats/dns/internal/tailscale/sync"
+	"github.com/jerkytreats/dns/internal/tailscale"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
-// createTestSyncConfig creates a test sync configuration
-func createTestSyncConfig() config.SyncConfig {
-	return config.SyncConfig{
-		Origin: "internal.test.local",
-		Devices: []config.SyncDevice{
-			{
-				Name:          "ns",
-				TailscaleName: "omnitron",
-				Aliases:       []string{"omnitron", "dns"},
-				Description:   "NAS, DNS host",
-				Enabled:       true,
-			},
-			{
-				Name:          "dev",
-				TailscaleName: "revenantor",
-				Aliases:       []string{"macbook"},
-				Description:   "MacBook development",
-				Enabled:       true,
-			},
-			{
-				Name:          "disabled",
-				TailscaleName: "offline-device",
-				Aliases:       []string{"offline"},
-				Description:   "Offline device",
-				Enabled:       false,
-			},
-		},
-	}
+// MockCorednsManager is a mock type for the coredns.Manager type
+type MockCorednsManager struct {
+	mock.Mock
 }
 
-func setupTestConfig() {
-	config.ResetForTest()
-	config.SetForTest("dns.internal.origin", "internal.test.local")
-	config.SetForTest("dns.internal.sync_devices", []map[string]interface{}{
-		{
-			"name":           "ns",
-			"tailscale_name": "omnitron",
-			"aliases":        []string{"omnitron", "dns"},
-			"description":    "NAS, DNS host",
-			"enabled":        true,
-		},
-		{
-			"name":           "dev",
-			"tailscale_name": "revenantor",
-			"aliases":        []string{"macbook"},
-			"description":    "MacBook development",
-			"enabled":        true,
-		},
-		{
-			"name":           "disabled",
-			"tailscale_name": "offline-device",
-			"aliases":        []string{"offline"},
-			"description":    "Offline device",
-			"enabled":        false,
-		},
-	})
+func (m *MockCorednsManager) AddZone(serviceName string) error {
+	args := m.Called(serviceName)
+	return args.Error(0)
+}
+
+func (m *MockCorednsManager) AddRecord(serviceName, name, ip string) error {
+	args := m.Called(serviceName, name, ip)
+	return args.Error(0)
+}
+
+func (m *MockCorednsManager) DropRecord(serviceName, name, ip string) error {
+	args := m.Called(serviceName, name, ip)
+	return args.Error(0)
+}
+
+func (m *MockCorednsManager) Reload() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// MockTailscaleClient is a mock type for the tailscale.Client type
+type MockTailscaleClient struct {
+	mock.Mock
+}
+
+func (m *MockTailscaleClient) ListDevices() ([]tailscale.Device, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]tailscale.Device), args.Error(1)
 }
 
 func TestNewManager(t *testing.T) {
-	setupTestConfig()
-	defer config.ResetForTest()
+	// Because NewManager gets config globally, we need to set it for the test.
+	config.ResetForTest()
+	config.SetForTest("dns.internal.origin", "internal.jerkytreats.dev")
 
-	// Test with nil dependencies for now - integration tests will test with real dependencies
-	manager, err := sync.NewManager(nil, nil)
+	mockCoredns := &MockCorednsManager{}
+	mockTailscale := &MockTailscaleClient{}
 
-	assert.NoError(t, err)
-	assert.NotNil(t, manager)
-	// Note: config will be loaded from actual config file, not test config
+	manager, err := NewManager(mockCoredns, mockTailscale)
+	require.NoError(t, err)
+	require.NotNil(t, manager)
+
+	assert.Equal(t, mockCoredns, manager.corednsManager)
+	assert.Equal(t, mockTailscale, manager.tailscaleClient)
+	assert.NotNil(t, manager.ipCache)
 }
 
-func TestValidateSyncConfig(t *testing.T) {
-	tests := []struct {
-		name          string
-		setupConfig   func()
-		expectError   bool
-		errorContains string
-	}{
-		{
-			name: "Valid configuration",
-			setupConfig: func() {
-				config.ResetForTest()
-				config.SetForTest("dns.internal.origin", "internal.test.local")
-				config.SetForTest("dns.internal.sync_devices", []map[string]interface{}{
-					{
-						"name":           "ns",
-						"tailscale_name": "omnitron",
-						"enabled":        true,
-					},
-				})
-			},
-			expectError: false,
-		},
-		{
-			name: "Missing origin",
-			setupConfig: func() {
-				config.ResetForTest()
-				config.SetForTest("dns.internal.sync_devices", []map[string]interface{}{
-					{
-						"name":           "ns",
-						"tailscale_name": "omnitron",
-						"enabled":        true,
-					},
-				})
-			},
-			expectError:   true,
-			errorContains: "dns.internal.origin is required",
-		},
-		{
-			name: "No sync devices",
-			setupConfig: func() {
-				config.ResetForTest()
-				config.SetForTest("dns.internal.origin", "internal.test.local")
-				config.SetForTest("dns.internal.sync_devices", []map[string]interface{}{})
-			},
-			expectError:   true,
-			errorContains: "at least one sync device must be configured",
-		},
-		{
-			name: "Device missing name",
-			setupConfig: func() {
-				config.ResetForTest()
-				config.SetForTest("dns.internal.origin", "internal.test.local")
-				config.SetForTest("dns.internal.sync_devices", []map[string]interface{}{
-					{
-						"tailscale_name": "omnitron",
-						"enabled":        true,
-					},
-				})
-			},
-			expectError:   true,
-			errorContains: "name is required",
-		},
-		{
-			name: "Device missing tailscale_name",
-			setupConfig: func() {
-				config.ResetForTest()
-				config.SetForTest("dns.internal.origin", "internal.test.local")
-				config.SetForTest("dns.internal.sync_devices", []map[string]interface{}{
-					{
-						"name":    "ns",
-						"enabled": true,
-					},
-				})
-			},
-			expectError:   true,
-			errorContains: "tailscale_name is required",
-		},
-	}
+func TestSyncDevices(t *testing.T) {
+	config.ResetForTest()
+	config.SetForTest("dns.internal.origin", "internal.jerkytreats.dev")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.setupConfig()
-			defer config.ResetForTest()
+	t.Run("successful sync with new and updated devices", func(t *testing.T) {
+		mockCoredns := &MockCorednsManager{}
+		mockTailscale := &MockTailscaleClient{}
 
-			manager, err := sync.NewManager(nil, nil)
+		manager, _ := NewManager(mockCoredns, mockTailscale)
+		require.NotNil(t, manager)
 
-			if tt.expectError {
-				assert.Error(t, err)
-				if tt.errorContains != "" {
-					assert.Contains(t, err.Error(), tt.errorContains)
-				}
-			} else {
-				assert.NoError(t, err)
-				assert.NotNil(t, manager)
+		// Pre-cache an existing device to test the update path
+		manager.cacheIP("device-b", "100.0.0.2-old")
 
-				// Initially, zone should not be synced
-				assert.False(t, manager.IsZoneSynced())
+		devices := []tailscale.Device{
+			{Hostname: "device-a", Addresses: []string{"100.0.0.1", "fe80::1"}}, // New device
+			{Hostname: "device-b", Addresses: []string{"100.0.0.2"}},            // IP updated
+			{Hostname: "device-c", Addresses: []string{}},                       // No IP, should be skipped
+			{Hostname: "device-d", Addresses: []string{"192.168.1.10"}},         // No tailscale IP, should be skipped
+			{Hostname: "device-e", Addresses: []string{"100.0.0.5"}},            // Add should fail
+		}
 
-				// TODO: Add more advanced tests with mock CoreDNS manager
-			}
-		})
-	}
+		mockTailscale.On("ListDevices").Return(devices, nil).Once()
+		mockCoredns.On("AddRecord", "internal", "device-a", "100.0.0.1").Return(nil).Once()
+		mockCoredns.On("DropRecord", "internal", "device-b", "100.0.0.2-old").Return(nil).Once()
+		mockCoredns.On("AddRecord", "internal", "device-b", "100.0.0.2").Return(nil).Once()
+		mockCoredns.On("AddRecord", "internal", "device-e", "100.0.0.5").Return(errors.New("add failed")).Once()
+		mockCoredns.On("Reload").Return(nil).Once()
+
+		result, err := manager.syncDevices("internal")
+		require.NoError(t, err)
+
+		assert.False(t, result.Success) // Success should be false because one device failed
+		assert.Equal(t, 5, result.TotalDevices)
+		assert.Equal(t, 2, result.ResolvedDevices) // a, b
+		assert.Equal(t, 2, result.SkippedDevices)  // c, d
+		assert.Equal(t, 1, result.FailedDevices)   // e
+
+		mockTailscale.AssertExpectations(t)
+		mockCoredns.AssertExpectations(t)
+	})
 }
-
-func TestDeviceResolutionStructure(t *testing.T) {
-	// This test simply verifies the structure of the DeviceResolution type
-	// to ensure all expected fields are present.
-	resolution := sync.DeviceResolution{
-		Device: config.SyncDevice{
-			Name:          "test-device",
-			TailscaleName: "test-tailscale",
-			Enabled:       true,
-		},
-		IP:      "100.1.1.1",
-		Online:  true,
-		Error:   nil,
-		Skipped: false,
-		Reason:  "",
-	}
-	assert.Equal(t, "test-device", resolution.Device.Name)
-	assert.Equal(t, "100.1.1.1", resolution.IP)
-	assert.True(t, resolution.Online)
-}
-
-func TestSyncResultStructure(t *testing.T) {
-	// This test verifies the structure of the SyncResult type.
-	result := sync.SyncResult{
-		Success:         true,
-		TotalDevices:    1,
-		ResolvedDevices: 1,
-		SkippedDevices:  0,
-		FailedDevices:   0,
-		Resolutions:     []sync.DeviceResolution{},
-		Error:           nil,
-	}
-	assert.True(t, result.Success)
-	assert.Equal(t, 1, result.TotalDevices)
-}
-
-func TestSyncConfigValidation(t *testing.T) {
-	// This test validates that the SyncConfig struct has the expected fields.
-	// This helps catch accidental changes to the config structure.
-	conf := config.SyncConfig{
-		Origin:  "internal.test.local",
-		Devices: []config.SyncDevice{},
-	}
-	assert.Equal(t, "internal.test.local", conf.Origin)
-}
-
-// NOTE: Integration tests should be added separately to test:
-// - EnsureInternalZone with real CoreDNS and Tailscale clients
-// - RefreshDeviceIPs with real dependencies
-// - ValidateConfiguration with real Tailscale client
-// - Full sync flow end-to-end
-// - Error handling with real failure scenarios

@@ -490,43 +490,33 @@ func TestGetSyncConfig(t *testing.T) {
 	ResetForTest()
 	defer ResetForTest()
 
-	// Create a temporary config file
+	// Create a temporary config file for testing sync config
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "config.yaml")
 	configContent := `
 dns:
   internal:
-    origin: "internal.test.local"
+    enabled: true
+    origin: "test.jerkytreats.dev"
     polling:
       enabled: true
       interval: "30m"
-    sync_devices:
-      - name: "test-device"
-        tailscale_name: "test-ts-device"
-        aliases: ["alias1", "alias2"]
-        description: "Test device"
-        enabled: true
 `
 	err := os.WriteFile(configFile, []byte(configContent), 0644)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	err = InitConfig(WithConfigPath(configFile))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
+	// Get the sync config and verify values
 	syncConfig := GetSyncConfig()
-
-	assert.Equal(t, "internal.test.local", syncConfig.Origin)
-	require.Len(t, syncConfig.Devices, 1)
-	assert.Equal(t, "test-device", syncConfig.Devices[0].Name)
-	assert.Equal(t, "test-ts-device", syncConfig.Devices[0].TailscaleName)
-	assert.Equal(t, []string{"alias1", "alias2"}, syncConfig.Devices[0].Aliases)
-	assert.True(t, syncConfig.Devices[0].Enabled)
+	assert.True(t, syncConfig.Enabled)
+	assert.Equal(t, "test.jerkytreats.dev", syncConfig.Origin)
 	assert.True(t, syncConfig.Polling.Enabled)
 	assert.Equal(t, 30*time.Minute, syncConfig.Polling.Interval)
 }
 
 func TestValidateTailscaleConfig(t *testing.T) {
-	// Reset config before test
 	ResetForTest()
 	defer ResetForTest()
 
@@ -608,7 +598,6 @@ func TestConfigurationKeys(t *testing.T) {
 	// This test ensures that the constants for config keys are correct.
 	assert.Equal(t, "log_level", LogLevelKey)
 	assert.Equal(t, "dns.internal.origin", DNSInternalOriginKey)
-	assert.Equal(t, "dns.internal.sync_devices", DNSSyncDevicesKey)
 	assert.Equal(t, "dns.internal.polling.enabled", DNSSyncPollingEnabledKey)
 	assert.Equal(t, "dns.internal.polling.interval", DNSSyncPollingIntervalKey)
 	assert.Equal(t, "tailscale.api_key", TailscaleAPIKeyKey)

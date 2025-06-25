@@ -8,10 +8,24 @@ import (
 	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
-	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/tailscale"
 )
+
+// CorednsManager defines the interface for managing CoreDNS.
+// This allows for mocking in tests.
+type CorednsManager interface {
+	AddZone(serviceName string) error
+	AddRecord(serviceName, name, ip string) error
+	DropRecord(serviceName, name, ip string) error
+	Reload() error
+}
+
+// TailscaleClient defines the interface for interacting with the Tailscale API.
+// This allows for mocking in tests.
+type TailscaleClient interface {
+	ListDevices() ([]tailscale.Device, error)
+}
 
 const (
 	// Default cache TTL for resolved IPs
@@ -26,34 +40,17 @@ const (
 
 // Manager handles dynamic zone synchronization with Tailscale integration
 type Manager struct {
-	corednsManager  *coredns.Manager
-	tailscaleClient *tailscale.Client
+	corednsManager  CorednsManager
+	tailscaleClient TailscaleClient
 	config          config.SyncConfig
 
-	// IP cache to reduce Tailscale API calls
-	ipCache    map[string]*cachedIP
+	// IP cache to map device HOSTNAME to IP
+	ipCache    map[string]string
 	cacheMutex sync.RWMutex
 
 	// Sync state
 	synced bool
 	mu     sync.Mutex
-}
-
-// cachedIP represents a cached IP address with TTL
-type cachedIP struct {
-	ip        string
-	timestamp time.Time
-	ttl       time.Duration
-}
-
-// DeviceResolution represents the result of resolving a device
-type DeviceResolution struct {
-	Device  config.SyncDevice
-	IP      string
-	Online  bool
-	Error   error
-	Skipped bool
-	Reason  string
 }
 
 // SyncResult represents the overall sync operation result
@@ -63,22 +60,18 @@ type SyncResult struct {
 	ResolvedDevices int
 	SkippedDevices  int
 	FailedDevices   int
-	Resolutions     []DeviceResolution
 	Error           error
 }
 
 // NewManager creates a new sync manager
-func NewManager(corednsManager *coredns.Manager, tailscaleClient *tailscale.Client) (*Manager, error) {
+func NewManager(corednsManager CorednsManager, tailscaleClient TailscaleClient) (*Manager, error) {
 	syncConfig := config.GetSyncConfig()
 
 	m := &Manager{
 		corednsManager:  corednsManager,
 		tailscaleClient: tailscaleClient,
 		config:          syncConfig,
-		ipCache:         make(map[string]*cachedIP),
-	}
-	if err := m.ValidateConfig(); err != nil {
-		return nil, fmt.Errorf("sync configuration validation failed: %w", err)
+		ipCache:         make(map[string]string),
 	}
 
 	return m, nil
@@ -134,287 +127,158 @@ func (m *Manager) createInternalZoneIfNeeded(zoneName string) error {
 	// Attempt to create the zone
 	// The CoreDNS manager should handle the case where zone already exists
 	if err := m.corednsManager.AddZone(zoneName); err != nil {
-		// Check if this is an "already exists" error by trying to add a test record
-		testErr := m.corednsManager.AddRecord(zoneName, "_sync_test", "127.0.0.1")
-		if testErr == nil {
-			// Zone exists and we can add records, so original error was likely "zone already exists"
-			logging.Debug("Internal zone already exists: %s", zoneName)
-			return nil
-		}
-		return err
+		return fmt.Errorf("failed to create internal zone: %w", err)
 	}
 
 	logging.Info("Created internal zone: %s", zoneName)
 	return nil
 }
 
-// syncDevices resolves device IPs and creates DNS records
+// syncDevices fetches all devices from the Tailscale API and manages their DNS records.
 func (m *Manager) syncDevices(zoneName string) (*SyncResult, error) {
-	result := &SyncResult{
-		TotalDevices: len(m.config.Devices),
-		Resolutions:  make([]DeviceResolution, 0, len(m.config.Devices)),
+	logging.Info("Starting dynamic sync for zone: %s", zoneName)
+
+	// 1. Fetch all devices from Tailscale API
+	tsDevices, err := m.tailscaleClient.ListDevices()
+	if err != nil {
+		return &SyncResult{Success: false, Error: err}, fmt.Errorf("failed to list tailscale devices: %w", err)
 	}
 
-	logging.Info("Syncing %d devices for zone %s", len(m.config.Devices), zoneName)
+	result := &SyncResult{
+		TotalDevices: len(tsDevices),
+	}
 
-	for _, device := range m.config.Devices {
-		resolution := m.resolveDevice(device, zoneName)
-		result.Resolutions = append(result.Resolutions, resolution)
+	// 2. Process each device
+	for _, tsDevice := range tsDevices {
+		hostname := tsDevice.Hostname
+		newIP := getTailscaleIP(tsDevice.Addresses)
 
-		if resolution.Skipped {
+		// We only care about devices that have an IP address
+		if newIP == "" {
+			logging.Debug("Skipping device %s with no IP address", hostname)
 			result.SkippedDevices++
 			continue
 		}
 
-		if resolution.Error != nil {
-			result.FailedDevices++
-			continue
+		// 3. Check cache for existing IP
+		oldIP, isKnownDevice := m.getCachedIP(hostname)
+
+		if isKnownDevice && oldIP != newIP {
+			// IP has changed, update the record
+			logging.Info("IP for device %s has changed from %s to %s. Updating record.", hostname, oldIP, newIP)
+			// Drop the old record first
+			if err := m.corednsManager.DropRecord(zoneName, hostname, oldIP); err != nil {
+				logging.Error("Failed to drop old record for %s: %v", hostname, err)
+				// Log the error but continue to try and add the new one
+				result.FailedDevices++
+			}
 		}
 
+		// 4. Add the new/updated record if it's a new device or the IP has changed
+		if !isKnownDevice || oldIP != newIP {
+			if err := m.corednsManager.AddRecord(zoneName, hostname, newIP); err != nil {
+				logging.Error("Failed to add record for %s: %v", hostname, err)
+				result.FailedDevices++
+				continue
+			}
+			logging.Info("Added/Updated DNS record for %s -> %s", hostname, newIP)
+		}
+
+		// 5. Update the cache with the new IP
+		m.cacheIP(hostname, newIP)
 		result.ResolvedDevices++
 	}
 
-	result.Success = result.FailedDevices == 0
-	return result, nil
+	// Reload CoreDNS after all changes are made
+	if err := m.corednsManager.Reload(); err != nil {
+		logging.Error("Failed to reload CoreDNS after sync: %v", err)
+		result.Error = err
+	}
+
+	result.Success = result.FailedDevices == 0 && result.Error == nil
+	logging.Info("Dynamic sync complete for zone %s. Total: %d, Synced: %d, Skipped: %d, Failed: %d",
+		zoneName, result.TotalDevices, result.ResolvedDevices, result.SkippedDevices, result.FailedDevices)
+
+	return result, result.Error
 }
 
-// resolveDevice resolves a single device and creates its DNS records
-func (m *Manager) resolveDevice(device config.SyncDevice, zoneName string) DeviceResolution {
-	resolution := DeviceResolution{Device: device}
-
-	// Check if device is enabled
-	if !device.Enabled {
-		resolution.Skipped = true
-		resolution.Reason = "device disabled in configuration"
-		logging.Debug("Skipping disabled device: %s", device.Name)
-		return resolution
-	}
-
-	// Resolve IP with retry logic
-	ip, err := m.resolveDeviceIPWithRetry(device.TailscaleName)
-	if err != nil {
-		resolution.Error = err
-		logging.Error("Failed to resolve IP for device %s (%s): %v", device.Name, device.TailscaleName, err)
-		return resolution
-	}
-
-	resolution.IP = ip
-	resolution.Online = true
-
-	// Create DNS records
-	if err := m.createDeviceRecords(zoneName, device, ip); err != nil {
-		resolution.Error = fmt.Errorf("failed to create DNS records: %w", err)
-		logging.Error("Failed to create DNS records for device %s: %v", device.Name, err)
-		return resolution
-	}
-
-	logging.Info("Successfully synced device %s (%s) -> %s", device.Name, device.TailscaleName, ip)
-	return resolution
-}
-
-// resolveDeviceIPWithRetry resolves device IP with caching and retry logic
-func (m *Manager) resolveDeviceIPWithRetry(tailscaleName string) (string, error) {
-	// Check cache first
-	if cachedIP := m.getCachedIP(tailscaleName); cachedIP != "" {
-		logging.Debug("Using cached IP for device %s: %s", tailscaleName, cachedIP)
-		return cachedIP, nil
-	}
-
-	var lastError error
-	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
-		ip, err := m.tailscaleClient.GetDeviceIP(tailscaleName)
-		if err == nil {
-			// Cache the resolved IP
-			m.cacheIP(tailscaleName, ip, defaultCacheTTL)
-			return ip, nil
-		}
-
-		lastError = err
-		logging.Debug("Attempt %d/%d failed to resolve IP for device %s: %v", attempt, maxRetryAttempts, tailscaleName, err)
-
-		if attempt < maxRetryAttempts {
-			time.Sleep(retryDelay)
+// getTailscaleIP extracts the Tailscale IP (100.x.y.z) from a list of addresses.
+func getTailscaleIP(addresses []string) string {
+	for _, addr := range addresses {
+		if strings.HasPrefix(addr, "100.") {
+			return addr
 		}
 	}
-
-	return "", fmt.Errorf("failed to resolve IP after %d attempts: %w", maxRetryAttempts, lastError)
+	return ""
 }
 
-// createDeviceRecords creates DNS records for a device and its aliases
-func (m *Manager) createDeviceRecords(zoneName string, device config.SyncDevice, ip string) error {
-	// Create primary record
-	if err := m.corednsManager.AddRecord(zoneName, device.Name, ip); err != nil {
-		return fmt.Errorf("failed to add primary record for %s: %w", device.Name, err)
-	}
-
-	// Create alias records
-	for _, alias := range device.Aliases {
-		if err := m.corednsManager.AddRecord(zoneName, alias, ip); err != nil {
-			logging.Error("Failed to add alias record %s for device %s: %v", alias, device.Name, err)
-			// Continue with other aliases even if one fails
-		} else {
-			logging.Debug("Added alias record: %s -> %s", alias, ip)
-		}
-	}
-
-	return nil
-}
-
-// getCachedIP retrieves a cached IP if it's still valid
-func (m *Manager) getCachedIP(deviceName string) string {
+func (m *Manager) getCachedIP(hostname string) (string, bool) {
 	m.cacheMutex.RLock()
 	defer m.cacheMutex.RUnlock()
-
-	cached, exists := m.ipCache[deviceName]
-	if !exists {
-		return ""
-	}
-
-	if time.Since(cached.timestamp) > cached.ttl {
-		// Cache expired
-		delete(m.ipCache, deviceName)
-		return ""
-	}
-
-	return cached.ip
+	ip, exists := m.ipCache[hostname]
+	return ip, exists
 }
 
-// cacheIP caches an IP address with TTL
-func (m *Manager) cacheIP(deviceName, ip string, ttl time.Duration) {
+func (m *Manager) cacheIP(hostname, ip string) {
 	m.cacheMutex.Lock()
 	defer m.cacheMutex.Unlock()
-
-	m.ipCache[deviceName] = &cachedIP{
-		ip:        ip,
-		timestamp: time.Now(),
-		ttl:       ttl,
-	}
+	m.ipCache[hostname] = ip
 }
 
-// StartPolling starts a background goroutine to periodically refresh device IPs.
+// StartPolling starts the background polling to refresh device IPs.
 func (m *Manager) StartPolling(interval time.Duration) {
-	logging.Info("Starting Tailscale device polling every %v", interval)
+	logging.Info("Starting background IP sync polling with interval: %s", interval)
 	ticker := time.NewTicker(interval)
 
 	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				logging.Info("Polling Tailscale for device updates...")
-				if err := m.RefreshDeviceIPs(); err != nil {
-					logging.Error("Error during scheduled device IP refresh: %v", err)
-				}
+		for range ticker.C {
+			logging.Info("Running periodic device sync...")
+			if err := m.RefreshDeviceIPs(); err != nil {
+				logging.Error("Error during periodic device sync: %v", err)
 			}
 		}
 	}()
 }
 
-// RefreshDeviceIPs refreshes IP addresses for all devices from Tailscale
+// RefreshDeviceIPs re-runs the sync process to update all records.
 func (m *Manager) RefreshDeviceIPs() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !m.synced {
-		return fmt.Errorf("zone not synced yet")
-	}
-
-	logging.Info("Refreshing device IPs from Tailscale")
-
-	// Clear cache to force refresh
-	m.cacheMutex.Lock()
-	m.ipCache = make(map[string]*cachedIP)
-	m.cacheMutex.Unlock()
+	logging.Info("Refreshing all device IPs from Tailscale")
 
 	zoneName := extractZoneName(m.config.Origin)
 	if zoneName == "" {
-		return fmt.Errorf("invalid origin format: %s", m.config.Origin)
+		return fmt.Errorf("invalid origin format for refresh: %s", m.config.Origin)
 	}
 
+	// Re-run the full sync logic
 	result, err := m.syncDevices(zoneName)
 	if err != nil {
-		return fmt.Errorf("failed to refresh device IPs: %w", err)
+		return err
 	}
 
 	m.logSyncResult(result)
-
-	if result.FailedDevices > 0 {
-		return fmt.Errorf("refresh completed with %d failed devices", result.FailedDevices)
-	}
-
-	logging.Info("Device IP refresh completed successfully")
 	return nil
 }
 
-// IsZoneSynced returns whether the zone has been synced
+// IsZoneSynced returns true if the initial sync has completed
 func (m *Manager) IsZoneSynced() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// If corednsManager is nil (e.g., in tests), return the internal state
-	if m.corednsManager == nil {
-		return m.synced
-	}
-
-	// Check if zone file exists and has content
-	zoneName := extractZoneName(m.config.Origin)
-	if zoneName == "" {
-		return false
-	}
-
-	// Try to add a test record to see if zone exists and is accessible
-	testErr := m.corednsManager.AddRecord(zoneName, "_sync_test", "127.0.0.1")
-	if testErr != nil {
-		// Zone doesn't exist or isn't accessible
-		return false
-	}
-
-	// If we can add records, the zone is synced
-	// Update our internal state to match reality
-	m.synced = true
-	return true
+	return m.synced
 }
 
-// ValidateConfig validates the manager's sync configuration
-func (m *Manager) ValidateConfig() error {
-	if m.config.Origin == "" {
-		return fmt.Errorf("dns.internal.origin is required")
-	}
-
-	if len(m.config.Devices) == 0 {
-		return fmt.Errorf("at least one sync device must be configured")
-	}
-
-	for i, device := range m.config.Devices {
-		if device.Name == "" {
-			return fmt.Errorf("device %d: name is required", i)
-		}
-		if device.TailscaleName == "" {
-			return fmt.Errorf("device %d (%s): tailscale_name is required", i, device.Name)
-		}
-	}
-
-	return nil
-}
-
-// logSyncResult logs the results of a sync operation
 func (m *Manager) logSyncResult(result *SyncResult) {
-	logging.Info("Sync result: %d total, %d resolved, %d skipped, %d failed",
-		result.TotalDevices, result.ResolvedDevices, result.SkippedDevices, result.FailedDevices)
-
-	for _, resolution := range result.Resolutions {
-		if resolution.Skipped {
-			logging.Debug("Device %s: skipped (%s)", resolution.Device.Name, resolution.Reason)
-		} else if resolution.Error != nil {
-			logging.Error("Device %s: failed - %v", resolution.Device.Name, resolution.Error)
-		} else {
-			logging.Debug("Device %s: resolved to %s", resolution.Device.Name, resolution.IP)
-		}
+	if result.Error != nil {
+		logging.Error("Sync process finished with an error: %v", result.Error)
 	}
+	logging.Info("Sync Result -> Success: %v, Total: %d, Resolved: %d, Skipped: %d, Failed: %d",
+		result.Success, result.TotalDevices, result.ResolvedDevices, result.SkippedDevices, result.FailedDevices)
 }
 
-// extractZoneName extracts the service name from the origin FQDN.
-// For example, "internal.example.com" becomes "internal".
-// This service name is then used to construct the zone file path and CoreDNS config.
+// extractZoneName extracts the service part of the origin.
+// e.g., "internal.jerkytreats.dev" -> "internal"
 func extractZoneName(origin string) string {
 	// Trim trailing dot if present for consistent parsing
 	origin = strings.TrimSuffix(origin, ".")

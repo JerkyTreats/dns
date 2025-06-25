@@ -16,8 +16,8 @@ const (
 	LogLevelKey = "log_level"
 
 	// DNS Sync configuration keys
+	DNSSyncEnabledKey         = "dns.internal.enabled"
 	DNSInternalOriginKey      = "dns.internal.origin"
-	DNSSyncDevicesKey         = "dns.internal.sync_devices"
 	DNSSyncPollingEnabledKey  = "dns.internal.polling.enabled"
 	DNSSyncPollingIntervalKey = "dns.internal.polling.interval"
 
@@ -27,15 +27,6 @@ const (
 	TailscaleBaseURLKey = "tailscale.base_url" // Optional, for testing
 )
 
-// SyncDevice represents a device configuration for sync
-type SyncDevice struct {
-	Name          string   `yaml:"name" mapstructure:"name"`
-	TailscaleName string   `yaml:"tailscale_name" mapstructure:"tailscale_name"`
-	Aliases       []string `yaml:"aliases,omitempty" mapstructure:"aliases"`
-	Description   string   `yaml:"description,omitempty" mapstructure:"description"`
-	Enabled       bool     `yaml:"enabled" mapstructure:"enabled"`
-}
-
 // PollingConfig represents the polling configuration section
 type PollingConfig struct {
 	Enabled  bool          `yaml:"enabled" mapstructure:"enabled"`
@@ -44,8 +35,8 @@ type PollingConfig struct {
 
 // SyncConfig represents the sync configuration section
 type SyncConfig struct {
+	Enabled bool          `yaml:"enabled" mapstructure:"enabled"`
 	Origin  string        `yaml:"origin" mapstructure:"origin"`
-	Devices []SyncDevice  `yaml:"sync_devices" mapstructure:"sync_devices"`
 	Polling PollingConfig `yaml:"polling" mapstructure:"polling"`
 }
 
@@ -300,23 +291,32 @@ func GetDuration(key string) time.Duration {
 	return cfg.viper.GetDuration(key)
 }
 
-// GetSyncConfig returns the sync configuration
+// GetSyncConfig returns the sync configuration section
 func GetSyncConfig() SyncConfig {
 	cfg := getInstance()
-	_ = cfg.ensureInitialized()
+	_ = cfg.ensureInitialized() // Ensure config is loaded
+
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 
-	var syncConfig SyncConfig
-	if cfg.viper != nil {
-		if err := cfg.viper.UnmarshalKey("dns.internal", &syncConfig); err != nil {
-			fmt.Printf("Error unmarshalling sync config: %v\n", err)
-		}
+	var syncConf SyncConfig
+	if cfg.viper == nil {
+		return syncConf // Return empty struct if viper is not initialized
 	}
-	return syncConfig
+
+	// Unmarshal the relevant sub-section of the config into the struct
+	// This approach is cleaner than getting each value individually.
+	if err := cfg.viper.UnmarshalKey("dns.internal", &syncConf); err != nil {
+		// In case of an error, you might want to log it or handle it gracefully.
+		// For now, returning a zero-value struct.
+		fmt.Printf("Error unmarshalling sync config: %v\n", err)
+		return SyncConfig{}
+	}
+
+	return syncConf
 }
 
-// RegisterRequiredKey adds a key to the list of required configuration keys.
+// RegisterRequiredKey adds a key to the list of required configuration keys
 func RegisterRequiredKey(key string) {
 	requiredKeysMutex.Lock()
 	defer requiredKeysMutex.Unlock()

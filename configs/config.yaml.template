@@ -26,22 +26,6 @@ dns:
     polling:
       enabled: true
       interval: "1h"
-    sync_devices:
-      - name: "ns"
-        tailscale_name: "omnitron"  # Change to your Tailscale device name
-        aliases: ["omnitron", "dns"]
-        description: "NAS, DNS host"
-        enabled: true
-      - name: "macbook"
-        tailscale_name: "revenantor"  # Change to your Tailscale device name
-        aliases: ["dev", "revenantor"]
-        description: "MacBook development"
-        enabled: true
-      - name: "android"
-        tailscale_name: "google-pixel-6"  # Change to your Tailscale device name
-        aliases: ["pixel"]
-        description: "Google Pixel 6"
-        enabled: false  # Optional devices can be disabled
   coredns:
     config_path: /etc/coredns/Corefile
     template_path: /etc/coredns/Corefile.template
