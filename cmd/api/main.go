@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -87,13 +88,67 @@ func main() {
 	}
 	dnsChecker = healthcheck.NewDNSHealthChecker(dnsServer, 10*time.Second, 10, 2*time.Second)
 
-	// Wait for CoreDNS to become healthy before proceeding
-	logging.Info("Waiting for CoreDNS to report healthy status...")
-	if !dnsChecker.WaitHealthy() {
-		logging.Error("CoreDNS did not become healthy within the expected time")
+	// First, test basic connectivity to CoreDNS
+	logging.Info("Testing basic connectivity to CoreDNS at %s...", dnsServer)
+	conn, err := net.DialTimeout("udp", dnsServer, 5*time.Second)
+	if err != nil {
+		logging.Error("Cannot establish UDP connection to CoreDNS: %v", err)
+		logging.Error("This suggests CoreDNS container is not running or not accessible")
 		os.Exit(1)
 	}
-	logging.Info("CoreDNS is healthy")
+	conn.Close()
+	logging.Info("Basic UDP connectivity to CoreDNS successful")
+
+	// Wait for CoreDNS to become healthy before proceeding
+	logging.Info("Waiting for CoreDNS to report healthy status on %s...", dnsServer)
+
+	// Add diagnostic logging for health check attempts
+	healthCheckAttempts := 0
+	maxAttempts := 15             // Increased from 10 to give CoreDNS more time to start
+	retryDelay := 3 * time.Second // Slightly longer delay
+
+	for i := 0; i < maxAttempts; i++ {
+		healthCheckAttempts++
+		logging.Info("Health check attempt %d/%d...", healthCheckAttempts, maxAttempts)
+
+		ok, latency, err := dnsChecker.CheckOnce()
+		if ok {
+			logging.Info("CoreDNS is healthy (responded in %v)", latency)
+			break
+		} else {
+			if err != nil {
+				logging.Warn("Health check failed: %v", err)
+
+				// Try a simple connectivity test to see if CoreDNS port is open
+				testConn, dialErr := net.DialTimeout("udp", dnsServer, 2*time.Second)
+				if dialErr != nil {
+					logging.Warn("CoreDNS port appears to be closed or unreachable: %v", dialErr)
+				} else {
+					testConn.Close()
+					logging.Info("CoreDNS port is open, but DNS query failed (CoreDNS may still be starting)")
+				}
+			} else {
+				logging.Warn("Health check failed: no error details")
+			}
+
+			if i < maxAttempts-1 { // Don't sleep on the last attempt
+				logging.Info("Retrying in %v...", retryDelay)
+				time.Sleep(retryDelay)
+			}
+		}
+
+		// If we've reached the last attempt, exit with error
+		if i == maxAttempts-1 {
+			totalWaitTime := time.Duration(maxAttempts) * retryDelay
+			logging.Error("CoreDNS did not become healthy after %d attempts over %v", maxAttempts, totalWaitTime)
+			logging.Error("This may indicate:")
+			logging.Error("  1. CoreDNS is taking longer than expected to start")
+			logging.Error("  2. CoreDNS configuration (Corefile) has errors")
+			logging.Error("  3. Network connectivity issues between containers")
+			logging.Error("  4. CoreDNS container failed to start properly")
+			os.Exit(1)
+		}
+	}
 
 	// Start TLS certificate process early in background (if enabled)
 	tlsEnabled := config.GetBool(ServerTLSEnabledKey)
