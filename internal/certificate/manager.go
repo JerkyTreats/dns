@@ -59,8 +59,6 @@ func init() {
 	config.RegisterRequiredKey(CertDNSResolversKey)
 	config.RegisterRequiredKey(CertDNSTimeoutKey)
 	config.RegisterRequiredKey(CertCloudflareTokenKey)
-	config.RegisterRequiredKey(CertACMEUserFileKey)
-	config.RegisterRequiredKey(CertACMEKeyFileKey)
 }
 
 // User implements acme.User
