@@ -265,48 +265,65 @@ cp configs/config.yaml.template configs/config.yaml
 # Substitute placeholders in the config file
 log "Substituting configuration values..."
 
-# Use sed to replace placeholders (macOS compatible)
+# Function to escape sed replacement strings
+escape_sed() {
+    printf '%s\n' "$1" | sed 's/[[\.*^$()+?{|]/\\&/g'
+}
+
+# Escape variables for sed
+ESCAPED_INTERNAL_DOMAIN=$(escape_sed "$INTERNAL_DOMAIN")
+ESCAPED_LETSENCRYPT_EMAIL=$(escape_sed "$LETSENCRYPT_EMAIL")
+ESCAPED_LETSENCRYPT_URL=$(escape_sed "$LETSENCRYPT_URL")
+ESCAPED_TAILSCALE_API_KEY=$(escape_sed "$TAILSCALE_API_KEY")
+ESCAPED_TAILSCALE_TAILNET=$(escape_sed "$TAILSCALE_TAILNET")
+if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
+    ESCAPED_TAILSCALE_DEVICE_NAME=$(escape_sed "$TAILSCALE_DEVICE_NAME")
+fi
+
+# Use sed to replace placeholders (macOS compatible) with safer delimiter
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS
-    sed -i '' "s/INTERNAL_DOMAIN_PLACEHOLDER/$INTERNAL_DOMAIN/g" configs/config.yaml
-    sed -i '' "s/LETSENCRYPT_EMAIL_PLACEHOLDER/$LETSENCRYPT_EMAIL/g" configs/config.yaml
-    sed -i '' "s|LETSENCRYPT_URL_PLACEHOLDER|$LETSENCRYPT_URL|g" configs/config.yaml
-    sed -i '' "s/TAILSCALE_API_KEY_PLACEHOLDER/$TAILSCALE_API_KEY/g" configs/config.yaml
-    sed -i '' "s/TAILSCALE_TAILNET_PLACEHOLDER/$TAILSCALE_TAILNET/g" configs/config.yaml
+    sed -i '' "s|INTERNAL_DOMAIN_PLACEHOLDER|$ESCAPED_INTERNAL_DOMAIN|g" configs/config.yaml
+    sed -i '' "s|LETSENCRYPT_EMAIL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_EMAIL|g" configs/config.yaml
+    sed -i '' "s|LETSENCRYPT_URL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_URL|g" configs/config.yaml
+    sed -i '' "s|TAILSCALE_API_KEY_PLACEHOLDER|$ESCAPED_TAILSCALE_API_KEY|g" configs/config.yaml
+    sed -i '' "s|TAILSCALE_TAILNET_PLACEHOLDER|$ESCAPED_TAILSCALE_TAILNET|g" configs/config.yaml
 
     # Add Tailscale device name if detected/specified
     if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-        sed -i '' "s/# device_name: \"your-device-name\"/device_name: \"$TAILSCALE_DEVICE_NAME\"/g" configs/config.yaml
+        sed -i '' "s|# device_name: \"your-device-name\"|device_name: \"$ESCAPED_TAILSCALE_DEVICE_NAME\"|g" configs/config.yaml
         log "Added Tailscale device name: $TAILSCALE_DEVICE_NAME"
     fi
 
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
-        sed -i '' "/provider: \"lego\"/a\  dns_provider: cloudflare" configs/config.yaml
+        sed -i '' "/provider: \"lego\"/a\\
+  dns_provider: cloudflare" configs/config.yaml
     fi
     # Only enable TLS if using production certificates
     if [[ $TLS_ENABLED == "true" ]]; then
-        sed -i '' "s/enabled: false/enabled: true/g" configs/config.yaml
+        sed -i '' "s|enabled: false|enabled: true|g" configs/config.yaml
     fi
 else
     # Linux
-    sed -i "s/INTERNAL_DOMAIN_PLACEHOLDER/$INTERNAL_DOMAIN/g" configs/config.yaml
-    sed -i "s/LETSENCRYPT_EMAIL_PLACEHOLDER/$LETSENCRYPT_EMAIL/g" configs/config.yaml
-    sed -i "s|LETSENCRYPT_URL_PLACEHOLDER|$LETSENCRYPT_URL|g" configs/config.yaml
-    sed -i "s/TAILSCALE_API_KEY_PLACEHOLDER/$TAILSCALE_API_KEY/g" configs/config.yaml
-    sed -i "s/TAILSCALE_TAILNET_PLACEHOLDER/$TAILSCALE_TAILNET/g" configs/config.yaml
+    sed -i "s|INTERNAL_DOMAIN_PLACEHOLDER|$ESCAPED_INTERNAL_DOMAIN|g" configs/config.yaml
+    sed -i "s|LETSENCRYPT_EMAIL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_EMAIL|g" configs/config.yaml
+    sed -i "s|LETSENCRYPT_URL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_URL|g" configs/config.yaml
+    sed -i "s|TAILSCALE_API_KEY_PLACEHOLDER|$ESCAPED_TAILSCALE_API_KEY|g" configs/config.yaml
+    sed -i "s|TAILSCALE_TAILNET_PLACEHOLDER|$ESCAPED_TAILSCALE_TAILNET|g" configs/config.yaml
 
     # Add Tailscale device name if detected/specified
     if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-        sed -i "s/# device_name: \"your-device-name\"/device_name: \"$TAILSCALE_DEVICE_NAME\"/g" configs/config.yaml
+        sed -i "s|# device_name: \"your-device-name\"|device_name: \"$ESCAPED_TAILSCALE_DEVICE_NAME\"|g" configs/config.yaml
         log "Added Tailscale device name: $TAILSCALE_DEVICE_NAME"
     fi
 
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
-        sed -i "/provider: \"lego\"/a\  dns_provider: cloudflare" configs/config.yaml
+        sed -i "/provider: \"lego\"/a\\
+  dns_provider: cloudflare" configs/config.yaml
     fi
     # Only enable TLS if using production certificates
     if [[ $TLS_ENABLED == "true" ]]; then
-        sed -i "s/enabled: false/enabled: true/g" configs/config.yaml
+        sed -i "s|enabled: false|enabled: true|g" configs/config.yaml
     fi
 fi
 
@@ -421,10 +438,13 @@ if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
     fi
 
     # Insert token into certificate section
+    ESCAPED_CF_TOKEN=$(escape_sed "$CF_TOKEN")
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "/dns_provider: cloudflare/a\  cloudflare_api_token: \"$CF_TOKEN\"" configs/config.yaml
+        sed -i '' "/dns_provider: cloudflare/a\\
+  cloudflare_api_token: \"$ESCAPED_CF_TOKEN\"" configs/config.yaml
     else
-        sed -i "/dns_provider: cloudflare/a\  cloudflare_api_token: \"$CF_TOKEN\"" configs/config.yaml
+        sed -i "/dns_provider: cloudflare/a\\
+  cloudflare_api_token: \"$ESCAPED_CF_TOKEN\"" configs/config.yaml
     fi
 
     log "Cloudflare token added to configs/config.yaml (git-ignored)."
