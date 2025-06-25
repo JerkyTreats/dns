@@ -238,6 +238,12 @@ func (m *Manager) AddZone(serviceName string) error {
 		return fmt.Errorf("invalid service name format")
 	}
 
+	// Skip zone creation for root domain "." as it's handled differently
+	if m.domain == "." {
+		logging.Debug("Skipping zone file creation for root domain '.'")
+		return m.AddDomain(m.domain, nil)
+	}
+
 	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", m.domain))
 
 	// Check if zone file already exists and is properly formed
@@ -722,6 +728,12 @@ func (m *Manager) parseDomainsFromCorefile(content string) map[string]*DomainCon
 		matches := domainRegex.FindStringSubmatch(line)
 		if len(matches) >= 2 {
 			domain := strings.TrimSpace(matches[1])
+
+			// Skip root domain "." as it's handled differently and doesn't need zone files
+			if domain == "." {
+				continue
+			}
+
 			port := 53 // default port
 
 			if len(matches) >= 3 && matches[2] != "" {
