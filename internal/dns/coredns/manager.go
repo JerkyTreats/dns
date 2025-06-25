@@ -34,7 +34,7 @@ func init() {
 	// Reload command is optional, will rely on CoreDNS native reload if not provided
 }
 
-var serviceNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
+var serviceNameRegex = regexp.MustCompile(`^[a-z0-9.-]+$`)
 
 // generateSerial creates a timestamp-based serial number for DNS zones
 func generateSerial() string {
