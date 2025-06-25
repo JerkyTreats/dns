@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	mathrand "math/rand"
@@ -44,6 +45,8 @@ const (
 	CertDNSTimeoutKey           = "certificate.dns_timeout"
 	CertDNSProviderKey          = "certificate.dns_provider"
 	CertCloudflareTokenKey      = "certificate.cloudflare_api_token"
+	CertACMEUserFileKey         = "certificate.acme.user_file"
+	CertACMEKeyFileKey          = "certificate.acme.key_file"
 )
 
 func init() {
@@ -58,6 +61,8 @@ func init() {
 	config.RegisterRequiredKey(CertDNSResolversKey)
 	config.RegisterRequiredKey(CertDNSTimeoutKey)
 	config.RegisterRequiredKey(CertCloudflareTokenKey)
+	config.RegisterRequiredKey(CertACMEUserFileKey)
+	config.RegisterRequiredKey(CertACMEKeyFileKey)
 }
 
 // User implements acme.User
@@ -167,14 +172,23 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("unsupported certificate.dns_provider value: %s", providerType)
 	}
 
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	user, err := loadUser()
 	if err != nil {
-		return nil, fmt.Errorf("could not generate private key: %w", err)
-	}
-
-	user := &User{
-		Email: email,
-		key:   privateKey,
+		if os.IsNotExist(err) {
+			logging.Info("No existing ACME user found, creating a new one.")
+			privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				return nil, fmt.Errorf("could not generate private key for new user: %w", err)
+			}
+			user = &User{
+				Email: email,
+				key:   privateKey,
+			}
+		} else {
+			return nil, fmt.Errorf("could not load ACME user: %w", err)
+		}
+	} else {
+		logging.Info("Loaded existing ACME user from file.")
 	}
 
 	legoConfig := lego.NewConfig(user)
@@ -279,6 +293,12 @@ func (m *Manager) ObtainCertificate(domain string) error {
 		}
 		m.user.Registration = reg
 		logging.Info("Successfully registered user: %s", m.user.Email)
+
+		// Save the user with the new registration
+		if err := saveUser(m.user); err != nil {
+			logging.Error("Failed to save user after registration: %v", err)
+			// Proceed without failing, but log the error
+		}
 	}
 
 	request := certificate.ObtainRequest{
@@ -434,6 +454,76 @@ func (m *Manager) saveCertificate(certs *certificate.Resource) error {
 
 	logging.Info("Successfully saved certificate and key to %s and %s", m.certPath, m.keyPath)
 	return nil
+}
+
+func saveUser(user *User) error {
+	userFile := config.GetString(CertACMEUserFileKey)
+	keyFile := config.GetString(CertACMEKeyFileKey)
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(userFile), 0755); err != nil {
+		return fmt.Errorf("could not create user directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(keyFile), 0755); err != nil {
+		return fmt.Errorf("could not create key directory: %w", err)
+	}
+
+	// Save user registration
+	userBytes, err := json.MarshalIndent(user, "", "\t")
+	if err != nil {
+		return fmt.Errorf("could not marshal user data: %w", err)
+	}
+	if err := os.WriteFile(userFile, userBytes, 0600); err != nil {
+		return fmt.Errorf("could not save user file: %w", err)
+	}
+
+	// Save user private key
+	keyBytes, err := x509.MarshalECPrivateKey(user.key.(*ecdsa.PrivateKey))
+	if err != nil {
+		return fmt.Errorf("could not marshal private key: %w", err)
+	}
+	pemKey := &pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: keyBytes,
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(pemKey), 0600); err != nil {
+		return fmt.Errorf("could not save private key file: %w", err)
+	}
+
+	logging.Info("Successfully saved ACME user to %s and %s", userFile, keyFile)
+	return nil
+}
+
+func loadUser() (*User, error) {
+	userFile := config.GetString(CertACMEUserFileKey)
+	keyFile := config.GetString(CertACMEKeyFileKey)
+
+	// Load user registration
+	userBytes, err := os.ReadFile(userFile)
+	if err != nil {
+		return nil, err
+	}
+	var user User
+	if err := json.Unmarshal(userBytes, &user); err != nil {
+		return nil, fmt.Errorf("could not unmarshal user data: %w", err)
+	}
+
+	// Load user private key
+	keyBytes, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, err
+	}
+	pemBlock, _ := pem.Decode(keyBytes)
+	if pemBlock == nil {
+		return nil, fmt.Errorf("could not decode PEM block from key file")
+	}
+	privateKey, err := x509.ParseECPrivateKey(pemBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse private key: %w", err)
+	}
+	user.key = privateKey
+
+	return &user, nil
 }
 
 func GetCertificateInfo(certPath string) (*x509.Certificate, error) {
