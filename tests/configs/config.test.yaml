@@ -72,10 +72,5 @@ certificate:
 
 # Tailscale integration configuration for testing
 tailscale:
-  api_key: "test-api-key"
   tailnet: "test-tailnet"
   base_url: "http://mock-tailscale:80"  # Mock service URL
-
-acme:
-  user_file: /tmp/acme/user.json
-  key_file: /tmp/acme/key.pem

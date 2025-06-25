@@ -78,10 +78,12 @@ func (u *User) GetPrivateKey() crypto.PrivateKey        { return u.key }
 
 // Manager handles certificate issuance and renewal.
 type Manager struct {
-	legoClient *lego.Client
-	user       *User
-	certPath   string
-	keyPath    string
+	legoClient   *lego.Client
+	user         *User
+	certPath     string
+	keyPath      string
+	acmeUserPath string
+	acmeKeyPath  string
 
 	// CoreDNS integration for TLS enablement
 	corednsConfigManager interface {
@@ -97,6 +99,11 @@ func NewManager() (*Manager, error) {
 	certPath := config.GetString(CertCertFileKey)
 	keyPath := config.GetString(CertKeyFileKey)
 	zonesPath := config.GetString("dns.coredns.zones_path")
+
+	// Derive ACME paths from the certificate path
+	acmeDir := filepath.Dir(certPath)
+	acmeUserPath := filepath.Join(acmeDir, "acme_user.json")
+	acmeKeyPath := filepath.Join(acmeDir, "acme_key.pem")
 
 	var (
 		dnsProvider challenge.Provider
@@ -172,7 +179,7 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("unsupported certificate.dns_provider value: %s", providerType)
 	}
 
-	user, err := loadUser()
+	user, err := loadUser(acmeUserPath, acmeKeyPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			logging.Info("No existing ACME user found, creating a new one.")
@@ -268,10 +275,12 @@ func NewManager() (*Manager, error) {
 	}
 
 	return &Manager{
-		legoClient: client,
-		user:       user,
-		certPath:   certPath,
-		keyPath:    keyPath,
+		legoClient:   client,
+		user:         user,
+		certPath:     certPath,
+		keyPath:      keyPath,
+		acmeUserPath: acmeUserPath,
+		acmeKeyPath:  acmeKeyPath,
 	}, nil
 }
 
@@ -295,7 +304,7 @@ func (m *Manager) ObtainCertificate(domain string) error {
 		logging.Info("Successfully registered user: %s", m.user.Email)
 
 		// Save the user with the new registration
-		if err := saveUser(m.user); err != nil {
+		if err := saveUser(m.user, m.acmeUserPath, m.acmeKeyPath); err != nil {
 			logging.Error("Failed to save user after registration: %v", err)
 			// Proceed without failing, but log the error
 		}
@@ -456,10 +465,7 @@ func (m *Manager) saveCertificate(certs *certificate.Resource) error {
 	return nil
 }
 
-func saveUser(user *User) error {
-	userFile := config.GetString(CertACMEUserFileKey)
-	keyFile := config.GetString(CertACMEKeyFileKey)
-
+func saveUser(user *User, userFile, keyFile string) error {
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(userFile), 0755); err != nil {
 		return fmt.Errorf("could not create user directory: %w", err)
@@ -494,10 +500,7 @@ func saveUser(user *User) error {
 	return nil
 }
 
-func loadUser() (*User, error) {
-	userFile := config.GetString(CertACMEUserFileKey)
-	keyFile := config.GetString(CertACMEKeyFileKey)
-
+func loadUser(userFile, keyFile string) (*User, error) {
 	// Load user registration
 	userBytes, err := os.ReadFile(userFile)
 	if err != nil {

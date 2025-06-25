@@ -69,7 +69,3 @@ certificate:
   monitoring:
     enabled: true
     alert_threshold: "168h" # 7 days
-
-acme:
-  user_file: /etc/dns/acme/user.json
-  key_file: /etc/dns/acme/key.pem
