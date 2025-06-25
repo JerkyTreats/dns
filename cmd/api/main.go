@@ -81,6 +81,15 @@ func main() {
 	// the CoreDNS container can start successfully on first deploy.
 	ensureCorefileExists(dnsManager)
 
+	// Ensure zone file exists before CoreDNS starts by adding the base domain zone
+	// This prevents CoreDNS from failing to start due to missing zone files
+	domain := config.GetString(coredns.DNSDomainKey)
+	if domain != "" {
+		if err := dnsManager.AddZone(domain); err != nil {
+			logging.Warn("Failed to ensure zone file exists for domain %s: %v", domain, err)
+		}
+	}
+
 	// Create DNS health checker
 	dnsServer := "127.0.0.1:53"
 	if healthcheck.IsDockerEnvironment() {
