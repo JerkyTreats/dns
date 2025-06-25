@@ -45,8 +45,6 @@ const (
 	CertDNSTimeoutKey           = "certificate.dns_timeout"
 	CertDNSProviderKey          = "certificate.dns_provider"
 	CertCloudflareTokenKey      = "certificate.cloudflare_api_token"
-	CertACMEUserFileKey         = "certificate.acme.user_file"
-	CertACMEKeyFileKey          = "certificate.acme.key_file"
 )
 
 func init() {
