@@ -43,6 +43,7 @@ dns:
 tailscale:
   api_key: "TAILSCALE_API_KEY_PLACEHOLDER"
   tailnet: "TAILSCALE_TAILNET_PLACEHOLDER"
+  # device_name: "your-device-name"
   # base_url: "https://api.tailscale.com"  # Optional, for custom endpoints
 
 logging:

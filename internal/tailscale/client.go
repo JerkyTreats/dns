@@ -23,8 +23,9 @@ const (
 	// HTTP client timeout
 	defaultTimeout = 30 * time.Second
 
-	TailscaleAPIKeyKey  = "tailscale.api_key"
-	TailscaleTailnetKey = "tailscale.tailnet"
+	TailscaleAPIKeyKey     = "tailscale.api_key"
+	TailscaleTailnetKey    = "tailscale.tailnet"
+	TailscaleDeviceNameKey = "tailscale.device_name"
 )
 
 // Client represents a Tailscale API client
@@ -185,6 +186,82 @@ func (c *Client) ValidateConnection() error {
 	return nil
 }
 
+// GetCurrentDeviceIPByName retrieves the Tailscale IP address for a specific device name
+// This is useful when running in containers where hostname doesn't match Tailscale device name
+func (c *Client) GetCurrentDeviceIPByName(deviceName string) (string, error) {
+	devices, err := c.ListDevices()
+	if err != nil {
+		return "", fmt.Errorf("failed to list devices to find device '%s': %w", deviceName, err)
+	}
+
+	logging.Debug("Looking for device with name: %s", deviceName)
+
+	// Try to find the device by matching name or hostname
+	for _, device := range devices {
+		// Try exact name match first
+		if device.Name == deviceName {
+			if !device.Online {
+				return "", fmt.Errorf("device '%s' is offline", deviceName)
+			}
+
+			// Find the Tailscale IP (typically 100.x.x.x range)
+			for _, addr := range device.Addresses {
+				if strings.HasPrefix(addr, "100.") {
+					logging.Info("Found device '%s' Tailscale IP: %s", deviceName, addr)
+					return addr, nil
+				}
+			}
+			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
+		}
+
+		// Try hostname match
+		if device.Hostname == deviceName {
+			if !device.Online {
+				return "", fmt.Errorf("device '%s' is offline", deviceName)
+			}
+
+			// Find the Tailscale IP (typically 100.x.x.x range)
+			for _, addr := range device.Addresses {
+				if strings.HasPrefix(addr, "100.") {
+					logging.Info("Found device '%s' Tailscale IP: %s (matched by hostname)", deviceName, addr)
+					return addr, nil
+				}
+			}
+			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
+		}
+
+		// Try hostname without domain suffix match
+		deviceShortName := strings.Split(device.Hostname, ".")[0]
+		if deviceShortName == deviceName {
+			if !device.Online {
+				return "", fmt.Errorf("device '%s' is offline", deviceName)
+			}
+
+			// Find the Tailscale IP (typically 100.x.x.x range)
+			for _, addr := range device.Addresses {
+				if strings.HasPrefix(addr, "100.") {
+					logging.Info("Found device '%s' Tailscale IP: %s (matched by short hostname)", deviceName, addr)
+					return addr, nil
+				}
+			}
+			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
+		}
+	}
+
+	// If device not found, list available devices for debugging
+	var availableDevices []string
+	for _, device := range devices {
+		status := "offline"
+		if device.Online {
+			status = "online"
+		}
+		availableDevices = append(availableDevices, fmt.Sprintf("%s (%s, %s)", device.Name, device.Hostname, status))
+	}
+
+	return "", fmt.Errorf("device '%s' not found in Tailscale network. Available devices: %s",
+		deviceName, strings.Join(availableDevices, ", "))
+}
+
 // GetCurrentDeviceIP retrieves the Tailscale IP address of the current device
 // It identifies the current device by matching the system hostname
 func (c *Client) GetCurrentDeviceIP() (string, error) {
@@ -238,5 +315,16 @@ func (c *Client) GetCurrentDeviceIP() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("current device with hostname '%s' not found in Tailscale network", hostname)
+	// If device not found, list available devices for debugging
+	var availableDevices []string
+	for _, device := range devices {
+		status := "offline"
+		if device.Online {
+			status = "online"
+		}
+		availableDevices = append(availableDevices, fmt.Sprintf("%s (%s, %s)", device.Name, device.Hostname, status))
+	}
+
+	return "", fmt.Errorf("current device with hostname '%s' not found in Tailscale network. Available devices: %s",
+		hostname, strings.Join(availableDevices, ", "))
 }

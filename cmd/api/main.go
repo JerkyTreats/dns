@@ -90,15 +90,33 @@ func main() {
 	}
 
 	tailscaleClient = client
-	currentDeviceIP, err = tailscaleClient.GetCurrentDeviceIP()
+
+	// Try to get current device IP - use configured device name if available
+	deviceName := config.GetString(tailscale.TailscaleDeviceNameKey)
+	if deviceName != "" {
+		logging.Info("Using configured Tailscale device name: %s", deviceName)
+		currentDeviceIP, err = tailscaleClient.GetCurrentDeviceIPByName(deviceName)
+	} else {
+		logging.Info("No device name configured, attempting hostname-based detection...")
+		currentDeviceIP, err = tailscaleClient.GetCurrentDeviceIP()
+	}
+
 	if err != nil {
 		logging.Error("Failed to get current device Tailscale IP: %v", err)
 		logging.Error("Current device's Tailscale IP is required for proper NS record configuration")
 		logging.Error("Without Tailscale IP, NS records would point to 127.0.0.1, making DNS unusable for external clients")
-		logging.Error("Possible causes:")
-		logging.Error("  1. Current device is not connected to Tailscale network")
-		logging.Error("  2. Current device hostname doesn't match Tailscale device name")
-		logging.Error("  3. Tailscale API configuration is incorrect")
+
+		if deviceName == "" {
+			logging.Error("Suggestions:")
+			logging.Error("  1. Set 'tailscale.device_name' in your configuration to specify which Tailscale device to use")
+			logging.Error("  2. Check that the current device is connected to Tailscale network")
+			logging.Error("  3. Verify Tailscale API configuration is correct")
+		} else {
+			logging.Error("Suggestions:")
+			logging.Error("  1. Verify the device name '%s' exists in your Tailscale network", deviceName)
+			logging.Error("  2. Check that the device is online")
+			logging.Error("  3. Verify Tailscale API configuration is correct")
+		}
 		os.Exit(1)
 	}
 
