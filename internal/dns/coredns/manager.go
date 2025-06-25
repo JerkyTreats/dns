@@ -226,6 +226,15 @@ func (m *Manager) AddZone(serviceName string) error {
 		return fmt.Errorf("invalid service name format")
 	}
 
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", m.domain))
+
+	// Check if zone file already exists
+	if _, err := os.Stat(zoneFile); err == nil {
+		logging.Debug("Zone file already exists for domain %s, skipping zone creation", m.domain)
+		// Still need to ensure the domain is registered in the manager
+		return m.AddDomain(m.domain, nil)
+	}
+
 	zoneDomain := fmt.Sprintf("%s.", m.domain)
 	ns := fmt.Sprintf("ns1.%s.", m.domain)
 	admin := fmt.Sprintf("admin.%s.", m.domain)
@@ -246,7 +255,6 @@ func (m *Manager) AddZone(serviceName string) error {
 		return fmt.Errorf("failed to create zones directory: %w", err)
 	}
 
-	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", m.domain))
 	if err := os.WriteFile(zoneFile, []byte(zoneContent), 0644); err != nil {
 		return fmt.Errorf("failed to write zone file: %w", err)
 	}

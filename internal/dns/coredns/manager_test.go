@@ -302,3 +302,70 @@ func TestManager_AddDomain_NoUnnecessaryRegeneration(t *testing.T) {
 		t.Errorf("Corefile should have been regenerated for TLS config change. Mod time: %v", thirdStat.ModTime())
 	}
 }
+
+func TestManager_AddZone_OverwritesExistingZone(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "Corefile")
+	templatePath := filepath.Join(tempDir, "Corefile.template")
+	zonesPath := tempDir
+
+	// Create a simple template
+	templateContent := `{{range .Domains}}
+{{.Domain}}:{{.Port}} {
+	file {{.ZoneFile}} {{.Domain}}
+	errors
+	log
+}{{end}}
+`
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
+		t.Fatalf("Failed to write template: %v", err)
+	}
+
+	manager := NewManager(configPath, templatePath, zonesPath, []string{}, "test.local")
+
+	// Add zone for the first time
+	if err := manager.AddZone("test-service"); err != nil {
+		t.Fatalf("Failed to add zone: %v", err)
+	}
+
+	zoneFile := filepath.Join(zonesPath, "test.local.zone")
+	if _, err := os.Stat(zoneFile); os.IsNotExist(err) {
+		t.Fatal("Zone file should exist after adding zone")
+	}
+
+	// Read the initial content
+	initialContent, err := os.ReadFile(zoneFile)
+	if err != nil {
+		t.Fatalf("Failed to read zone file: %v", err)
+	}
+
+	// Add some custom records to the zone file
+	customContent := string(initialContent) + "\ncustom-record\tIN A\t192.168.1.100"
+	if err := os.WriteFile(zoneFile, []byte(customContent), 0644); err != nil {
+		t.Fatalf("Failed to write custom content: %v", err)
+	}
+
+	// Wait a bit to ensure time difference
+	time.Sleep(10 * time.Millisecond)
+
+	// Add the same zone again
+	if err := manager.AddZone("test-service"); err != nil {
+		t.Fatalf("Failed to add zone again: %v", err)
+	}
+
+	// Read the content after second add
+	finalContent, err := os.ReadFile(zoneFile)
+	if err != nil {
+		t.Fatalf("Failed to read zone file after second add: %v", err)
+	}
+
+	// The content should be our custom content, not overwritten
+	if string(finalContent) != customContent {
+		t.Error("Zone file was overwritten - custom content was lost")
+	}
+
+	// Check that our custom record was preserved
+	if !strings.Contains(string(finalContent), "custom-record") {
+		t.Error("Custom record was overwritten - AddZone should have preserved existing content")
+	}
+}
