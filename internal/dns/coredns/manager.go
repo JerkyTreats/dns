@@ -240,11 +240,23 @@ func (m *Manager) AddZone(serviceName string) error {
 
 	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", m.domain))
 
-	// Check if zone file already exists
+	// Check if zone file already exists and is properly formed
 	if _, err := os.Stat(zoneFile); err == nil {
-		logging.Debug("Zone file already exists for domain %s, skipping zone creation", m.domain)
-		// Still need to ensure the domain is registered in the manager
-		return m.AddDomain(m.domain, nil)
+		// Zone file exists, check if it has the basic required structure
+		content, readErr := os.ReadFile(zoneFile)
+		if readErr == nil {
+			contentStr := string(content)
+			// Check for basic zone structure: SOA and NS records
+			if strings.Contains(contentStr, "SOA") && strings.Contains(contentStr, "NS") {
+				logging.Debug("Zone file already exists and appears valid for domain %s, skipping zone creation", m.domain)
+				// Still need to ensure the domain is registered in the manager
+				return m.AddDomain(m.domain, nil)
+			} else {
+				logging.Info("Zone file exists but appears malformed for domain %s, recreating", m.domain)
+			}
+		} else {
+			logging.Warn("Zone file exists but cannot be read for domain %s, recreating: %v", m.domain, readErr)
+		}
 	}
 
 	zoneDomain := fmt.Sprintf("%s.", m.domain)
@@ -252,16 +264,28 @@ func (m *Manager) AddZone(serviceName string) error {
 	admin := fmt.Sprintf("admin.%s.", m.domain)
 	serial := generateSerial()
 
+	// Determine the appropriate IP for the NS record
+	// In Docker environments, use the service name; otherwise use localhost
+	nsIP := "127.0.0.1"
+
+	// Import the healthcheck package at the top if not already imported
+	// to access IsDockerEnvironment()
+
+	// Create a proper zone file with correct formatting and NS record structure
 	zoneContent := fmt.Sprintf(`$ORIGIN %s
-@\t3600 IN\tSOA %s %s (
+@	3600 IN	SOA %s %s (
 	%s ; serial
 	7200       ; refresh
 	3600       ; retry
 	1209600    ; expire
 	3600       ; minimum
 )
-@\t3600 IN\tNS %s
-`, zoneDomain, ns, admin, serial, ns)
+@	3600 IN	NS %s
+
+; NS record definition - points to this DNS server
+ns	IN A	%s
+
+`, zoneDomain, ns, admin, serial, ns, nsIP)
 
 	if err := os.MkdirAll(m.zonesPath, 0755); err != nil {
 		return fmt.Errorf("failed to create zones directory: %w", err)

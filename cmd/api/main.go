@@ -80,17 +80,14 @@ func main() {
 	// the CoreDNS container can start successfully on first deploy.
 	ensureCorefileExists(dnsManager)
 
-	// Potentially create internal zone before waiting for health so a usable
-	// Corefile is already written when sync is enabled.
-	syncManager = maybeSync(dnsManager)
-
-	// Now actively wait for CoreDNS to become healthy.
+	// Create DNS health checker
 	dnsServer := "127.0.0.1:53"
 	if healthcheck.IsDockerEnvironment() {
 		dnsServer = "coredns:53"
 	}
 	dnsChecker = healthcheck.NewDNSHealthChecker(dnsServer, 10*time.Second, 10, 2*time.Second)
 
+	// Wait for CoreDNS to become healthy before proceeding
 	logging.Info("Waiting for CoreDNS to report healthy status...")
 	if !dnsChecker.WaitHealthy() {
 		logging.Error("CoreDNS did not become healthy within the expected time")
@@ -98,16 +95,14 @@ func main() {
 	}
 	logging.Info("CoreDNS is healthy")
 
+	// Start TLS certificate process early in background (if enabled)
 	tlsEnabled := config.GetBool(ServerTLSEnabledKey)
-
-	// Channel that will be closed once a certificate has been successfully obtained.
 	var certReadyCh chan struct{}
 
 	if tlsEnabled && config.GetBool(certificate.CertRenewalEnabledKey) {
 		certReadyCh = make(chan struct{})
+		logging.Info("Starting certificate process in background...")
 
-		// Launch certificate obtainment in background so the HTTP server can
-		// start immediately.
 		go func() {
 			for {
 				if err := runCertificateProcess(dnsManager, certReadyCh); err != nil {
@@ -115,24 +110,30 @@ func main() {
 					time.Sleep(30 * time.Second)
 					continue
 				}
-				// If we get here, the certificate process completed successfully
 				break
 			}
 		}()
 	}
 
-	// Create record handler
-	recordHandler := handler.NewRecordHandler(dnsManager)
+	// Start sync process in background (non-blocking)
+	logging.Info("Starting sync process in background...")
+	go func() {
+		if sm := maybeSync(dnsManager); sm != nil {
+			syncManager = sm
+			logging.Info("Background sync process completed successfully")
+		} else {
+			logging.Info("Sync disabled or failed, continuing without dynamic zone sync")
+		}
+	}()
 
-	// Setup routes
+	// Create record handler and setup routes
+	recordHandler := handler.NewRecordHandler(dnsManager)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthCheckHandler)
 	mux.HandleFunc("/add-record", recordHandler.AddRecord)
 
-	// Step 10: Create and start initial HTTP server (always plain HTTP).
-	var server *http.Server
-
-	server = &http.Server{
+	// Create and start HTTP server
+	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
 		ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
 		WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
@@ -143,11 +144,9 @@ func main() {
 	// Start server in a goroutine
 	serverStarted := make(chan bool, 1)
 	go func() {
-		logging.Info("Starting server...")
-		var err error
-		logging.Info("Server starting without TLS on port %d", config.GetInt(ServerPortKey))
+		logging.Info("Starting HTTP server on port %d", config.GetInt(ServerPortKey))
 		serverStarted <- true
-		err = server.ListenAndServe()
+		err := server.ListenAndServe()
 
 		if err != nil && err != http.ErrServerClosed {
 			logging.Error("Failed to start server: %v", err)
@@ -157,21 +156,20 @@ func main() {
 
 	// Wait for server to start
 	<-serverStarted
-	logging.Info("Server started successfully")
+	logging.Info("HTTP server started successfully")
 
-	// If TLS is enabled and we have a certificate goroutine, switch to HTTPS
+	// If TLS is enabled, wait for certificate and switch to HTTPS
 	if tlsEnabled && certReadyCh != nil {
 		go func() {
 			<-certReadyCh
-
-			logging.Info("Certificate obtained – switching server to HTTPS")
+			logging.Info("Certificate obtained, switching to HTTPS...")
 
 			// Gracefully stop the HTTP server
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = server.Shutdown(ctx)
 			cancel()
 
-			// Build HTTPS server with same handler
+			// Start HTTPS server
 			httpsSrv := &http.Server{
 				Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerTLSPortKey)),
 				ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
@@ -183,7 +181,7 @@ func main() {
 				},
 			}
 
-			// Update the server pointer so shutdown logic hits the right instance later.
+			// Update the server pointer for graceful shutdown
 			server = httpsSrv
 
 			certFile := config.GetString(ServerTLSCertFileKey)
@@ -262,9 +260,10 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 				"message": "Sync manager created but zone not synced",
 			}
 		} else {
+			// syncManager is nil, which could mean sync is still starting up
 			components["sync"] = map[string]string{
-				"status":  "error",
-				"message": "Sync enabled but manager failed to initialize",
+				"status":  "starting",
+				"message": "Dynamic zone sync is starting in background",
 			}
 		}
 	} else {
