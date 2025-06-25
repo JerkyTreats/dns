@@ -224,18 +224,33 @@ func main() {
 
 	// If TLS is enabled, wait for certificate and switch to HTTPS
 	if tlsEnabled && certReadyCh != nil {
+		logging.Info("TLS is enabled, setting up HTTPS transition goroutine...")
 		go func() {
+			logging.Info("Waiting for certificate ready signal...")
 			<-certReadyCh
-			logging.Info("Certificate obtained, switching to HTTPS...")
+			logging.Info("Certificate ready signal received, switching to HTTPS...")
 
 			// Gracefully stop the HTTP server
+			logging.Info("Shutting down HTTP server...")
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = server.Shutdown(ctx)
+			shutdownErr := server.Shutdown(ctx)
 			cancel()
 
+			if shutdownErr != nil {
+				logging.Warn("HTTP server shutdown encountered error: %v", shutdownErr)
+			} else {
+				logging.Info("HTTP server shutdown completed")
+			}
+
 			// Start HTTPS server
+			tlsPort := config.GetInt(ServerTLSPortKey)
+			certFile := config.GetString(ServerTLSCertFileKey)
+			keyFile := config.GetString(ServerTLSKeyFileKey)
+
+			logging.Info("Starting HTTPS server on port %d with cert: %s, key: %s", tlsPort, certFile, keyFile)
+
 			httpsSrv := &http.Server{
-				Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerTLSPortKey)),
+				Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), tlsPort),
 				ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
 				WriteTimeout: config.GetDuration(ServerWriteTimeoutKey),
 				IdleTimeout:  config.GetDuration(ServerIdleTimeoutKey),
@@ -248,13 +263,15 @@ func main() {
 			// Update the server pointer for graceful shutdown
 			server = httpsSrv
 
-			certFile := config.GetString(ServerTLSCertFileKey)
-			keyFile := config.GetString(ServerTLSKeyFileKey)
-			logging.Info("HTTPS server now listening on port %d", config.GetInt(ServerTLSPortKey))
+			logging.Info("HTTPS server now listening on port %d", tlsPort)
 			if err := httpsSrv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 				logging.Error("HTTPS server error: %v", err)
+			} else {
+				logging.Info("HTTPS server started successfully")
 			}
 		}()
+	} else {
+		logging.Info("TLS disabled or no certificate channel - continuing with HTTP only")
 	}
 
 	// Wait for interrupt signal
