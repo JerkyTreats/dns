@@ -30,7 +30,7 @@ dns:
     config_path: /etc/coredns/Corefile
     template_path: /etc/coredns/Corefile.template
     zones_path: /etc/coredns/zones
-    reload_command: []  # Empty - rely on CoreDNS reload plugin for automatic reloading
+    # reload_command removed - relying on CoreDNS native reload plugin
     restart_timeout: "30s"  # Timeout for CoreDNS restart operations
     health_check_retries: 5  # Number of retries for health checks after restart
     tls:

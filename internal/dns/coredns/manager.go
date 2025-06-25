@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -22,7 +21,6 @@ const (
 	DNSConfigPathKey         = "dns.coredns.config_path"
 	DNSTemplatePathKey       = "dns.coredns.template_path"
 	DNSZonesPathKey          = "dns.coredns.zones_path"
-	DNSReloadCommandKey      = "dns.coredns.reload_command"
 	DNSRestartTimeoutKey     = "dns.coredns.restart_timeout"
 	DNSHealthCheckRetriesKey = "dns.coredns.health_check_retries"
 	DNSDomainKey             = "dns.domain"
@@ -31,9 +29,9 @@ const (
 func init() {
 	config.RegisterRequiredKey(DNSConfigPathKey)
 	config.RegisterRequiredKey(DNSZonesPathKey)
-	config.RegisterRequiredKey(DNSReloadCommandKey)
 	config.RegisterRequiredKey(DNSDomainKey)
 	// Template path is optional, will use default if not provided
+	// Reload command is optional, will rely on CoreDNS native reload if not provided
 }
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -73,8 +71,7 @@ type DomainConfig struct {
 // Manager manages CoreDNS configuration, zones and lifecycle.
 type Manager struct {
 	// Operational / reload settings
-	reloadCommand []string
-	mu            sync.Mutex
+	mu sync.Mutex
 
 	// CoreDNS configuration paths & state
 	configPath   string
@@ -95,13 +92,12 @@ type Manager struct {
 
 // NewManager creates a new CoreDNS manager.
 // NOTE: this replaces both the old Manager and ConfigManager constructors.
-func NewManager(configPath, templatePath, zonesPath string, reloadCommand []string, domain string) *Manager {
+func NewManager(configPath, templatePath, zonesPath string, domain string) *Manager {
 	if templatePath == "" {
 		templatePath = "configs/coredns/Corefile.template"
 	}
 
 	manager := &Manager{
-		reloadCommand:  reloadCommand,
 		configPath:     configPath,
 		templatePath:   templatePath,
 		domain:         domain,
@@ -467,55 +463,10 @@ func (m *Manager) RemoveRecord(serviceName, name string) error {
 
 // ------------------- CoreDNS reload helpers -------------------- //
 
-// Reload sends a lightweight reload (e.g., SIGHUP or docker-compose restart) when only zone data changes.
+// Reload relies on CoreDNS native file monitoring and reload functionality.
+// CoreDNS automatically detects file changes when using the 'reload' plugin.
 func (m *Manager) Reload() error {
-	if len(m.reloadCommand) == 0 {
-		logging.Warn("No reload command configured for CoreDNS.")
-		return nil
-	}
-
-	if m.isTestEnvironment() {
-		return m.reloadForTest()
-	}
-
-	cmd := exec.Command(m.reloadCommand[0], m.reloadCommand[1:]...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	if err := cmd.Run(); err != nil {
-		logging.Error("CoreDNS reload failed: %s", out.String())
-		return fmt.Errorf("reloading CoreDNS failed: %w: %s", err, out.String())
-	}
-
-	logging.Info("CoreDNS reloaded successfully: %s", out.String())
-	return nil
-}
-
-func (m *Manager) isTestEnvironment() bool {
-	if len(m.reloadCommand) == 0 {
-		return true
-	}
-	return len(m.reloadCommand) >= 2 && m.reloadCommand[0] == "docker-compose" && m.reloadCommand[1] == "restart"
-}
-
-func (m *Manager) reloadForTest() error {
-	if len(m.reloadCommand) == 0 {
-		logging.Info("No reload command configured - relying on CoreDNS file monitoring")
-		return nil
-	}
-
-	cmd := exec.Command("docker-compose", "-f", "docker-compose.test.yml", "restart", "coredns-test")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	if err := cmd.Run(); err != nil {
-		logging.Error("CoreDNS restart failed: %s", out.String())
-		return fmt.Errorf("restarting CoreDNS container failed: %w: %s", err, out.String())
-	}
-	logging.Info("CoreDNS container restarted successfully: %s", out.String())
-	time.Sleep(5 * time.Second)
+	logging.Info("Relying on CoreDNS native file monitoring for zone reload")
 	return nil
 }
 

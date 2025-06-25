@@ -308,10 +308,9 @@ func newCoreDNSManager() *coredns.Manager {
 	configPath := config.GetString(coredns.DNSConfigPathKey)
 	templatePath := config.GetString(coredns.DNSTemplatePathKey)
 	zonesPath := config.GetString(coredns.DNSZonesPathKey)
-	reloadCmd := config.GetStringSlice(coredns.DNSReloadCommandKey)
 	domain := config.GetString(coredns.DNSDomainKey)
 
-	dnsMgr := coredns.NewManager(configPath, templatePath, zonesPath, reloadCmd, domain)
+	dnsMgr := coredns.NewManager(configPath, templatePath, zonesPath, domain)
 
 	// Add base domain so zone files can refer to it.
 	baseDomain := config.GetString(coredns.DNSDomainKey)

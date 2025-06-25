@@ -34,7 +34,7 @@ func TestManager(t *testing.T) {
 	reloadScriptContent := "#!/bin/sh\necho 'reloaded'"
 	_ = os.WriteFile(reloadScriptPath, []byte(reloadScriptContent), 0755)
 
-	manager := NewManager(configPath, templatePath, zonesPath, []string{reloadScriptPath}, "test.local")
+	manager := NewManager(configPath, templatePath, zonesPath, "test.local")
 
 	t.Run("AddRecord", func(t *testing.T) {
 		// Before adding a record, a zone must exist.
@@ -89,16 +89,15 @@ func TestManager(t *testing.T) {
 	})
 
 	t.Run("Reload with no command", func(t *testing.T) {
-		managerNoReload := NewManager(configPath, templatePath, zonesPath, []string{}, "test.local")
+		managerNoReload := NewManager(configPath, templatePath, zonesPath, "test.local")
 		err := managerNoReload.Reload()
 		assert.NoError(t, err, "Reload should not error when no command is configured")
 	})
 
-	t.Run("Reload with failing command", func(t *testing.T) {
-		managerFailingReload := NewManager(configPath, templatePath, zonesPath, []string{"/bin/false"}, "test.local")
-		err := managerFailingReload.Reload()
-		assert.Error(t, err)
-		assert.True(t, strings.Contains(err.Error(), "reloading CoreDNS failed"), "Error message should indicate failure")
+	t.Run("Reload with native CoreDNS", func(t *testing.T) {
+		managerNativeReload := NewManager(configPath, templatePath, zonesPath, "test.local")
+		err := managerNativeReload.Reload()
+		assert.NoError(t, err, "Reload should not error when using CoreDNS native reload")
 	})
 }
 
@@ -143,7 +142,7 @@ func TestZoneValidation(t *testing.T) {
 {{end}}
 {{end}}
 `), 0644)
-	manager := NewManager(configPath, templatePath2, zonesPath, []string{}, "test.local")
+	manager := NewManager(configPath, templatePath2, zonesPath, "test.local")
 
 	t.Run("AddZone creates new zone", func(t *testing.T) {
 		err := manager.AddZone("new-service")
@@ -245,7 +244,7 @@ func TestManager_AddDomain_NoUnnecessaryRegeneration(t *testing.T) {
 		t.Fatalf("Failed to write template: %v", err)
 	}
 
-	manager := NewManager(configPath, templatePath, tempDir, []string{}, "test.local")
+	manager := NewManager(configPath, templatePath, tempDir, "test.local")
 
 	// Check that Corefile doesn't exist initially
 	if _, err := os.Stat(configPath); err == nil {
@@ -321,7 +320,7 @@ func TestManager_AddZone_OverwritesExistingZone(t *testing.T) {
 		t.Fatalf("Failed to write template: %v", err)
 	}
 
-	manager := NewManager(configPath, templatePath, zonesPath, []string{}, "test.local")
+	manager := NewManager(configPath, templatePath, zonesPath, "test.local")
 
 	// Add zone for the first time
 	if err := manager.AddZone("test-service"); err != nil {

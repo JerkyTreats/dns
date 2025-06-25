@@ -50,8 +50,8 @@ type RestartResult struct {
 func NewRestartManager() *RestartManager {
 	logging.Info("Creating CoreDNS RestartManager")
 
-	// Get restart command from configuration
-	restartCmd := config.GetStringSlice("dns.coredns.reload_command")
+	// No restart command needed - relying on CoreDNS native reload plugin
+	var restartCmd []string
 
 	// Get timeouts from configuration with defaults
 	restartTimeout := config.GetDuration(DNSRestartTimeoutKey)
