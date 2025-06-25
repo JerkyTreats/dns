@@ -28,14 +28,29 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = os.WriteFile(configPath, []byte(initialConfig), 0644)
 	require.NoError(t, err)
 
-	// Create a dummy zone file for the test service
-	err = os.MkdirAll(zonesPath, 0755)
-	require.NoError(t, err)
-	zoneFileName := filepath.Join(zonesPath, "test-service.test.local.zone")
-	err = os.WriteFile(zoneFileName, []byte("$ORIGIN test-service.test.local."), 0644)
+	// Prepare Corefile template required by the manager
+	templatePath := filepath.Join(tempDir, "Corefile.template")
+	templateContent := `. {
+    errors
+    log
+}
+{{range .Domains}}
+{{if .Enabled}}
+# Configuration for {{.Domain}}
+{{.Domain}}:{{.Port}} {
+    file {{.ZoneFile}} {{.Domain}}
+    errors
+    log
+}
+{{end}}
+{{end}}
+`
+	err = os.WriteFile(templatePath, []byte(templateContent), 0644)
 	require.NoError(t, err)
 
-	manager := coredns.NewManager(configPath, "", zonesPath, []string{}, "test.local")
+	manager := coredns.NewManager(configPath, templatePath, zonesPath, []string{}, "test.local")
+	err = manager.AddZone("test-service")
+	require.NoError(t, err)
 
 	return NewRecordHandler(manager)
 }

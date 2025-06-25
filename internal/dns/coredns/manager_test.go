@@ -36,17 +36,15 @@ func TestManager(t *testing.T) {
 	manager := NewManager(configPath, templatePath, zonesPath, []string{reloadScriptPath}, "test.local")
 
 	t.Run("AddRecord", func(t *testing.T) {
-		// Before adding a record, we need a zone. Let's create a dummy zone file.
-		zoneFileName := filepath.Join(zonesPath, "test-service.test.local.zone")
-		err := os.MkdirAll(zonesPath, 0755)
-		require.NoError(t, err)
-		err = os.WriteFile(zoneFileName, []byte("$ORIGIN test-service.test.local.\n"), 0644)
+		// Before adding a record, a zone must exist.
+		err := manager.AddZone("test-service")
 		require.NoError(t, err)
 
 		err = manager.AddRecord("test-service", "test-record", "127.0.0.1")
 		require.NoError(t, err)
 
 		// Verify the content of the zone file
+		zoneFileName := filepath.Join(zonesPath, "test.local.zone")
 		content, err := os.ReadFile(zoneFileName)
 		require.NoError(t, err)
 		expectedRecord := "test-record\tIN A\t127.0.0.1"
@@ -54,17 +52,12 @@ func TestManager(t *testing.T) {
 	})
 
 	t.Run("DropRecord", func(t *testing.T) {
-		// Setup: Create a zone file with a couple of records
-		zoneFileName := filepath.Join(zonesPath, "test-service-drop.test.local.zone")
-		initialContent := `$ORIGIN test-service-drop.test.local.
-@	3600 IN	SOA ns1.test.local. admin.test.local. ( 2024061601 7200 3600 1209600 3600 )
-@	3600 IN	NS ns1.test.local.
-record-to-keep	IN A	192.168.1.1
-record-to-drop	IN A	192.168.1.2
-`
-		err := os.MkdirAll(zonesPath, 0755)
+		// Setup: Create a zone file with a couple of records via the manager
+		err := manager.AddZone("test-service-drop")
 		require.NoError(t, err)
-		err = os.WriteFile(zoneFileName, []byte(initialContent), 0644)
+		err = manager.AddRecord("test-service-drop", "record-to-keep", "192.168.1.1")
+		require.NoError(t, err)
+		err = manager.AddRecord("test-service-drop", "record-to-drop", "192.168.1.2")
 		require.NoError(t, err)
 
 		// Action: Drop one of the records
@@ -72,6 +65,7 @@ record-to-drop	IN A	192.168.1.2
 		require.NoError(t, err)
 
 		// Verification
+		zoneFileName := filepath.Join(zonesPath, "test.local.zone")
 		content, err := os.ReadFile(zoneFileName)
 		require.NoError(t, err)
 		contentStr := string(content)
@@ -155,14 +149,14 @@ func TestZoneValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify zone file was created
-		zoneFile := filepath.Join(zonesPath, "new-service.test.local.zone")
+		zoneFile := filepath.Join(zonesPath, "test.local.zone")
 		_, err = os.Stat(zoneFile)
 		require.NoError(t, err)
 
 		// Verify Corefile was updated
 		config, err := os.ReadFile(configPath)
 		require.NoError(t, err)
-		assert.Contains(t, string(config), "new-service.test.local:53")
+		assert.Contains(t, string(config), "test.local:53")
 	})
 
 	t.Run("AddZone does not duplicate existing zone", func(t *testing.T) {
@@ -178,7 +172,7 @@ func TestZoneValidation(t *testing.T) {
 		require.NoError(t, err)
 		configStr := string(config)
 
-		count := strings.Count(configStr, "duplicate-service.test.local:53")
+		count := strings.Count(configStr, "test.local:53")
 		assert.Equal(t, 1, count, "Zone should only appear once in Corefile")
 	})
 
@@ -215,7 +209,7 @@ existing-zone.test.local:53 {
 		// Verify it exists
 		config, err := os.ReadFile(configPath)
 		require.NoError(t, err)
-		assert.Contains(t, string(config), "removable-service.test.local:53")
+		assert.Contains(t, string(config), "test.local:53")
 
 		// Remove the zone
 		err = manager.RemoveZone("removable-service")
@@ -224,10 +218,10 @@ existing-zone.test.local:53 {
 		// Verify it's gone from config
 		config, err = os.ReadFile(configPath)
 		require.NoError(t, err)
-		assert.NotContains(t, string(config), "removable-service.test.local:53")
+		assert.NotContains(t, string(config), "test.local:53")
 
 		// Verify zone file is removed
-		zoneFile := filepath.Join(zonesPath, "removable-service.test.local.zone")
+		zoneFile := filepath.Join(zonesPath, "test.local.zone")
 		_, err = os.Stat(zoneFile)
 		assert.True(t, os.IsNotExist(err), "Zone file should be removed")
 	})
