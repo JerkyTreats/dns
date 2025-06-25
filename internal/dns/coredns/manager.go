@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -83,7 +84,7 @@ func NewManager(configPath, templatePath, zonesPath string, reloadCommand []stri
 		templatePath = "configs/coredns/Corefile.template"
 	}
 
-	return &Manager{
+	manager := &Manager{
 		reloadCommand:  reloadCommand,
 		configPath:     configPath,
 		templatePath:   templatePath,
@@ -92,6 +93,11 @@ func NewManager(configPath, templatePath, zonesPath string, reloadCommand []stri
 		domains:        make(map[string]*DomainConfig),
 		restartManager: NewRestartManager(),
 	}
+
+	// Load existing domains from Corefile if it exists
+	manager.loadExistingDomains()
+
+	return manager
 }
 
 // ------------------- Domain Management -------------------- //
@@ -102,6 +108,23 @@ func (m *Manager) AddDomain(domain string, tlsConfig *TLSConfig) error {
 	defer m.domainsMutex.Unlock()
 
 	logging.Info("Adding domain configuration: %s", domain)
+
+	// Check if domain already exists with same configuration
+	if existing, exists := m.domains[domain]; exists {
+		// If TLS config is the same, no need to regenerate
+		if tlsConfig == nil && existing.TLSConfig == nil {
+			logging.Debug("Domain %s already exists with same configuration, skipping", domain)
+			return nil
+		}
+		// If TLS configs are equivalent, no need to regenerate
+		if tlsConfig != nil && existing.TLSConfig != nil &&
+			tlsConfig.CertFile == existing.TLSConfig.CertFile &&
+			tlsConfig.KeyFile == existing.TLSConfig.KeyFile &&
+			tlsConfig.Port == existing.TLSConfig.Port {
+			logging.Debug("Domain %s already exists with same TLS configuration, skipping", domain)
+			return nil
+		}
+	}
 
 	domainCfg := &DomainConfig{
 		Domain:    domain,
@@ -474,6 +497,12 @@ func (m *Manager) RestartCoreDNS() error {
 // ------------------- Corefile generation -------------------- //
 
 func (m *Manager) applyConfiguration() error {
+	// Check if we need to regenerate the Corefile
+	if !m.needsRegeneration() {
+		logging.Debug("Corefile is up to date, skipping regeneration")
+		return nil
+	}
+
 	rendered, err := m.renderCorefile()
 	if err != nil {
 		return err
@@ -491,6 +520,44 @@ func (m *Manager) applyConfiguration() error {
 	m.configVersion++
 
 	return m.RestartCoreDNS()
+}
+
+// needsRegeneration checks if the Corefile needs to be regenerated
+func (m *Manager) needsRegeneration() bool {
+	// If Corefile doesn't exist, we need to generate it
+	if _, err := os.Stat(m.configPath); os.IsNotExist(err) {
+		logging.Debug("Corefile does not exist, regeneration needed")
+		return true
+	}
+
+	// Check if template exists
+	if _, err := os.Stat(m.templatePath); os.IsNotExist(err) {
+		logging.Warn("Corefile template does not exist: %v", err)
+		return false // Don't regenerate if template is missing
+	}
+
+	// Generate what the new content would be
+	newContent, err := m.renderCorefile()
+	if err != nil {
+		logging.Warn("Failed to render Corefile for comparison: %v", err)
+		return true // Regenerate on error to be safe
+	}
+
+	// Read existing content
+	existingContent, err := os.ReadFile(m.configPath)
+	if err != nil {
+		logging.Warn("Failed to read existing Corefile for comparison: %v", err)
+		return true // Regenerate on error to be safe
+	}
+
+	// Compare content
+	if bytes.Equal(existingContent, newContent) {
+		logging.Debug("Corefile content is identical, no regeneration needed")
+		return false
+	}
+
+	logging.Debug("Corefile content differs, regeneration needed")
+	return true
 }
 
 func (m *Manager) renderCorefile() ([]byte, error) {
@@ -595,4 +662,91 @@ func (m *Manager) getDomainListInternal() []*DomainConfig {
 func (m *Manager) zoneExistsInConfig(config, zoneName string) bool {
 	pattern := regexp.MustCompile(fmt.Sprintf(`(?m)^%s\s*\{`, regexp.QuoteMeta(zoneName)))
 	return pattern.MatchString(config)
+}
+
+func (m *Manager) loadExistingDomains() {
+	// Check if Corefile exists
+	if _, err := os.Stat(m.configPath); os.IsNotExist(err) {
+		logging.Debug("Corefile does not exist, no existing domains to load")
+		return
+	}
+
+	// Read existing Corefile
+	content, err := os.ReadFile(m.configPath)
+	if err != nil {
+		logging.Warn("Failed to read existing Corefile for domain loading: %v", err)
+		return
+	}
+
+	// Parse domains from Corefile content
+	domains := m.parseDomainsFromCorefile(string(content))
+
+	m.domainsMutex.Lock()
+	defer m.domainsMutex.Unlock()
+
+	for domain, config := range domains {
+		m.domains[domain] = config
+		logging.Debug("Loaded existing domain: %s", domain)
+	}
+
+	if len(domains) > 0 {
+		logging.Info("Loaded %d existing domains from Corefile", len(domains))
+	}
+}
+
+// parseDomainsFromCorefile extracts domain configurations from Corefile content
+func (m *Manager) parseDomainsFromCorefile(content string) map[string]*DomainConfig {
+	domains := make(map[string]*DomainConfig)
+
+	// Simple regex to match domain blocks
+	// This looks for patterns like "domain:port {" or "domain {"
+	domainRegex := regexp.MustCompile(`^([^:]+)(?::(\d+))?\s*\{`)
+	tlsRegex := regexp.MustCompile(`tls\s+([^\s]+)\s+([^\s]+)`)
+
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Check for domain block start
+		matches := domainRegex.FindStringSubmatch(line)
+		if len(matches) >= 2 {
+			domain := strings.TrimSpace(matches[1])
+			port := 53 // default port
+
+			if len(matches) >= 3 && matches[2] != "" {
+				if p, err := strconv.Atoi(matches[2]); err == nil {
+					port = p
+				}
+			}
+
+			// Look ahead for TLS configuration
+			var tlsConfig *TLSConfig
+			for j := i + 1; j < len(lines) && !strings.Contains(lines[j], "}"); j++ {
+				tlsMatches := tlsRegex.FindStringSubmatch(lines[j])
+				if len(tlsMatches) >= 3 {
+					tlsConfig = &TLSConfig{
+						CertFile: tlsMatches[1],
+						KeyFile:  tlsMatches[2],
+						Port:     port,
+					}
+					break
+				}
+			}
+
+			domains[domain] = &DomainConfig{
+				Domain:    domain,
+				Port:      port,
+				TLSConfig: tlsConfig,
+				ZoneFile:  filepath.Join(m.zonesPath, domain+".zone"),
+				Enabled:   true,
+			}
+		}
+	}
+
+	return domains
 }

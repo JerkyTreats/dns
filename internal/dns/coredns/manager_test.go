@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -225,4 +226,79 @@ existing-zone.test.local:53 {
 		_, err = os.Stat(zoneFile)
 		assert.True(t, os.IsNotExist(err), "Zone file should be removed")
 	})
+}
+
+func TestManager_AddDomain_NoUnnecessaryRegeneration(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "Corefile")
+	templatePath := filepath.Join(tempDir, "Corefile.template")
+
+	// Create a simple template
+	templateContent := `{{range .Domains}}
+{{.Domain}}:{{.Port}} {
+	file {{.ZoneFile}} {{.Domain}}
+	errors
+	log
+}{{end}}
+`
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
+		t.Fatalf("Failed to write template: %v", err)
+	}
+
+	manager := NewManager(configPath, templatePath, tempDir, []string{}, "test.local")
+
+	// Check that Corefile doesn't exist initially
+	if _, err := os.Stat(configPath); err == nil {
+		t.Fatal("Corefile should not exist initially")
+	}
+
+	// Add domain for the first time
+	if err := manager.AddDomain("test.local", nil); err != nil {
+		t.Fatalf("Failed to add domain: %v", err)
+	}
+
+	// Check that Corefile was created
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Fatal("Corefile should exist after adding domain")
+	}
+
+	firstStat, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("Failed to stat Corefile: %v", err)
+	}
+
+	// Wait a bit to ensure time difference
+	time.Sleep(10 * time.Millisecond)
+
+	// Add the same domain again
+	if err := manager.AddDomain("test.local", nil); err != nil {
+		t.Fatalf("Failed to add domain again: %v", err)
+	}
+
+	secondStat, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("Failed to stat Corefile after second add: %v", err)
+	}
+
+	// The modification time should be the same (no regeneration)
+	if !firstStat.ModTime().Equal(secondStat.ModTime()) {
+		t.Errorf("Corefile was regenerated unnecessarily. First mod time: %v, Second mod time: %v",
+			firstStat.ModTime(), secondStat.ModTime())
+	}
+
+	// Add domain with different TLS config should regenerate
+	time.Sleep(10 * time.Millisecond)
+	if err := manager.AddDomain("test.local", &TLSConfig{CertFile: "/cert.pem", KeyFile: "/key.pem", Port: 853}); err != nil {
+		t.Fatalf("Failed to add domain with TLS: %v", err)
+	}
+
+	thirdStat, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("Failed to stat Corefile after TLS add: %v", err)
+	}
+
+	// The modification time should be different (regeneration occurred)
+	if firstStat.ModTime().Equal(thirdStat.ModTime()) {
+		t.Errorf("Corefile should have been regenerated for TLS config change. Mod time: %v", thirdStat.ModTime())
+	}
 }
