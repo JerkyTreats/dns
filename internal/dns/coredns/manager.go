@@ -38,6 +38,22 @@ func init() {
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+// generateSerial creates a timestamp-based serial number for DNS zones
+func generateSerial() string {
+	// Format: YYYYMMDDXX where XX is the hour/minute combination
+	now := time.Now()
+	return now.Format("2006010215") // YYYYMMDDHH format
+}
+
+// updateZoneSerial updates the serial number in a zone file content
+func (m *Manager) updateZoneSerial(content string) string {
+	// Regex to match the serial number in SOA record
+	serialRegex := regexp.MustCompile(`(\d{10,})\s*;\s*serial`)
+	newSerial := generateSerial()
+
+	return serialRegex.ReplaceAllString(content, newSerial+" ; serial")
+}
+
 // TLSConfig represents TLS configuration for a domain
 type TLSConfig struct {
 	CertFile string
@@ -236,20 +252,20 @@ func (m *Manager) AddZone(serviceName string) error {
 	}
 
 	zoneDomain := fmt.Sprintf("%s.", m.domain)
-	ns := fmt.Sprintf("ns1.%s.", m.domain)
+	ns := fmt.Sprintf("ns.%s.", m.domain)
 	admin := fmt.Sprintf("admin.%s.", m.domain)
+	serial := generateSerial()
 
 	zoneContent := fmt.Sprintf(`$ORIGIN %s
 @\t3600 IN\tSOA %s %s (
-	2024061601 ; serial
+	%s ; serial
 	7200       ; refresh
 	3600       ; retry
 	1209600    ; expire
 	3600       ; minimum
 )
 @\t3600 IN\tNS %s
-@\t3600 IN\tA 100.64.0.1
-`, zoneDomain, ns, admin, ns)
+`, zoneDomain, ns, admin, serial, ns)
 
 	if err := os.MkdirAll(m.zonesPath, 0755); err != nil {
 		return fmt.Errorf("failed to create zones directory: %w", err)
@@ -339,8 +355,11 @@ func (m *Manager) AddRecord(serviceName, name, ip string) error {
 		return nil
 	}
 
-	// Write the updated content back to the zone file
+	// Update the serial number in SOA record
 	output := strings.Join(newLines, "\n")
+	output = m.updateZoneSerial(output)
+
+	// Write the updated content back to the zone file
 	if err := os.WriteFile(zoneFile, []byte(output), 0644); err != nil {
 		return fmt.Errorf("failed to write updated zone file: %w", err)
 	}
@@ -390,6 +409,8 @@ func (m *Manager) DropRecord(serviceName, name, ip string) error {
 	}
 
 	output := strings.Join(newLines, "\n")
+	output = m.updateZoneSerial(output)
+
 	if err := os.WriteFile(zoneFile, []byte(output), 0644); err != nil {
 		return fmt.Errorf("failed to write updated zone file after dropping record: %w", err)
 	}
@@ -435,6 +456,8 @@ func (m *Manager) RemoveRecord(serviceName, name string) error {
 	}
 
 	output := strings.Join(newLines, "\n")
+	output = m.updateZoneSerial(output)
+
 	if err := os.WriteFile(zoneFile, []byte(output), 0644); err != nil {
 		return fmt.Errorf("failed to write updated zone file after removing record: %w", err)
 	}

@@ -7,4 +7,3 @@ $ORIGIN template-test.test.jerkytreats.dev.
 	3600       ; minimum
 )
 @\t3600 IN\tNS ns1.test.jerkytreats.dev.
-@\t3600 IN\tA 100.64.0.1
