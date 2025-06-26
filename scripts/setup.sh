@@ -191,7 +191,8 @@ if command -v python3 &> /dev/null; then
 
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
         python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
-            -s "provider: \"lego\"" "provider: \"lego\"\n  dns_provider: cloudflare"
+            -s "provider: \"lego\"" "provider: \"lego\"
+  dns_provider: cloudflare"
     fi
 
     # Only enable TLS if using production certificates
@@ -313,7 +314,8 @@ if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
     # Insert token into certificate section
     if command -v python3 &> /dev/null; then
         python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
-            -s "dns_provider: cloudflare" "dns_provider: cloudflare\n  cloudflare_api_token: \"$CF_TOKEN\""
+            -s "dns_provider: cloudflare" "dns_provider: cloudflare
+  cloudflare_api_token: \"$CF_TOKEN\""
     elif command -v perl &> /dev/null; then
         perl -i -pe "s/(dns_provider: cloudflare)/\$1\n  cloudflare_api_token: \"\Q$CF_TOKEN\E\"/g" configs/config.yaml
     else
