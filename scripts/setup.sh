@@ -120,101 +120,7 @@ if [ -z "$TAILSCALE_TAILNET" ]; then
     exit 1
 fi
 
-# Step 2.5: Auto-detect current Tailscale device
-log "Detecting current Tailscale device..."
-echo
 
-# Function to get Tailscale devices via API
-get_tailscale_devices() {
-    local api_key="$1"
-    local tailnet="$2"
-
-    log "Fetching Tailscale devices from API..."
-    local response=$(curl -s -H "Authorization: Bearer $api_key" \
-        "https://api.tailscale.com/api/v2/tailnet/$tailnet/devices" 2>/dev/null)
-
-    if [ $? -ne 0 ] || [ -z "$response" ]; then
-        return 1
-    fi
-
-    echo "$response"
-}
-
-# Function to detect current device
-detect_current_device() {
-    local api_response="$1"
-    local current_hostname="$2"
-
-    # Try to find the current device by hostname or IP
-    local current_ip=""
-    local device_name=""
-
-    # Check if we have a Tailscale IP address on this machine
-    if command -v ip &> /dev/null; then
-        # Linux
-        current_ip=$(ip addr show | grep -o '100\.[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
-    elif command -v ifconfig &> /dev/null; then
-        # macOS/BSD
-        current_ip=$(ifconfig | grep -o '100\.[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
-    fi
-
-    if [ -n "$current_ip" ]; then
-        log "Found Tailscale IP on this machine: $current_ip" >&2
-        # Extract device name from API response matching this IP
-        device_name=$(echo "$api_response" | jq -r --arg ip "$current_ip" '
-            .devices[] | select(.addresses[]? == $ip) | .name' 2>/dev/null)
-    fi
-
-    # Fallback: try to match by hostname
-    if [ -z "$device_name" ]; then
-        log "Trying to match by hostname: $current_hostname" >&2
-        device_name=$(echo "$api_response" | jq -r --arg hostname "$current_hostname" '
-            .devices[] | select(.hostname == $hostname or (.hostname | split(".")[0]) == $hostname) | .name' 2>/dev/null)
-    fi
-
-    echo "$device_name"
-}
-
-# Auto-detect current device
-CURRENT_HOSTNAME=$(hostname)
-log "Current hostname: $CURRENT_HOSTNAME"
-
-if command -v curl &> /dev/null && command -v jq &> /dev/null; then
-    API_RESPONSE=$(get_tailscale_devices "$TAILSCALE_API_KEY" "$TAILSCALE_TAILNET")
-
-    if [ -n "$API_RESPONSE" ]; then
-        DETECTED_DEVICE=$(detect_current_device "$API_RESPONSE" "$CURRENT_HOSTNAME")
-
-        if [ -n "$DETECTED_DEVICE" ]; then
-            log "Auto-detected current Tailscale device: $DETECTED_DEVICE"
-            echo "Use this device for NS records? (y/n) [y]:"
-            read -p "Use detected device: " USE_DETECTED
-            USE_DETECTED=${USE_DETECTED:-y}
-
-            if [[ $USE_DETECTED =~ ^[Yy]$ ]]; then
-                TAILSCALE_DEVICE_NAME="$DETECTED_DEVICE"
-                log "Using detected device: $TAILSCALE_DEVICE_NAME"
-            fi
-        else
-            warn "Could not auto-detect current Tailscale device"
-            echo "Available devices in your Tailscale network:"
-            echo "$API_RESPONSE" | jq -r '.devices[] | "- \(.name) (\(.hostname)) - \(if .online then "online" else "offline" end)"' 2>/dev/null || echo "Failed to parse device list"
-        fi
-
-        # If auto-detection failed or user declined, prompt manually
-        if [ -z "$TAILSCALE_DEVICE_NAME" ]; then
-            echo
-            echo "Please specify which Tailscale device this DNS server should represent:"
-            echo "This is important for NS records to point to the correct IP address."
-            read -p "Tailscale device name: " TAILSCALE_DEVICE_NAME
-        fi
-    else
-        warn "Failed to fetch Tailscale devices from API. You may need to configure device name manually."
-    fi
-else
-    warn "curl or jq not found. Cannot auto-detect Tailscale device."
-    warn "Please install curl and jq for automatic device detection, or configure manually."
-fi
 
 # Prompt for domain customization
 echo "What domain will you use for internal DNS? (e.g., internal.yourdomain.com)"
@@ -281,12 +187,7 @@ if command -v python3 &> /dev/null; then
     # Run Python template substitution
     python3 scripts/template_substitute.py configs/config.yaml.template configs/config.yaml "${PYTHON_ARGS[@]}"
 
-    # Post-processing for additional configurations
-    if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-        python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
-            -s "# device_name: \"your-device-name\"" "device_name: \"$TAILSCALE_DEVICE_NAME\""
-        log "Added Tailscale device name: $TAILSCALE_DEVICE_NAME"
-    fi
+
 
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
         python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
@@ -308,11 +209,7 @@ elif command -v perl &> /dev/null; then
     perl -i -pe "s/TAILSCALE_API_KEY_PLACEHOLDER/\Q$TAILSCALE_API_KEY\E/g" configs/config.yaml
     perl -i -pe "s/TAILSCALE_TAILNET_PLACEHOLDER/\Q$TAILSCALE_TAILNET\E/g" configs/config.yaml
 
-    # Add Tailscale device name if detected/specified
-    if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-        perl -i -pe "s/# device_name: \"your-device-name\"/device_name: \"\Q$TAILSCALE_DEVICE_NAME\E\"/g" configs/config.yaml
-        log "Added Tailscale device name: $TAILSCALE_DEVICE_NAME"
-    fi
+
 
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
         perl -i -pe 's/(provider: "lego")/$1\n  dns_provider: cloudflare/g' configs/config.yaml
@@ -380,15 +277,11 @@ echo
 
 info "Configuration file created:"
 echo "- configs/config.yaml (contains your secrets - not committed to git)"
-if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-    echo "- Auto-configured Tailscale device: $TAILSCALE_DEVICE_NAME"
-fi
 echo
 info "Next steps:"
-echo "1. Edit configs/config.yaml to configure your Tailscale devices (if needed)"
-echo "2. Deploy the services with: ./scripts/deploy.sh"
-echo "3. Verify deployment with: curl http://localhost:8080/health"
-echo "4. Test DNS resolution with: dig @localhost your-device.$INTERNAL_DOMAIN"
+echo "1. Deploy the services with: ./scripts/deploy.sh"
+echo "2. Verify deployment with: curl http://localhost:8080/health"
+echo "3. Test DNS resolution with: dig @localhost your-device.$INTERNAL_DOMAIN"
 echo
 info "Dynamic Configuration Features:"
 echo "- CoreDNS configuration is generated dynamically from templates"
@@ -432,3 +325,16 @@ if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
 fi
 
 log "Setup script completed successfully!"
+
+# Step 7: Configure NS device automatically
+log "Configuring Tailscale NS device..."
+if command -v python3 &> /dev/null; then
+    python3 scripts/configure_ns.py
+    if [ $? -eq 0 ]; then
+        log "NS device configuration completed!"
+    else
+        warn "NS device configuration failed. You may need to manually configure the device_name in configs/config.yaml"
+    fi
+else
+    warn "Python 3 not found. Please manually configure the device_name in configs/config.yaml"
+fi
