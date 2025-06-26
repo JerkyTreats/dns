@@ -329,11 +329,19 @@ log "Setup script completed successfully!"
 # Step 7: Configure NS device automatically
 log "Configuring Tailscale NS device..."
 if command -v python3 &> /dev/null; then
-    python3 scripts/configure_ns.py
-    if [ $? -eq 0 ]; then
-        log "NS device configuration completed!"
+    # Check if Python 3 is recent enough (3.6+ for f-strings, pathlib, etc.)
+    PYTHON_MAJOR=$(python3 -c "import sys; print(sys.version_info.major)" 2>/dev/null)
+    PYTHON_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
+    if [[ "$PYTHON_MAJOR" -eq 3 && "$PYTHON_MINOR" -ge 6 ]] || [[ "$PYTHON_MAJOR" -gt 3 ]]; then
+        python3 scripts/configure_ns.py
+        if [ $? -eq 0 ]; then
+            log "NS device configuration completed!"
+        else
+            warn "NS device configuration failed. You may need to manually configure the device_name in configs/config.yaml"
+        fi
     else
-        warn "NS device configuration failed. You may need to manually configure the device_name in configs/config.yaml"
+        warn "Python 3.6+ required for automatic NS configuration. Found: $PYTHON_MAJOR.$PYTHON_MINOR"
+        warn "Please manually configure the device_name in configs/config.yaml"
     fi
 else
     warn "Python 3 not found. Please manually configure the device_name in configs/config.yaml"

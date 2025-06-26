@@ -2,14 +2,17 @@
 """
 Automatically configure Tailscale NS device.
 This script detects the current Tailscale device and configures it in the config file.
+Uses only built-in Python modules for maximum compatibility.
 """
 
 import sys
-import yaml
-import requests
+import json
 import socket
 import subprocess
 import re
+import urllib.request
+import urllib.parse
+import urllib.error
 from pathlib import Path
 
 
@@ -62,15 +65,29 @@ def get_hostname():
 
 
 def fetch_tailscale_devices(api_key, tailnet):
-    """Fetch devices from Tailscale API."""
+    """Fetch devices from Tailscale API using built-in urllib."""
     try:
-        headers = {"Authorization": f"Bearer {api_key}"}
         url = f"https://api.tailscale.com/api/v2/tailnet/{tailnet}/devices"
+        request = urllib.request.Request(url)
+        request.add_header("Authorization", f"Bearer {api_key}")
+        request.add_header("User-Agent", "dns-manager-setup/1.0")
 
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if response.status != 200:
+                log_error(f"HTTP error {response.status}: {response.reason}")
+                return None
 
-        return response.json()
+            data = response.read().decode('utf-8')
+            return json.loads(data)
+    except urllib.error.HTTPError as e:
+        log_error(f"HTTP error fetching Tailscale devices: {e.code} {e.reason}")
+        return None
+    except urllib.error.URLError as e:
+        log_error(f"Network error fetching Tailscale devices: {e.reason}")
+        return None
+    except json.JSONDecodeError as e:
+        log_error(f"Failed to parse JSON response: {e}")
+        return None
     except Exception as e:
         log_error(f"Failed to fetch Tailscale devices: {e}")
         return None
@@ -128,14 +145,28 @@ def update_config_with_device(config_file, device_name):
         return False
 
 
-def load_config(config_file):
-    """Load the YAML config file."""
+def extract_config_values(config_file):
+    """Extract API key and tailnet from config file using simple text parsing."""
     try:
         with open(config_file, 'r') as f:
-            return yaml.safe_load(f)
+            content = f.read()
+
+        # Extract API key
+        api_key_match = re.search(r'api_key:\s*["\']([^"\']+)["\']', content)
+        tailnet_match = re.search(r'tailnet:\s*["\']([^"\']+)["\']', content)
+
+        if not api_key_match:
+            log_error("Could not find api_key in config file")
+            return None, None
+
+        if not tailnet_match:
+            log_error("Could not find tailnet in config file")
+            return None, None
+
+        return api_key_match.group(1), tailnet_match.group(1)
     except Exception as e:
-        log_error(f"Failed to load config file: {e}")
-        return None
+        log_error(f"Failed to read config file: {e}")
+        return None, None
 
 
 def main():
@@ -146,19 +177,11 @@ def main():
         log_error("Configuration file configs/config.yaml not found!")
         sys.exit(1)
 
-    log_info("Configuring Tailscale NS device...")
+        log_info("Configuring Tailscale NS device...")
 
-    # Load config to get API key and tailnet
-    config = load_config(config_file)
-    if not config:
-        sys.exit(1)
-
-    tailscale_config = config.get('tailscale', {})
-    api_key = tailscale_config.get('api_key')
-    tailnet = tailscale_config.get('tailnet')
-
+    # Extract config values
+    api_key, tailnet = extract_config_values(config_file)
     if not api_key or not tailnet:
-        log_error("Tailscale API key or tailnet not found in config file!")
         sys.exit(1)
 
     # Detect current device
