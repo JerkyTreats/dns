@@ -159,7 +159,7 @@ detect_current_device() {
     fi
 
     if [ -n "$current_ip" ]; then
-        log "Found Tailscale IP on this machine: $current_ip"
+        log "Found Tailscale IP on this machine: $current_ip" >&2
         # Extract device name from API response matching this IP
         device_name=$(echo "$api_response" | jq -r --arg ip "$current_ip" '
             .devices[] | select(.addresses[]? == $ip) | .name' 2>/dev/null)
@@ -167,7 +167,7 @@ detect_current_device() {
 
     # Fallback: try to match by hostname
     if [ -z "$device_name" ]; then
-        log "Trying to match by hostname: $current_hostname"
+        log "Trying to match by hostname: $current_hostname" >&2
         device_name=$(echo "$api_response" | jq -r --arg hostname "$current_hostname" '
             .devices[] | select(.hostname == $hostname or (.hostname | split(".")[0]) == $hostname) | .name' 2>/dev/null)
     fi
