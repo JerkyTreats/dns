@@ -105,8 +105,11 @@ def detect_current_device(devices_data, tailscale_ip, hostname):
         log_info(f"Found Tailscale IP on this machine: {tailscale_ip}")
         for device in devices:
             if 'addresses' in device and tailscale_ip in device['addresses']:
-                log_info(f"Matched device by IP: {device['name']}")
-                return device['name']
+                device_name = device['name']
+                # Extract just the hostname part (before first dot)
+                short_name = device_name.split('.')[0]
+                log_info(f"Matched device by IP: {device_name} -> using short name: {short_name}")
+                return short_name
 
     # Fallback: try to match by hostname
     if hostname:
@@ -117,8 +120,11 @@ def detect_current_device(devices_data, tailscale_ip, hostname):
             if (device_hostname == hostname or
                 device_hostname.split('.')[0] == hostname or
                 device.get('name', '') == hostname):
-                log_info(f"Matched device by hostname: {device['name']}")
-                return device['name']
+                device_name = device['name']
+                # Extract just the hostname part (before first dot)
+                short_name = device_name.split('.')[0]
+                log_info(f"Matched device by hostname: {device_name} -> using short name: {short_name}")
+                return short_name
 
     return None
 
@@ -206,7 +212,9 @@ def main():
         for device in devices_data.get('devices', []):
             status = "online" if device.get('online', False) else "offline"
             hostname_info = device.get('hostname', 'unknown')
-            log_error(f"  - {device.get('name', 'unknown')} ({hostname_info}) - {status}")
+            full_name = device.get('name', 'unknown')
+            short_name = full_name.split('.')[0]
+            log_error(f"  - {short_name} (full: {full_name}, hostname: {hostname_info}) - {status}")
         sys.exit(1)
 
     # Update config file
