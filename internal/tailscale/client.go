@@ -196,36 +196,51 @@ func (c *Client) GetCurrentDeviceIPByName(deviceName string) (string, error) {
 
 	logging.Debug("Looking for device with name: %s", deviceName)
 
+	// Debug: Log all devices and their online status
+	logging.Debug("Available devices from API:")
+	for _, device := range devices {
+		logging.Debug("  - Name: %s, Hostname: %s, Online: %t, Addresses: %v",
+			device.Name, device.Hostname, device.Online, device.Addresses)
+	}
+
 	// Try to find the device by matching name or hostname
 	for _, device := range devices {
 		// Try exact name match first
 		if device.Name == deviceName {
-			if !device.Online {
-				return "", fmt.Errorf("device '%s' is offline", deviceName)
-			}
-
-			// Find the Tailscale IP (typically 100.x.x.x range)
+			// Find the Tailscale IP (typically 100.x.x.x range) first
 			for _, addr := range device.Addresses {
 				if strings.HasPrefix(addr, "100.") {
+					if !device.Online {
+						logging.Warn("Device '%s' is marked offline but has IP %s - using IP anyway", deviceName, addr)
+					}
 					logging.Info("Found device '%s' Tailscale IP: %s", deviceName, addr)
 					return addr, nil
 				}
+			}
+
+			// Only fail if no IP is found
+			if !device.Online {
+				return "", fmt.Errorf("device '%s' is offline and has no Tailscale IP", deviceName)
 			}
 			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
 		}
 
 		// Try hostname match
 		if device.Hostname == deviceName {
-			if !device.Online {
-				return "", fmt.Errorf("device '%s' is offline", deviceName)
-			}
-
-			// Find the Tailscale IP (typically 100.x.x.x range)
+			// Find the Tailscale IP (typically 100.x.x.x range) first
 			for _, addr := range device.Addresses {
 				if strings.HasPrefix(addr, "100.") {
+					if !device.Online {
+						logging.Warn("Device '%s' is marked offline but has IP %s - using IP anyway (matched by hostname)", deviceName, addr)
+					}
 					logging.Info("Found device '%s' Tailscale IP: %s (matched by hostname)", deviceName, addr)
 					return addr, nil
 				}
+			}
+
+			// Only fail if no IP is found
+			if !device.Online {
+				return "", fmt.Errorf("device '%s' is offline and has no Tailscale IP", deviceName)
 			}
 			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
 		}
@@ -233,16 +248,20 @@ func (c *Client) GetCurrentDeviceIPByName(deviceName string) (string, error) {
 		// Try hostname without domain suffix match
 		deviceShortName := strings.Split(device.Hostname, ".")[0]
 		if deviceShortName == deviceName {
-			if !device.Online {
-				return "", fmt.Errorf("device '%s' is offline", deviceName)
-			}
-
-			// Find the Tailscale IP (typically 100.x.x.x range)
+			// Find the Tailscale IP (typically 100.x.x.x range) first
 			for _, addr := range device.Addresses {
 				if strings.HasPrefix(addr, "100.") {
+					if !device.Online {
+						logging.Warn("Device '%s' is marked offline but has IP %s - using IP anyway (matched by short hostname)", deviceName, addr)
+					}
 					logging.Info("Found device '%s' Tailscale IP: %s (matched by short hostname)", deviceName, addr)
 					return addr, nil
 				}
+			}
+
+			// Only fail if no IP is found
+			if !device.Online {
+				return "", fmt.Errorf("device '%s' is offline and has no Tailscale IP", deviceName)
 			}
 			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
 		}
