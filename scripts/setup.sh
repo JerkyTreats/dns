@@ -296,7 +296,9 @@ else
 
     # Function to escape sed replacement strings more carefully
     escape_for_sed() {
-        printf '%s\n' "$1" | sed 's/[\/&]/\\&/g'
+        # Escape special characters that can break sed when using | as delimiter
+        # Escape backslashes first, then pipes and ampersands
+        printf '%s\n' "$1" | sed 's/\\/\\\\/g; s/|/\\|/g; s/&/\\&/g'
     }
 
     # Escape variables for sed
