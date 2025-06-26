@@ -372,28 +372,6 @@ echo "    description: \"Main server\""
 echo "    enabled: true"
 echo
 
-# Ask if user wants to open the config file
-echo "Would you like to edit the configuration file now? (y/n) [y]:"
-read -p "Edit config: " EDIT_CONFIG
-EDIT_CONFIG=${EDIT_CONFIG:-y}
-
-if [[ $EDIT_CONFIG =~ ^[Yy]$ ]]; then
-    if command -v code &> /dev/null; then
-        log "Opening configuration file in VS Code..."
-        code configs/config.yaml
-    elif command -v nano &> /dev/null; then
-        log "Opening configuration file in nano..."
-        nano configs/config.yaml
-    elif command -v vim &> /dev/null; then
-        log "Opening configuration file in vim..."
-        vim configs/config.yaml
-    else
-        warn "No suitable editor found. Please manually edit configs/config.yaml"
-    fi
-else
-    warn "Please manually edit configs/config.yaml before deploying"
-fi
-
 echo
 
 # Step 5: Final Instructions
