@@ -265,9 +265,42 @@ cp configs/config.yaml.template configs/config.yaml
 # Substitute placeholders in the config file
 log "Substituting configuration values..."
 
-# Use perl for safer substitutions (handles special characters better than sed)
-if command -v perl &> /dev/null; then
-    log "Using perl for safe variable substitution..."
+# Use Python for robust template substitution (handles any special characters safely)
+if command -v python3 &> /dev/null; then
+    log "Using Python for safe template substitution..."
+
+    # Build substitution arguments for Python script
+    PYTHON_ARGS=(
+        -s "INTERNAL_DOMAIN_PLACEHOLDER" "$INTERNAL_DOMAIN"
+        -s "LETSENCRYPT_EMAIL_PLACEHOLDER" "$LETSENCRYPT_EMAIL"
+        -s "LETSENCRYPT_URL_PLACEHOLDER" "$LETSENCRYPT_URL"
+        -s "TAILSCALE_API_KEY_PLACEHOLDER" "$TAILSCALE_API_KEY"
+        -s "TAILSCALE_TAILNET_PLACEHOLDER" "$TAILSCALE_TAILNET"
+    )
+
+    # Run Python template substitution
+    python3 scripts/template_substitute.py configs/config.yaml.template configs/config.yaml "${PYTHON_ARGS[@]}"
+
+    # Post-processing for additional configurations
+    if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
+        python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
+            -s "# device_name: \"your-device-name\"" "device_name: \"$TAILSCALE_DEVICE_NAME\""
+        log "Added Tailscale device name: $TAILSCALE_DEVICE_NAME"
+    fi
+
+    if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
+        python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
+            -s "provider: \"lego\"" "provider: \"lego\"\n  dns_provider: cloudflare"
+    fi
+
+    # Only enable TLS if using production certificates
+    if [[ $TLS_ENABLED == "true" ]]; then
+        python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
+            -s "enabled: false" "enabled: true"
+    fi
+
+elif command -v perl &> /dev/null; then
+    log "Python not found, falling back to perl for variable substitution..."
 
     perl -i -pe "s/INTERNAL_DOMAIN_PLACEHOLDER/\Q$INTERNAL_DOMAIN\E/g" configs/config.yaml
     perl -i -pe "s/LETSENCRYPT_EMAIL_PLACEHOLDER/\Q$LETSENCRYPT_EMAIL\E/g" configs/config.yaml
@@ -291,74 +324,9 @@ if command -v perl &> /dev/null; then
     fi
 
 else
-    # Fallback to sed with manual escaping if perl is not available
-    log "Perl not found, using sed with manual escaping..."
-
-    # Function to escape sed replacement strings more carefully
-    escape_for_sed() {
-        # Escape special characters that can break sed when using | as delimiter
-        # Escape backslashes first, then pipes and ampersands
-        printf '%s\n' "$1" | sed 's/\\/\\\\/g; s/|/\\|/g; s/&/\\&/g'
-    }
-
-    # Escape variables for sed
-    ESCAPED_INTERNAL_DOMAIN=$(escape_for_sed "$INTERNAL_DOMAIN")
-    ESCAPED_LETSENCRYPT_EMAIL=$(escape_for_sed "$LETSENCRYPT_EMAIL")
-    ESCAPED_LETSENCRYPT_URL=$(escape_for_sed "$LETSENCRYPT_URL")
-    ESCAPED_TAILSCALE_API_KEY=$(escape_for_sed "$TAILSCALE_API_KEY")
-    ESCAPED_TAILSCALE_TAILNET=$(escape_for_sed "$TAILSCALE_TAILNET")
-    if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-        ESCAPED_TAILSCALE_DEVICE_NAME=$(escape_for_sed "$TAILSCALE_DEVICE_NAME")
-    fi
-
-    # Use sed with safer approach
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        sed -i '' "s|INTERNAL_DOMAIN_PLACEHOLDER|$ESCAPED_INTERNAL_DOMAIN|g" configs/config.yaml
-        sed -i '' "s|LETSENCRYPT_EMAIL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_EMAIL|g" configs/config.yaml
-        sed -i '' "s|LETSENCRYPT_URL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_URL|g" configs/config.yaml
-        sed -i '' "s|TAILSCALE_API_KEY_PLACEHOLDER|$ESCAPED_TAILSCALE_API_KEY|g" configs/config.yaml
-        sed -i '' "s|TAILSCALE_TAILNET_PLACEHOLDER|$ESCAPED_TAILSCALE_TAILNET|g" configs/config.yaml
-
-        # Add Tailscale device name if detected/specified
-        if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-            sed -i '' "s|# device_name: \"your-device-name\"|device_name: \"$ESCAPED_TAILSCALE_DEVICE_NAME\"|g" configs/config.yaml
-            log "Added Tailscale device name: $TAILSCALE_DEVICE_NAME"
-        fi
-
-        if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
-            sed -i '' '/provider: "lego"/a\
-  dns_provider: cloudflare' configs/config.yaml
-        fi
-
-        # Only enable TLS if using production certificates
-        if [[ $TLS_ENABLED == "true" ]]; then
-            sed -i '' "s|enabled: false|enabled: true|g" configs/config.yaml
-        fi
-    else
-        # Linux
-        sed -i "s|INTERNAL_DOMAIN_PLACEHOLDER|$ESCAPED_INTERNAL_DOMAIN|g" configs/config.yaml
-        sed -i "s|LETSENCRYPT_EMAIL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_EMAIL|g" configs/config.yaml
-        sed -i "s|LETSENCRYPT_URL_PLACEHOLDER|$ESCAPED_LETSENCRYPT_URL|g" configs/config.yaml
-        sed -i "s|TAILSCALE_API_KEY_PLACEHOLDER|$ESCAPED_TAILSCALE_API_KEY|g" configs/config.yaml
-        sed -i "s|TAILSCALE_TAILNET_PLACEHOLDER|$ESCAPED_TAILSCALE_TAILNET|g" configs/config.yaml
-
-        # Add Tailscale device name if detected/specified
-        if [ -n "$TAILSCALE_DEVICE_NAME" ]; then
-            sed -i "s|# device_name: \"your-device-name\"|device_name: \"$ESCAPED_TAILSCALE_DEVICE_NAME\"|g" configs/config.yaml
-            log "Added Tailscale device name: $TAILSCALE_DEVICE_NAME"
-        fi
-
-        if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
-            sed -i '/provider: "lego"/a\
-  dns_provider: cloudflare' configs/config.yaml
-        fi
-
-        # Only enable TLS if using production certificates
-        if [[ $TLS_ENABLED == "true" ]]; then
-            sed -i "s|enabled: false|enabled: true|g" configs/config.yaml
-        fi
-    fi
+    error "Neither Python nor Perl found. Please install Python 3 or Perl to continue."
+    error "Python 3 is recommended for the most robust template substitution."
+    exit 1
 fi
 
 log "Configuration file created successfully!"
@@ -472,17 +440,14 @@ if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
     fi
 
     # Insert token into certificate section
-    if command -v perl &> /dev/null; then
+    if command -v python3 &> /dev/null; then
+        python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
+            -s "dns_provider: cloudflare" "dns_provider: cloudflare\n  cloudflare_api_token: \"$CF_TOKEN\""
+    elif command -v perl &> /dev/null; then
         perl -i -pe "s/(dns_provider: cloudflare)/\$1\n  cloudflare_api_token: \"\Q$CF_TOKEN\E\"/g" configs/config.yaml
     else
-        ESCAPED_CF_TOKEN=$(escape_for_sed "$CF_TOKEN")
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            sed -i '' "/dns_provider: cloudflare/a\\
-  cloudflare_api_token: \"$ESCAPED_CF_TOKEN\"" configs/config.yaml
-        else
-            sed -i "/dns_provider: cloudflare/a\\
-  cloudflare_api_token: \"$ESCAPED_CF_TOKEN\"" configs/config.yaml
-        fi
+        error "Neither Python nor Perl found. Cannot add Cloudflare token."
+        exit 1
     fi
 
     log "Cloudflare token added to configs/config.yaml (git-ignored)."
