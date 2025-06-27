@@ -46,6 +46,12 @@ tailscale:
   # device_name: "your-device-name"
   # base_url: "https://api.tailscale.com"  # Optional, for custom endpoints
 
+# Device storage configuration
+device:
+  storage:
+    path: "data/devices.json"      # Path to device data file
+    backup_count: 3                # Number of backup files to keep
+
 logging:
   level: debug
   format: json

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/jerkytreats/dns/internal/persistence"
 	"github.com/jerkytreats/dns/internal/tailscale"
 )
 
@@ -31,6 +32,7 @@ type Manager struct {
 	corednsManager  CorednsManager
 	tailscaleClient TailscaleClient
 	config          config.SyncConfig
+	deviceStorage   *persistence.FileStorage
 
 	// IP cache to map device HOSTNAME to IP
 	ipCache    map[string]string
@@ -51,14 +53,15 @@ type SyncResult struct {
 	Error           error
 }
 
-// NewManager creates a new sync manager
-func NewManager(corednsManager CorednsManager, tailscaleClient TailscaleClient) (*Manager, error) {
+// NewManager creates a new sync manager with device persistence
+func NewManager(corednsManager CorednsManager, tailscaleClient TailscaleClient, deviceStorage *persistence.FileStorage) (*Manager, error) {
 	syncConfig := config.GetSyncConfig()
 
 	m := &Manager{
 		corednsManager:  corednsManager,
 		tailscaleClient: tailscaleClient,
 		config:          syncConfig,
+		deviceStorage:   deviceStorage,
 		ipCache:         make(map[string]string),
 	}
 
@@ -119,6 +122,13 @@ func (m *Manager) createInternalZoneIfNeeded(zoneName string) error {
 func (m *Manager) syncDevices(zoneName string) (*SyncResult, error) {
 	logging.Info("Starting dynamic sync for zone: %s", zoneName)
 
+	// Load existing device data before sync
+	deviceStorageData, err := m.loadDeviceStorage()
+	if err != nil {
+		logging.Warn("Failed to load device storage, continuing with empty storage: %v", err)
+		deviceStorageData = tailscale.NewDeviceStorage()
+	}
+
 	tsDevices, err := m.tailscaleClient.ListDevices()
 	if err != nil {
 		return &SyncResult{Success: false, Error: err}, fmt.Errorf("failed to list tailscale devices: %w", err)
@@ -127,6 +137,9 @@ func (m *Manager) syncDevices(zoneName string) (*SyncResult, error) {
 	result := &SyncResult{
 		TotalDevices: len(tsDevices),
 	}
+
+	// Sync devices with Tailscale API data, preserving annotations
+	deviceStorageData.SyncWithTailscaleDevices(tsDevices)
 
 	for _, tsDevice := range tsDevices {
 		hostname := tsDevice.Hostname
@@ -159,6 +172,12 @@ func (m *Manager) syncDevices(zoneName string) (*SyncResult, error) {
 
 		m.cacheIP(hostname, newIP)
 		result.ResolvedDevices++
+	}
+
+	// Save updated device data after sync
+	if err := m.saveDeviceStorage(deviceStorageData); err != nil {
+		logging.Warn("Failed to save device storage after sync: %v", err)
+		// Continue - this is not a critical error for DNS functionality
 	}
 
 	// CoreDNS auto-reloads via 'reload' plugin
@@ -256,4 +275,53 @@ func extractZoneName(origin string) string {
 	}
 
 	return parts[0]
+}
+
+// loadDeviceStorage loads device data from storage, creating empty storage if none exists
+func (m *Manager) loadDeviceStorage() (*tailscale.DeviceStorage, error) {
+	if m.deviceStorage == nil {
+		return tailscale.NewDeviceStorage(), nil
+	}
+
+	data, err := m.deviceStorage.Read()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read device storage: %w", err)
+	}
+
+	deviceStorageData := tailscale.NewDeviceStorage()
+
+	// If no data exists, return empty storage
+	if data == nil || len(data) == 0 {
+		logging.Debug("No existing device data found, using empty storage")
+		return deviceStorageData, nil
+	}
+
+	// Parse existing data
+	if err := deviceStorageData.FromJSON(data); err != nil {
+		logging.Warn("Failed to parse device storage, starting with empty storage: %v", err)
+		// Return empty storage rather than failing
+		return tailscale.NewDeviceStorage(), nil
+	}
+
+	logging.Debug("Loaded %d devices from persistent storage", len(deviceStorageData.Devices))
+	return deviceStorageData, nil
+}
+
+// saveDeviceStorage saves device data to storage
+func (m *Manager) saveDeviceStorage(deviceStorageData *tailscale.DeviceStorage) error {
+	if m.deviceStorage == nil {
+		return nil // No storage configured
+	}
+
+	data, err := deviceStorageData.ToJSON()
+	if err != nil {
+		return fmt.Errorf("failed to serialize device storage: %w", err)
+	}
+
+	if err := m.deviceStorage.Write(data); err != nil {
+		return fmt.Errorf("failed to write device storage: %w", err)
+	}
+
+	logging.Debug("Saved %d devices to persistent storage", len(deviceStorageData.Devices))
+	return nil
 }

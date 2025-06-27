@@ -17,6 +17,7 @@ import (
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/jerkytreats/dns/internal/persistence"
 	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/jerkytreats/dns/internal/tailscale/sync"
 )
@@ -275,7 +276,11 @@ func maybeSync(dnsMgr *coredns.Manager, tailscaleClient *tailscale.Client) *sync
 		}
 	}
 
-	sm, err := sync.NewManager(dnsMgr, tailscaleClient)
+	// Initialize device persistence storage
+	logging.Info("Initializing device persistence storage...")
+	deviceStorage := persistence.NewFileStorage()
+
+	sm, err := sync.NewManager(dnsMgr, tailscaleClient, deviceStorage)
 	if err != nil {
 		logging.Error("Failed to create sync manager: %v", err)
 		return nil

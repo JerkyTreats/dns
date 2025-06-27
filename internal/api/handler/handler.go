@@ -6,6 +6,7 @@ import (
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
+	devicehandler "github.com/jerkytreats/dns/internal/tailscale/handler"
 	"github.com/jerkytreats/dns/internal/tailscale/sync"
 )
 
@@ -13,6 +14,7 @@ import (
 type HandlerRegistry struct {
 	recordHandler *RecordHandler
 	healthHandler *healthcheck.Handler
+	deviceHandler *devicehandler.DeviceHandler
 	mux           *http.ServeMux
 }
 
@@ -31,9 +33,15 @@ func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Chec
 		return nil, err
 	}
 
+	deviceHandler, err := devicehandler.NewDeviceHandlerWithDefaults()
+	if err != nil {
+		return nil, err
+	}
+
 	registry := &HandlerRegistry{
 		recordHandler: recordHandler,
 		healthHandler: healthHandler,
+		deviceHandler: deviceHandler,
 		mux:           http.NewServeMux(),
 	}
 
@@ -51,6 +59,11 @@ func (hr *HandlerRegistry) RegisterHandlers(mux *http.ServeMux) {
 	mux.Handle("/health", hr.healthHandler)
 	mux.HandleFunc("/add-record", hr.recordHandler.AddRecord)
 
+	// Register device management endpoints
+	mux.HandleFunc("/list-devices", hr.deviceHandler.ListDevices)
+	mux.HandleFunc("/annotate-device", hr.deviceHandler.AnnotateDevice)
+	mux.HandleFunc("/device-storage-info", hr.deviceHandler.GetStorageInfo)
+
 	logging.Info("All application handlers registered successfully")
 }
 
@@ -67,4 +80,9 @@ func (hr *HandlerRegistry) GetRecordHandler() *RecordHandler {
 // GetHealthHandler returns the health handler instance for direct access if needed
 func (hr *HandlerRegistry) GetHealthHandler() *healthcheck.Handler {
 	return hr.healthHandler
+}
+
+// GetDeviceHandler returns the device handler instance for direct access if needed
+func (hr *HandlerRegistry) GetDeviceHandler() *devicehandler.DeviceHandler {
+	return hr.deviceHandler
 }

@@ -25,6 +25,10 @@ const (
 	TailscaleAPIKeyKey  = "tailscale.api_key"
 	TailscaleTailnetKey = "tailscale.tailnet"
 	TailscaleBaseURLKey = "tailscale.base_url" // Optional, for testing
+
+	// Device storage configuration keys
+	DeviceStoragePathKey        = "device.storage.path"
+	DeviceStorageBackupCountKey = "device.storage.backup_count"
 )
 
 // PollingConfig represents the polling configuration section
@@ -172,6 +176,8 @@ func (c *Config) loadConfig() (*viper.Viper, error) {
 	v.SetDefault(LogLevelKey, "INFO")
 	v.SetDefault(DNSSyncPollingEnabledKey, false)
 	v.SetDefault(DNSSyncPollingIntervalKey, "1h")
+	v.SetDefault(DeviceStoragePathKey, "data/devices.json")
+	v.SetDefault(DeviceStorageBackupCountKey, 3)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {

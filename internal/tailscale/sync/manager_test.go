@@ -53,7 +53,7 @@ func TestNewManager(t *testing.T) {
 	mockCoredns := &MockCorednsManager{}
 	mockTailscale := &MockTailscaleClient{}
 
-	manager, err := NewManager(mockCoredns, mockTailscale)
+	manager, err := NewManager(mockCoredns, mockTailscale, nil)
 	require.NoError(t, err)
 	require.NotNil(t, manager)
 
@@ -70,7 +70,7 @@ func TestSyncDevices(t *testing.T) {
 		mockCoredns := &MockCorednsManager{}
 		mockTailscale := &MockTailscaleClient{}
 
-		manager, _ := NewManager(mockCoredns, mockTailscale)
+		manager, _ := NewManager(mockCoredns, mockTailscale, nil)
 		require.NotNil(t, manager)
 
 		// Pre-cache an existing device to test the update path
