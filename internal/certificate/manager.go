@@ -290,24 +290,23 @@ func (m *Manager) SetCoreDNSManager(configManager interface {
 
 // ObtainCertificate requests a certificate for the given domain.
 func (m *Manager) ObtainCertificate(domain string) error {
-	// Ensure the user is registered before obtaining a certificate.
-	if m.user.GetRegistration() == nil {
+	logging.Info("Obtaining certificate for domain: %s", domain)
+
+	if m.user.Registration == nil {
+		logging.Info("Registering user with ACME server")
 		reg, err := m.legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 		if err != nil {
 			return fmt.Errorf("could not register user: %w", err)
 		}
 		m.user.Registration = reg
-		logging.Info("Successfully registered user: %s", m.user.Email)
 
-		// Save the user with the new registration
 		if err := saveUser(m.user, m.acmeUserPath, m.acmeKeyPath); err != nil {
-			logging.Error("Failed to save user after registration: %v", err)
-			// Proceed without failing, but log the error
+			logging.Error("Failed to save user registration: %v", err)
 		}
 	}
 
 	request := certificate.ObtainRequest{
-		Domains: []string{"*." + domain},
+		Domains: []string{domain},
 		Bundle:  true,
 	}
 
@@ -316,22 +315,17 @@ func (m *Manager) ObtainCertificate(domain string) error {
 		return fmt.Errorf("could not obtain certificate: %w", err)
 	}
 
-	logging.Info("Successfully obtained certificate for domain: %s", domain)
 	if err := m.saveCertificate(certs); err != nil {
-		return err
+		return fmt.Errorf("could not save certificate: %w", err)
 	}
 
-	// Notify CoreDNS ConfigManager to enable TLS
 	if m.corednsConfigManager != nil {
-		logging.Info("Notifying CoreDNS ConfigManager to enable TLS for domain: %s", domain)
 		if err := m.corednsConfigManager.EnableTLS(domain, m.certPath, m.keyPath); err != nil {
-			logging.Error("Failed to enable TLS in CoreDNS configuration: %v", err)
-			// Don't fail certificate obtainment if TLS enablement fails
-		} else {
-			logging.Info("Successfully enabled TLS in CoreDNS configuration for domain: %s", domain)
+			logging.Error("Failed to enable TLS in CoreDNS: %v", err)
 		}
 	}
 
+	logging.Info("Certificate obtained and saved successfully")
 	return nil
 }
 
@@ -339,206 +333,166 @@ func (m *Manager) ObtainCertificate(domain string) error {
 // This method will keep retrying until successful or max retries is reached.
 // Returns an error if max retries is reached and certificate obtainment fails.
 func (m *Manager) ObtainCertificateWithRetry(domain string) error {
-	const (
-		initialDelay = 5 * time.Second
-		maxDelay     = 5 * time.Minute
-		maxRetries   = 10 // Set a reasonable max retry limit
-	)
+	maxRetries := 10
 
-	delay := initialDelay
-	attempt := 1
-
-	for {
-		logging.Info("Certificate obtainment attempt %d for domain: %s", attempt, domain)
-
+	for attempt := 1; attempt <= maxRetries; attempt++ {
 		err := m.ObtainCertificate(domain)
 		if err == nil {
-			logging.Info("Certificate successfully obtained for domain: %s", domain)
 			return nil
 		}
 
-		logging.Error("Certificate obtainment failed (attempt %d): %v", attempt, err)
-
-		if attempt >= maxRetries {
-			logging.Error("Certificate obtainment failed after %d attempts, giving up", attempt)
-			return fmt.Errorf("certificate obtainment failed after %d attempts: %w", attempt, err)
+		if attempt == maxRetries {
+			return fmt.Errorf("failed to obtain certificate after %d attempts: %w", maxRetries, err)
 		}
 
-		logging.Info("Retrying certificate obtainment in %v", delay)
-		time.Sleep(delay)
+		backoff := time.Duration(attempt*attempt) * time.Second
+		jitter := time.Duration(mathrand.Intn(int(backoff/4))) * time.Second
+		sleepTime := backoff + jitter
 
-		// Exponential backoff with jitter
-		delay *= 2
-		if delay > maxDelay {
-			delay = maxDelay
-		}
-		// Add jitter (±25%)
-		jitter := time.Duration(float64(delay) * 0.25 * (2*mathrand.Float64() - 1))
-		delay += jitter
-
-		attempt++
+		logging.Info("Certificate obtainment failed, retrying in %v (attempt %d/%d): %v", sleepTime, attempt, maxRetries, err)
+		time.Sleep(sleepTime)
 	}
+
+	return fmt.Errorf("failed to obtain certificate after %d attempts", maxRetries)
 }
 
 // StartRenewalLoop starts a ticker to periodically check and renew the certificate.
 func (m *Manager) StartRenewalLoop(domain string) {
-	logging.Info("Starting certificate renewal loop")
+	renewalInterval := config.GetDuration(CertRenewalCheckIntervalKey)
+	if renewalInterval == 0 {
+		renewalInterval = 24 * time.Hour
+	}
 
-	renewalInterval := config.GetDuration(CertRenewalRenewBeforeKey)
-	checkInterval := config.GetDuration(CertRenewalCheckIntervalKey)
-
-	ticker := time.NewTicker(checkInterval)
+	ticker := time.NewTicker(renewalInterval)
 	defer ticker.Stop()
 
-	for {
-		<-ticker.C
+	for range ticker.C {
 		m.checkAndRenew(domain, renewalInterval)
 	}
 }
 
 func (m *Manager) checkAndRenew(domain string, renewalInterval time.Duration) {
-	certBytes, err := os.ReadFile(m.certPath)
+	logging.Info("Checking certificate renewal for domain: %s", domain)
+
+	certInfo, err := GetCertificateInfo(m.certPath)
 	if err != nil {
-		logging.Error("Failed to read certificate for renewal check: %v", err)
+		logging.Error("Failed to get certificate info: %v", err)
 		return
 	}
 
-	block, _ := pem.Decode(certBytes)
-	if block == nil {
-		logging.Error("Failed to decode PEM block from certificate")
+	renewBefore := config.GetDuration(CertRenewalRenewBeforeKey)
+	if renewBefore == 0 {
+		renewBefore = 30 * 24 * time.Hour
+	}
+
+	timeUntilExpiry := time.Until(certInfo.NotAfter)
+	if timeUntilExpiry > renewBefore {
+		logging.Info("Certificate is still valid for %v, no renewal needed", timeUntilExpiry)
 		return
 	}
 
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		logging.Error("Failed to parse certificate: %v", err)
-		return
-	}
+	logging.Info("Certificate expires in %v, initiating renewal", timeUntilExpiry)
 
-	expireIn := time.Until(cert.NotAfter)
-
-	if expireIn > renewalInterval {
-		logging.Info("Certificate for domain %s not due for renewal, expires in: %v", domain, expireIn)
-		return
-	}
-
-	logging.Info("Certificate for domain %s is due for renewal, expires in: %v", domain, expireIn)
-
-	if err := os.Remove(m.certPath); err != nil {
-		logging.Error("Failed to remove old certificate file: %v", err)
-		return
-	}
-	if err := os.Remove(m.keyPath); err != nil {
-		logging.Error("Failed to remove old key file: %v", err)
-		return
-	}
-
-	logging.Info("Removed old certificate and key for domain: %s", domain)
-
-	// Use retry logic for certificate renewal
 	if err := m.ObtainCertificateWithRetry(domain); err != nil {
-		logging.Error("Certificate renewal failed after retries: %v", err)
-		return
+		logging.Error("Certificate renewal failed: %v", err)
+	} else {
+		logging.Info("Certificate renewed successfully")
 	}
-	logging.Info("Certificate renewal process completed for domain: %s", domain)
 }
 
 func (m *Manager) saveCertificate(certs *certificate.Resource) error {
-	// Create directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(m.certPath), 0755); err != nil {
-		return fmt.Errorf("could not create cert directory: %w", err)
+		return fmt.Errorf("could not create certificate directory: %w", err)
 	}
 
 	if err := os.WriteFile(m.certPath, certs.Certificate, 0644); err != nil {
-		return fmt.Errorf("could not save certificate: %w", err)
+		return fmt.Errorf("could not write certificate file: %w", err)
 	}
 
 	if err := os.WriteFile(m.keyPath, certs.PrivateKey, 0600); err != nil {
-		return fmt.Errorf("could not save private key: %w", err)
+		return fmt.Errorf("could not write private key file: %w", err)
 	}
 
-	logging.Info("Successfully saved certificate and key to %s and %s", m.certPath, m.keyPath)
 	return nil
 }
 
 func saveUser(user *User, userFile, keyFile string) error {
-	// Create directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(userFile), 0755); err != nil {
 		return fmt.Errorf("could not create user directory: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(keyFile), 0755); err != nil {
-		return fmt.Errorf("could not create key directory: %w", err)
-	}
 
-	// Save user registration
-	userBytes, err := json.MarshalIndent(user, "", "\t")
+	userData, err := json.Marshal(user.Registration)
 	if err != nil {
-		return fmt.Errorf("could not marshal user data: %w", err)
-	}
-	if err := os.WriteFile(userFile, userBytes, 0600); err != nil {
-		return fmt.Errorf("could not save user file: %w", err)
+		return fmt.Errorf("could not marshal user registration: %w", err)
 	}
 
-	// Save user private key
+	if err := os.WriteFile(userFile, userData, 0644); err != nil {
+		return fmt.Errorf("could not write user file: %w", err)
+	}
+
 	keyBytes, err := x509.MarshalECPrivateKey(user.key.(*ecdsa.PrivateKey))
 	if err != nil {
 		return fmt.Errorf("could not marshal private key: %w", err)
 	}
-	pemKey := &pem.Block{
+
+	keyData := pem.EncodeToMemory(&pem.Block{
 		Type:  "EC PRIVATE KEY",
 		Bytes: keyBytes,
-	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(pemKey), 0600); err != nil {
-		return fmt.Errorf("could not save private key file: %w", err)
+	})
+
+	if err := os.WriteFile(keyFile, keyData, 0600); err != nil {
+		return fmt.Errorf("could not write key file: %w", err)
 	}
 
-	logging.Info("Successfully saved ACME user to %s and %s", userFile, keyFile)
 	return nil
 }
 
 func loadUser(userFile, keyFile string) (*User, error) {
-	// Load user registration
-	userBytes, err := os.ReadFile(userFile)
+	userData, err := os.ReadFile(userFile)
 	if err != nil {
 		return nil, err
-	}
-	var user User
-	if err := json.Unmarshal(userBytes, &user); err != nil {
-		return nil, fmt.Errorf("could not unmarshal user data: %w", err)
 	}
 
-	// Load user private key
-	keyBytes, err := os.ReadFile(keyFile)
+	keyData, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, err
 	}
-	pemBlock, _ := pem.Decode(keyBytes)
-	if pemBlock == nil {
-		return nil, fmt.Errorf("could not decode PEM block from key file")
+
+	block, _ := pem.Decode(keyData)
+	if block == nil {
+		return nil, fmt.Errorf("could not decode private key")
 	}
-	privateKey, err := x509.ParseECPrivateKey(pemBlock.Bytes)
+
+	key, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse private key: %w", err)
 	}
-	user.key = privateKey
 
-	return &user, nil
+	var reg registration.Resource
+	if err := json.Unmarshal(userData, &reg); err != nil {
+		return nil, fmt.Errorf("could not unmarshal user registration: %w", err)
+	}
+
+	return &User{
+		Registration: &reg,
+		key:          key,
+	}, nil
 }
 
 func GetCertificateInfo(certPath string) (*x509.Certificate, error) {
-	certBytes, err := os.ReadFile(certPath)
+	certData, err := os.ReadFile(certPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read certificate file: %w", err)
+		return nil, fmt.Errorf("could not read certificate file: %w", err)
 	}
 
-	block, _ := pem.Decode(certBytes)
+	block, _ := pem.Decode(certData)
 	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block from certificate")
+		return nil, fmt.Errorf("could not decode certificate")
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		return nil, fmt.Errorf("could not parse certificate: %w", err)
 	}
 
 	return cert, nil
@@ -552,8 +506,6 @@ func GetCertificateInfo(certPath string) (*x509.Certificate, error) {
 // a descriptive error, allowing lego to continue polling until its own global
 // timeout triggers.
 func exponentialBackoff(timeout time.Duration) dns01.ChallengeOption {
-	const maxStep = 32 * time.Second
-
 	return dns01.WrapPreCheck(func(_ string, fqdn, value string, check dns01.PreCheckFunc) (bool, error) {
 		deadline := time.Now().Add(timeout)
 		wait := 2 * time.Second
@@ -572,10 +524,10 @@ func exponentialBackoff(timeout time.Duration) dns01.ChallengeOption {
 			}
 
 			time.Sleep(wait)
-			if wait < maxStep {
+			if wait < 32*time.Second {
 				wait *= 2
-				if wait > maxStep {
-					wait = maxStep
+				if wait > 32*time.Second {
+					wait = 32 * time.Second
 				}
 			}
 		}
@@ -604,30 +556,15 @@ func NewCleaningDNSProvider(provider challenge.Provider, token, zoneID string) (
 
 // Present ensures old records are removed before creating the new one.
 func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
-	fqdn := fmt.Sprintf("_acme-challenge.%s", domain)
-	logging.Info("[CLEANUP] Proactively cleaning up any stale TXT records for %s", fqdn)
+	fqdn, _ := dns01.GetRecord(domain, keyAuth)
 
-	err := d.cleanupRecords(fqdn)
-	if err != nil {
-		// Log the error but don't fail the whole process.
-		// It's better to try and proceed than to fail here if cleanup has an issue.
-		logging.Warn("[CLEANUP] Failed to proactively clean up records, proceeding anyway: %v", err)
-	} else {
-		// Wait for propagation after deletion.
-		logging.Info("[CLEANUP] Waiting 10 seconds for deletion to propagate...")
-		time.Sleep(10 * time.Second)
+	if err := d.cleanupRecords(fqdn); err != nil {
+		logging.Error("Failed to cleanup existing records: %v", err)
 	}
 
-	logging.Info("[PROPAGATION] Calling wrapped provider to create TXT record...")
-	err = d.wrappedProvider.Present(domain, token, keyAuth)
-	if err != nil {
-		return err
-	}
+	time.Sleep(5 * time.Second)
 
-	logging.Info("[PROPAGATION] Waiting 120 seconds before starting challenge verification to ensure propagation.")
-	time.Sleep(120 * time.Second)
-
-	return nil
+	return d.wrappedProvider.Present(domain, token, keyAuth)
 }
 
 // CleanUp delegates to the wrapped provider.
@@ -638,29 +575,20 @@ func (d *CleaningDNSProvider) CleanUp(domain, token, keyAuth string) error {
 func (d *CleaningDNSProvider) cleanupRecords(fqdn string) error {
 	api, err := cfapi.NewWithAPIToken(d.cfAPIToken)
 	if err != nil {
-		return fmt.Errorf("failed to create cloudflare api client for cleanup: %w", err)
+		return fmt.Errorf("could not create Cloudflare API client: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	records, _, err := api.ListDNSRecords(ctx, cfapi.ZoneIdentifier(d.cfZoneID), cfapi.ListDNSRecordsParams{Name: fqdn, Type: "TXT"})
+	records, _, err := api.ListDNSRecords(context.Background(), cfapi.ZoneIdentifier(d.cfZoneID), cfapi.ListDNSRecordsParams{
+		Type: "TXT",
+		Name: fqdn,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to list DNS records for cleanup: %w", err)
+		return fmt.Errorf("could not list DNS records: %w", err)
 	}
 
-	if len(records) == 0 {
-		logging.Info("[CLEANUP] No stale records found for %s. Good.", fqdn)
-		return nil
-	}
-
-	logging.Info("[CLEANUP] Found %d stale record(s) for %s. Deleting them now.", len(records), fqdn)
-	for _, rec := range records {
-		logging.Info("[CLEANUP] Deleting record ID %s with content: %s", rec.ID, rec.Content)
-		err := api.DeleteDNSRecord(ctx, cfapi.ZoneIdentifier(d.cfZoneID), rec.ID)
-		if err != nil {
-			// Log the specific failure but continue trying to delete others.
-			logging.Warn("[CLEANUP] Failed to delete record ID %s: %v", rec.ID, err)
+	for _, record := range records {
+		if err := api.DeleteDNSRecord(context.Background(), cfapi.ZoneIdentifier(d.cfZoneID), record.ID); err != nil {
+			logging.Error("Failed to delete DNS record %s: %v", record.ID, err)
 		}
 	}
 
@@ -671,39 +599,31 @@ func (d *CleaningDNSProvider) cleanupRecords(fqdn string) error {
 // without attempting to obtain new certificates. This is useful when certificates
 // already exist but the DNS configuration was reset.
 func (m *Manager) RestoreTLSWithExistingCertificates(domain string) error {
-	logging.Info("Attempting to restore TLS configuration with existing certificates for domain: %s", domain)
+	logging.Info("Checking for existing certificates for domain: %s", domain)
 
-	// Check if certificate files exist
 	if _, err := os.Stat(m.certPath); os.IsNotExist(err) {
-		return fmt.Errorf("certificate file not found at %s", m.certPath)
+		return fmt.Errorf("certificate file does not exist: %s", m.certPath)
 	}
 
 	if _, err := os.Stat(m.keyPath); os.IsNotExist(err) {
-		return fmt.Errorf("private key file not found at %s", m.keyPath)
+		return fmt.Errorf("private key file does not exist: %s", m.keyPath)
 	}
 
-	// Validate certificate is not expired
 	certInfo, err := GetCertificateInfo(m.certPath)
 	if err != nil {
-		return fmt.Errorf("failed to read certificate info: %w", err)
+		return fmt.Errorf("could not get certificate info: %w", err)
 	}
 
-	if time.Now().After(certInfo.NotAfter) {
-		return fmt.Errorf("certificate has expired on %v", certInfo.NotAfter)
+	if time.Until(certInfo.NotAfter) <= 0 {
+		return fmt.Errorf("certificate is expired")
 	}
 
-	logging.Info("Found valid certificate for domain %s, expires on %v", domain, certInfo.NotAfter)
-
-	// Enable TLS in CoreDNS configuration
 	if m.corednsConfigManager != nil {
-		logging.Info("Enabling TLS in CoreDNS configuration for domain: %s", domain)
 		if err := m.corednsConfigManager.EnableTLS(domain, m.certPath, m.keyPath); err != nil {
-			return fmt.Errorf("failed to enable TLS in CoreDNS configuration: %w", err)
+			return fmt.Errorf("could not enable TLS in CoreDNS: %w", err)
 		}
-		logging.Info("Successfully enabled TLS in CoreDNS configuration for domain: %s", domain)
-	} else {
-		return fmt.Errorf("CoreDNS configuration manager not set")
 	}
 
+	logging.Info("TLS restored successfully with existing certificates")
 	return nil
 }

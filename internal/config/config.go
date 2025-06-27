@@ -1,9 +1,9 @@
-// Package config provides centralized, extensible configuration loading for DNS using spf13/viper.
+// Package config provides centralized configuration loading for DNS using spf13/viper.
 // All config access must go through this package.
 package config
 
 import (
-	"fmt" // Added for ToUpper
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -69,7 +69,6 @@ func getInstance() *Config {
 }
 
 func FirstTimeInit(configFile *string) error {
-	// Initialize configuration
 	if *configFile != "" {
 		if err := InitConfig(WithConfigPath(*configFile)); err != nil {
 			fmt.Printf("Failed to initialize configuration: %v\n", err)
@@ -82,7 +81,6 @@ func FirstTimeInit(configFile *string) error {
 		}
 	}
 
-	// Check required configuration keys after initialization
 	if err := CheckRequiredKeys(); err != nil {
 		fmt.Printf("Configuration validation failed: %v\n", err)
 		os.Exit(1)
@@ -309,7 +307,6 @@ func GetSyncConfig() SyncConfig {
 	if err := cfg.viper.UnmarshalKey("dns.internal", &syncConf); err != nil {
 		// In case of an error, you might want to log it or handle it gracefully.
 		// For now, returning a zero-value struct.
-		fmt.Printf("Error unmarshalling sync config: %v\n", err)
 		return SyncConfig{}
 	}
 
