@@ -18,7 +18,6 @@ type CorednsManager interface {
 	AddZone(serviceName string) error
 	AddRecord(serviceName, name, ip string) error
 	DropRecord(serviceName, name, ip string) error
-	Reload() error
 }
 
 // TailscaleClient defines the interface for interacting with the Tailscale API.
@@ -162,10 +161,7 @@ func (m *Manager) syncDevices(zoneName string) (*SyncResult, error) {
 		result.ResolvedDevices++
 	}
 
-	if err := m.corednsManager.Reload(); err != nil {
-		logging.Error("Failed to reload CoreDNS after sync: %v", err)
-		result.Error = err
-	}
+	// CoreDNS auto-reloads via 'reload' plugin
 
 	result.Success = result.FailedDevices == 0 && result.Error == nil
 	logging.Info("Dynamic sync complete for zone %s. Total: %d, Synced: %d, Skipped: %d, Failed: %d",

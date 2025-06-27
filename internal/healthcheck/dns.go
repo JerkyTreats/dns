@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/jerkytreats/dns/internal/logging"
 )
 
 // IsDockerEnvironment detects if the code is running inside a Docker container.
@@ -119,4 +121,66 @@ func (hc *DNSHealthChecker) WaitHealthy() bool {
 		time.Sleep(hc.delay)
 	}
 	return false
+}
+
+// TestBasicConnectivity performs a basic UDP connection test to verify the server is reachable.
+// This is a simple connectivity test that doesn't perform actual DNS queries.
+func TestBasicConnectivity(server string, timeout time.Duration) error {
+	logging.Info("Testing basic connectivity to CoreDNS at %s...", server)
+	conn, err := net.DialTimeout("udp", server, timeout)
+	if err != nil {
+		return fmt.Errorf("cannot establish UDP connection to CoreDNS: %v", err)
+	}
+	conn.Close()
+	logging.Info("Basic UDP connectivity to CoreDNS successful")
+	return nil
+}
+
+// WaitForHealthyWithDiagnostics performs sophisticated health checking with detailed logging and diagnostics.
+// It uses the provided checker to perform health checks with retry logic and diagnostic information.
+func WaitForHealthyWithDiagnostics(checker Checker, maxAttempts int, retryDelay time.Duration) error {
+	logging.Info("Waiting for %s to report healthy status...", checker.Name())
+
+	healthCheckAttempts := 0
+
+	for i := 0; i < maxAttempts; i++ {
+		healthCheckAttempts++
+		logging.Info("Health check attempt %d/%d...", healthCheckAttempts, maxAttempts)
+
+		ok, latency, err := checker.CheckOnce()
+		if ok {
+			logging.Info("%s is healthy (responded in %v)", checker.Name(), latency)
+			return nil
+		} else {
+			if err != nil {
+				logging.Warn("Health check failed: %v", err)
+
+				// Extract server address for diagnostic testing
+				// This assumes the checker is a DNSHealthChecker - we could make this more generic
+				if dnsChecker, isDNSChecker := checker.(*DNSHealthChecker); isDNSChecker {
+					testConn, dialErr := net.DialTimeout("udp", dnsChecker.server, 2*time.Second)
+					if dialErr != nil {
+						logging.Warn("%s port appears to be closed or unreachable: %v", checker.Name(), dialErr)
+					} else {
+						testConn.Close()
+						logging.Info("%s port is open, but DNS query failed (%s may still be starting)", checker.Name(), checker.Name())
+					}
+				}
+			} else {
+				logging.Warn("Health check failed: no error details")
+			}
+
+			if i < maxAttempts-1 {
+				logging.Info("Retrying in %v...", retryDelay)
+				time.Sleep(retryDelay)
+			}
+		}
+
+		if i == maxAttempts-1 {
+			totalWaitTime := time.Duration(maxAttempts) * retryDelay
+			return fmt.Errorf("%s did not become healthy after %d attempts over %v", checker.Name(), maxAttempts, totalWaitTime)
+		}
+	}
+
+	return fmt.Errorf("unexpected end of health check loop")
 }

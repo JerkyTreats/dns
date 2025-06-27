@@ -32,11 +32,6 @@ func (m *MockCorednsManager) DropRecord(serviceName, name, ip string) error {
 	return args.Error(0)
 }
 
-func (m *MockCorednsManager) Reload() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
 // MockTailscaleClient is a mock type for the tailscale.Client type
 type MockTailscaleClient struct {
 	mock.Mock
@@ -94,7 +89,6 @@ func TestSyncDevices(t *testing.T) {
 		mockCoredns.On("DropRecord", "internal", "device-b", "100.0.0.2-old").Return(nil).Once()
 		mockCoredns.On("AddRecord", "internal", "device-b", "100.0.0.2").Return(nil).Once()
 		mockCoredns.On("AddRecord", "internal", "device-e", "100.0.0.5").Return(errors.New("add failed")).Once()
-		mockCoredns.On("Reload").Return(nil).Once()
 
 		result, err := manager.syncDevices("internal")
 		require.NoError(t, err)

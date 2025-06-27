@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,10 +19,17 @@ func TestManager(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	configPath := filepath.Join(tempDir, "Corefile")
+
+	templatePath := filepath.Join(tempDir, "Corefile.template")
 	zonesPath := filepath.Join(tempDir, "zones")
+	domain := "test.local"
+
+	config.SetForTest(DNSConfigPathKey, configPath)
+	config.SetForTest(DNSTemplatePathKey, templatePath)
+	config.SetForTest(DNSZonesPathKey, zonesPath)
+	config.SetForTest(DNSDomainKey, domain)
 
 	// Prepare Corefile template required by ConfigManager
-	templatePath := filepath.Join(tempDir, "Corefile.template")
 	templateContent := `. {
     errors
     log
@@ -29,12 +37,7 @@ func TestManager(t *testing.T) {
 `
 	_ = os.WriteFile(templatePath, []byte(templateContent), 0644)
 
-	// Mock reload script path (still used for Reload tests)
-	reloadScriptPath := filepath.Join(tempDir, "reload.sh")
-	reloadScriptContent := "#!/bin/sh\necho 'reloaded'"
-	_ = os.WriteFile(reloadScriptPath, []byte(reloadScriptContent), 0755)
-
-	manager := NewManager(configPath, templatePath, zonesPath, "test.local", "")
+	manager := NewManager("")
 
 	t.Run("AddRecord", func(t *testing.T) {
 		// Before adding a record, a zone must exist.
@@ -82,23 +85,6 @@ func TestManager(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, string(content), string(contentAfterBogusDrop), "Dropping a non-existent record should not change the file")
 	})
-
-	t.Run("Reload", func(t *testing.T) {
-		err := manager.Reload()
-		require.NoError(t, err)
-	})
-
-	t.Run("Reload with no command", func(t *testing.T) {
-		managerNoReload := NewManager(configPath, templatePath, zonesPath, "test.local", "")
-		err := managerNoReload.Reload()
-		assert.NoError(t, err, "Reload should not error when no command is configured")
-	})
-
-	t.Run("Reload with native CoreDNS", func(t *testing.T) {
-		managerNativeReload := NewManager(configPath, templatePath, zonesPath, "test.local", "")
-		err := managerNativeReload.Reload()
-		assert.NoError(t, err, "Reload should not error when using CoreDNS native reload")
-	})
 }
 
 func TestZoneValidation(t *testing.T) {
@@ -142,7 +128,8 @@ func TestZoneValidation(t *testing.T) {
 {{end}}
 {{end}}
 `), 0644)
-	manager := NewManager(configPath, templatePath2, zonesPath, "test.local", "")
+	config.SetForTest(DNSTemplatePathKey, templatePath2)
+	manager := NewManager("")
 
 	t.Run("AddZone creates new zone", func(t *testing.T) {
 		err := manager.AddZone("new-service")
@@ -244,7 +231,7 @@ func TestManager_AddDomain_NoUnnecessaryRegeneration(t *testing.T) {
 		t.Fatalf("Failed to write template: %v", err)
 	}
 
-	manager := NewManager(configPath, templatePath, tempDir, "test.local", "")
+	manager := NewManager("")
 
 	// Check that Corefile doesn't exist initially
 	if _, err := os.Stat(configPath); err == nil {
@@ -308,6 +295,11 @@ func TestManager_AddZone_OverwritesExistingZone(t *testing.T) {
 	templatePath := filepath.Join(tempDir, "Corefile.template")
 	zonesPath := tempDir
 
+	config.SetForTest(DNSConfigPathKey, configPath)
+	config.SetForTest(DNSTemplatePathKey, templatePath)
+	config.SetForTest(DNSZonesPathKey, zonesPath)
+	config.SetForTest(DNSDomainKey, "test.local")
+
 	// Create a simple template
 	templateContent := `{{range .Domains}}
 {{.Domain}}:{{.Port}} {
@@ -320,7 +312,7 @@ func TestManager_AddZone_OverwritesExistingZone(t *testing.T) {
 		t.Fatalf("Failed to write template: %v", err)
 	}
 
-	manager := NewManager(configPath, templatePath, zonesPath, "test.local", "")
+	manager := NewManager("")
 
 	// Add zone for the first time
 	if err := manager.AddZone("test-service"); err != nil {

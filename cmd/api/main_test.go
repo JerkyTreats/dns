@@ -5,15 +5,31 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/jerkytreats/dns/internal/api/handler"
 	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHealthCheckHandler(t *testing.T) {
 	// Setup test configuration
 	config.SetForTest("app.version", "1.0.0")
 	t.Cleanup(config.ResetForTest)
+
+	// Create test components
+	dnsManager := coredns.NewManager("127.0.0.1")
+	mockDNSChecker := &mockDNSChecker{}
+
+	// Create handler registry
+	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, mockDNSChecker, nil)
+	require.NoError(t, err)
+
+	// Create a mux and register handlers
+	mux := http.NewServeMux()
+	handlerRegistry.RegisterHandlers(mux)
 
 	tests := []struct {
 		name           string
@@ -34,8 +50,8 @@ func TestHealthCheckHandler(t *testing.T) {
 						"message": "API is running",
 					},
 					"coredns": map[string]interface{}{
-						"status":  "unknown",
-						"message": "DNS checker not initialized",
+						"status":  "healthy",
+						"message": "CoreDNS responded in 10ms",
 					},
 					"sync": map[string]interface{}{
 						"status":  "disabled",
@@ -57,7 +73,7 @@ func TestHealthCheckHandler(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "/health", nil)
 			w := httptest.NewRecorder()
 
-			healthCheckHandler(w, req)
+			mux.ServeHTTP(w, req)
 
 			// Check status code
 			assert.Equal(t, tt.expectedStatus, w.Code)
@@ -71,4 +87,19 @@ func TestHealthCheckHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+// mockDNSChecker implements the healthcheck.Checker interface for testing
+type mockDNSChecker struct{}
+
+func (m *mockDNSChecker) Name() string {
+	return "mock-dns-checker"
+}
+
+func (m *mockDNSChecker) CheckOnce() (bool, time.Duration, error) {
+	return true, 10 * time.Millisecond, nil
+}
+
+func (m *mockDNSChecker) WaitHealthy() bool {
+	return true
 }

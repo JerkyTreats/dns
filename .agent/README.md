@@ -15,3 +15,7 @@ Add ERROR logging for any incoming error.
 ## Configuration
 
 Use internal/config for logging. Do not use third party configuration.
+
+## No Backwards Compatibility
+
+Do not maintain backwards compatibility.

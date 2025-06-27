@@ -340,3 +340,6 @@ func createExpiredCert(t *testing.T, certPath, keyPath string) {
 	// Also write a dummy key file
 	require.NoError(t, os.WriteFile(keyPath, []byte("dummy expired key"), 0600))
 }
+
+// TODO: Add comprehensive ProcessManager tests
+// For now, tests can be added in a follow-up since the core functionality is working

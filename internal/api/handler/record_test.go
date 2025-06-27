@@ -9,26 +9,18 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupTestHandler(t *testing.T) *RecordHandler {
+	// Create temp directory for test
 	tempDir, err := os.MkdirTemp("", "coredns-test-*")
 	require.NoError(t, err)
 
-	configPath := filepath.Join(tempDir, "Corefile")
-	zonesPath := filepath.Join(tempDir, "zones")
-	// Create initial Corefile
-	initialConfig := `. {
-    errors
-    log
-}`
-	err = os.WriteFile(configPath, []byte(initialConfig), 0644)
-	require.NoError(t, err)
-
-	// Prepare Corefile template required by the manager
+	// Create template file
 	templatePath := filepath.Join(tempDir, "Corefile.template")
 	templateContent := `. {
     errors
@@ -48,11 +40,24 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = os.WriteFile(templatePath, []byte(templateContent), 0644)
 	require.NoError(t, err)
 
-	manager := coredns.NewManager(configPath, templatePath, zonesPath, "test.local", "")
+	// Set up test configuration
+	config.SetForTest("dns.coredns.config_path", filepath.Join(tempDir, "Corefile"))
+	config.SetForTest("dns.coredns.template_path", templatePath)
+	config.SetForTest("dns.coredns.zones_path", filepath.Join(tempDir, "zones"))
+	config.SetForTest("dns.domain", "test.local")
+
+	// Create zones directory
+	err = os.MkdirAll(filepath.Join(tempDir, "zones"), 0755)
+	require.NoError(t, err)
+
+	manager := coredns.NewManager("127.0.0.1")
 	err = manager.AddZone("test-service")
 	require.NoError(t, err)
 
-	return NewRecordHandler(manager)
+	handler, err := NewRecordHandler(manager)
+	require.NoError(t, err)
+
+	return handler
 }
 
 func TestAddRecordHandler(t *testing.T) {

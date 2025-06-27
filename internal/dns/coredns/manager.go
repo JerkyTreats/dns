@@ -31,7 +31,6 @@ func init() {
 	config.RegisterRequiredKey(DNSZonesPathKey)
 	config.RegisterRequiredKey(DNSDomainKey)
 	// Template path is optional, will use default if not provided
-	// Reload command is optional, will rely on CoreDNS native reload if not provided
 }
 
 var serviceNameRegex = regexp.MustCompile(`^[a-z0-9.-]+$`)
@@ -70,7 +69,6 @@ type DomainConfig struct {
 
 // Manager manages CoreDNS configuration, zones and lifecycle.
 type Manager struct {
-	// Operational / reload settings
 	mu sync.Mutex
 
 	// CoreDNS configuration paths & state
@@ -86,9 +84,6 @@ type Manager struct {
 	lastGenerated time.Time
 	configVersion int
 
-	// Dependencies
-	restartManager RestartManagerInterface
-
 	// NS server IP for zone file generation
 	nsIP string
 }
@@ -96,7 +91,12 @@ type Manager struct {
 // NewManager creates a new CoreDNS manager.
 // NOTE: this replaces both the old Manager and ConfigManager constructors.
 // nsIP is the IP address to use for NS records in zone files. If empty, defaults to 127.0.0.1 (mainly for tests)
-func NewManager(configPath, templatePath, zonesPath string, domain string, nsIP string) *Manager {
+func NewManager(nsIP string) *Manager {
+	configPath := config.GetString(DNSConfigPathKey)
+	templatePath := config.GetString(DNSTemplatePathKey)
+	zonesPath := config.GetString(DNSZonesPathKey)
+	domain := config.GetString(DNSDomainKey)
+
 	if templatePath == "" {
 		templatePath = "configs/coredns/Corefile.template"
 	}
@@ -109,13 +109,12 @@ func NewManager(configPath, templatePath, zonesPath string, domain string, nsIP 
 	}
 
 	manager := &Manager{
-		configPath:     configPath,
-		templatePath:   templatePath,
-		domain:         domain,
-		zonesPath:      zonesPath,
-		domains:        make(map[string]*DomainConfig),
-		restartManager: NewRestartManager(),
-		nsIP:           nsIP,
+		configPath:   configPath,
+		templatePath: templatePath,
+		domain:       domain,
+		zonesPath:    zonesPath,
+		domains:      make(map[string]*DomainConfig),
+		nsIP:         nsIP,
 	}
 
 	// Load existing domains from Corefile if it exists
@@ -496,21 +495,6 @@ func (m *Manager) RemoveRecord(serviceName, name string) error {
 	return nil
 }
 
-// ------------------- CoreDNS reload helpers -------------------- //
-
-// Reload relies on CoreDNS native file monitoring and reload functionality.
-// CoreDNS automatically detects file changes when using the 'reload' plugin.
-func (m *Manager) Reload() error {
-	logging.Info("Relying on CoreDNS native file monitoring for zone reload")
-	return nil
-}
-
-// RestartCoreDNS triggers a full restart via RestartManager (used after Corefile regeneration).
-func (m *Manager) RestartCoreDNS() error {
-	logging.Info("Restarting CoreDNS service")
-	return m.restartManager.RestartCoreDNS()
-}
-
 // ------------------- Corefile generation -------------------- //
 
 func (m *Manager) applyConfiguration() error {
@@ -536,7 +520,7 @@ func (m *Manager) applyConfiguration() error {
 	m.lastGenerated = time.Now()
 	m.configVersion++
 
-	return m.RestartCoreDNS()
+	return nil
 }
 
 // needsRegeneration checks if the Corefile needs to be regenerated

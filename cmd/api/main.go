@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -41,7 +39,6 @@ const (
 
 var (
 	syncManager *sync.Manager
-	certManager *certificate.Manager
 	dnsManager  *coredns.Manager
 	dnsChecker  healthcheck.Checker
 )
@@ -101,8 +98,6 @@ func main() {
 
 	dnsManager = newCoreDNSManager(currentDeviceIP)
 
-	ensureCorefileExists(dnsManager)
-
 	domain := config.GetString(coredns.DNSDomainKey)
 	if domain != "" {
 		if err := dnsManager.AddZone(domain); err != nil {
@@ -110,80 +105,35 @@ func main() {
 		}
 	}
 
-	dnsServer := "127.0.0.1:53"
-	if healthcheck.IsDockerEnvironment() {
-		dnsServer = "coredns:53"
-	}
+	dnsServer := "coredns:53"
 	dnsChecker = healthcheck.NewDNSHealthChecker(dnsServer, 10*time.Second, 10, 2*time.Second)
 
-	logging.Info("Testing basic connectivity to CoreDNS at %s...", dnsServer)
-	conn, err := net.DialTimeout("udp", dnsServer, 5*time.Second)
-	if err != nil {
-		logging.Error("Cannot establish UDP connection to CoreDNS: %v", err)
+	if err := healthcheck.TestBasicConnectivity(dnsServer, 5*time.Second); err != nil {
+		logging.Error("%v", err)
 		os.Exit(1)
 	}
-	conn.Close()
-	logging.Info("Basic UDP connectivity to CoreDNS successful")
 
-	logging.Info("Waiting for CoreDNS to report healthy status on %s...", dnsServer)
-
-	healthCheckAttempts := 0
 	maxAttempts := 15
 	retryDelay := 3 * time.Second
 
-	for i := 0; i < maxAttempts; i++ {
-		healthCheckAttempts++
-		logging.Info("Health check attempt %d/%d...", healthCheckAttempts, maxAttempts)
-
-		ok, latency, err := dnsChecker.CheckOnce()
-		if ok {
-			logging.Info("CoreDNS is healthy (responded in %v)", latency)
-			break
-		} else {
-			if err != nil {
-				logging.Warn("Health check failed: %v", err)
-
-				testConn, dialErr := net.DialTimeout("udp", dnsServer, 2*time.Second)
-				if dialErr != nil {
-					logging.Warn("CoreDNS port appears to be closed or unreachable: %v", dialErr)
-				} else {
-					testConn.Close()
-					logging.Info("CoreDNS port is open, but DNS query failed (CoreDNS may still be starting)")
-				}
-			} else {
-				logging.Warn("Health check failed: no error details")
-			}
-
-			if i < maxAttempts-1 {
-				logging.Info("Retrying in %v...", retryDelay)
-				time.Sleep(retryDelay)
-			}
-		}
-
-		if i == maxAttempts-1 {
-			totalWaitTime := time.Duration(maxAttempts) * retryDelay
-			logging.Error("CoreDNS did not become healthy after %d attempts over %v", maxAttempts, totalWaitTime)
-			os.Exit(1)
-		}
+	if err := healthcheck.WaitForHealthyWithDiagnostics(dnsChecker, maxAttempts, retryDelay); err != nil {
+		logging.Error("%v", err)
+		os.Exit(1)
 	}
 
 	tlsEnabled := config.GetBool(ServerTLSEnabledKey)
-	var certReadyCh chan struct{}
+	var certReadyCh <-chan struct{}
 
 	if tlsEnabled && config.GetBool(certificate.CertRenewalEnabledKey) {
-		certReadyCh = make(chan struct{})
 		logging.Info("Starting certificate process in background...")
 
-		go func() {
-			for {
-				if err := runCertificateProcess(dnsManager, certReadyCh); err != nil {
-					logging.Error("Certificate process failed, restarting in 30 seconds: %v", err)
-					time.Sleep(30 * time.Second)
-					continue
-				}
-				break
-			}
-		}()
+		certProcess, err := certificate.NewProcessManager(dnsManager)
+		if err != nil {
+			logging.Error("Failed to create certificate process: %v", err)
+			os.Exit(1)
+		}
+
+		certReadyCh = certProcess.StartWithRetry(30 * time.Second)
 	}
 
 	logging.Info("Starting sync process in background...")
@@ -196,10 +146,17 @@ func main() {
 		}
 	}()
 
-	recordHandler := handler.NewRecordHandler(dnsManager)
+	// Initialize handler registry with all handlers
+	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, dnsChecker, syncManager)
+	if err != nil {
+		logging.Error("Failed to initialize handler registry: %v", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthCheckHandler)
-	mux.HandleFunc("/add-record", recordHandler.AddRecord)
+
+	// Register all application handlers through the registry
+	handlerRegistry.RegisterHandlers(mux)
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
@@ -287,104 +244,10 @@ func main() {
 	logging.Info("Server exited properly")
 }
 
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	components := map[string]interface{}{
-		"api": map[string]string{
-			"status":  "healthy",
-			"message": "API is running",
-		},
-	}
-
-	// Dynamic CoreDNS health status
-	if dnsChecker != nil {
-		if ok, latency, err := dnsChecker.CheckOnce(); ok {
-			components["coredns"] = map[string]string{
-				"status":  "healthy",
-				"message": fmt.Sprintf("CoreDNS responded in %v", latency),
-			}
-		} else {
-			msg := "CoreDNS probe failed"
-			if err != nil {
-				msg = err.Error()
-			}
-			components["coredns"] = map[string]string{
-				"status":  "error",
-				"message": msg,
-			}
-		}
-	} else {
-		components["coredns"] = map[string]string{
-			"status":  "unknown",
-			"message": "DNS checker not initialized",
-		}
-	}
-
-	if config.GetBool(SyncEnabledKey) {
-		if syncManager != nil && syncManager.IsZoneSynced() {
-			components["sync"] = map[string]string{
-				"status":  "healthy",
-				"message": "Dynamic zone sync is active",
-			}
-		} else if syncManager != nil {
-			components["sync"] = map[string]string{
-				"status":  "warning",
-				"message": "Sync manager created but zone not synced",
-			}
-		} else {
-			components["sync"] = map[string]string{
-				"status":  "starting",
-				"message": "Dynamic zone sync is starting in background",
-			}
-		}
-	} else {
-		components["sync"] = map[string]string{
-			"status":  "disabled",
-			"message": "Dynamic zone sync is disabled",
-		}
-	}
-
-	response := map[string]interface{}{
-		"status":     "healthy",
-		"version":    config.GetString(AppVersionKey),
-		"components": components,
-	}
-
-	if config.GetBool(ServerTLSEnabledKey) {
-		certPath := config.GetString(ServerTLSCertFileKey)
-		if certInfo, err := certificate.GetCertificateInfo(certPath); err == nil {
-			response["certificate"] = map[string]interface{}{
-				"subject":    certInfo.Subject.CommonName,
-				"issuer":     certInfo.Issuer.CommonName,
-				"not_before": certInfo.NotBefore,
-				"not_after":  certInfo.NotAfter,
-				"expires_in": time.Until(certInfo.NotAfter).String(),
-			}
-		} else {
-			response["certificate"] = map[string]interface{}{
-				"status":  "error",
-				"message": "Failed to get certificate info",
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
-}
-
 // newCoreDNSManager constructs and returns a configured CoreDNS manager.
 func newCoreDNSManager(currentDeviceIP string) *coredns.Manager {
-	configPath := config.GetString(coredns.DNSConfigPathKey)
-	templatePath := config.GetString(coredns.DNSTemplatePathKey)
-	zonesPath := config.GetString(coredns.DNSZonesPathKey)
-	domain := config.GetString(coredns.DNSDomainKey)
 
-	dnsMgr := coredns.NewManager(configPath, templatePath, zonesPath, domain, currentDeviceIP)
+	dnsMgr := coredns.NewManager(currentDeviceIP)
 
 	baseDomain := config.GetString(coredns.DNSDomainKey)
 	_ = dnsMgr.AddDomain(baseDomain, nil)
@@ -431,66 +294,4 @@ func maybeSync(dnsMgr *coredns.Manager, tailscaleClient *tailscale.Client) *sync
 
 	logging.Info("Dynamic zone sync completed successfully")
 	return sm
-}
-
-func ensureCorefileExists(dnsMgr *coredns.Manager) {
-	configPath := config.GetString(coredns.DNSConfigPathKey)
-	if _, err := os.Stat(configPath); err == nil {
-		return
-	}
-
-	templatePath := config.GetString(coredns.DNSTemplatePathKey)
-	if templatePath == "" {
-		templatePath = "configs/coredns/Corefile.template"
-	}
-	tmpl, err := os.ReadFile(templatePath)
-	if err != nil {
-		logging.Warn("Failed to read CoreDNS template to seed Corefile: %v", err)
-		return
-	}
-
-	if err := os.WriteFile(configPath, tmpl, 0644); err != nil {
-		logging.Warn("Failed to write initial Corefile: %v", err)
-		return
-	}
-	logging.Info("Seeded initial Corefile at %s", configPath)
-}
-
-func runCertificateProcess(dnsMgr *coredns.Manager, certReadyCh chan struct{}) error {
-	logging.Info("Initializing certificate manager with CoreDNS integration...")
-
-	var err error
-	certManager, err = certificate.NewManager()
-	if err != nil {
-		logging.Error("Failed to create certificate manager: %v", err)
-		return err
-	}
-
-	certManager.SetCoreDNSManager(dnsMgr)
-
-	domain := config.GetString(certificate.CertDomainKey)
-	if domain == "" {
-		logging.Warn("certificate.domain not configured – skipping certificate obtainment")
-		return nil
-	}
-
-	logging.Info("Checking for existing certificates for domain: %s", domain)
-	if err := certManager.RestoreTLSWithExistingCertificates(domain); err != nil {
-		logging.Warn("Could not restore existing certificates: %v", err)
-		logging.Info("Attempting to obtain new certificate...")
-
-		if err := certManager.ObtainCertificateWithRetry(domain); err != nil {
-			return err
-		}
-	} else {
-		logging.Info("Successfully restored TLS configuration with existing certificates")
-	}
-
-	close(certReadyCh)
-
-	if config.GetBool(certificate.CertRenewalEnabledKey) {
-		go certManager.StartRenewalLoop(domain)
-	}
-
-	return nil
 }

@@ -14,10 +14,10 @@ type RecordHandler struct {
 }
 
 // NewRecordHandler creates a new record handler
-func NewRecordHandler(manager *coredns.Manager) *RecordHandler {
+func NewRecordHandler(manager *coredns.Manager) (*RecordHandler, error) {
 	return &RecordHandler{
 		manager: manager,
-	}
+	}, nil
 }
 
 // AddRecord handles adding a new DNS record
