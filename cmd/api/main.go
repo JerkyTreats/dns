@@ -24,10 +24,8 @@ import (
 )
 
 const (
-	// App
 	AppVersionKey = "app.version"
 
-	// Server
 	ServerHostKey         = "server.host"
 	ServerPortKey         = "server.port"
 	ServerReadTimeoutKey  = "server.read_timeout"
@@ -38,12 +36,10 @@ const (
 	ServerTLSCertFileKey  = "server.tls.cert_file"
 	ServerTLSKeyFileKey   = "server.tls.key_file"
 
-	// Sync
 	SyncEnabledKey = "dns.internal.enabled"
 )
 
 var (
-	// Global managers for health checks and TLS integration
 	syncManager *sync.Manager
 	certManager *certificate.Manager
 	dnsManager  *coredns.Manager
@@ -75,23 +71,18 @@ func main() {
 	logging.Info("Application starting...")
 	defer logging.Sync()
 
-	// Initialize Tailscale client early for coordination
 	var tailscaleClient *tailscale.Client
 	var currentDeviceIP string
 
-	// Try to initialize Tailscale client (required for proper NS records)
 	logging.Info("Initializing Tailscale client for NS record configuration...")
 	client, err := tailscale.NewClient()
 	if err != nil {
 		logging.Error("Failed to initialize Tailscale client: %v", err)
-		logging.Error("Tailscale client is required for proper NS record configuration")
-		logging.Error("Without Tailscale IP, NS records would point to 127.0.0.1, making DNS unusable for external clients")
 		os.Exit(1)
 	}
 
 	tailscaleClient = client
 
-	// Try to get current device IP - use configured device name if available
 	deviceName := config.GetString(tailscale.TailscaleDeviceNameKey)
 	if deviceName != "" {
 		logging.Info("Using configured Tailscale device name: %s", deviceName)
@@ -103,20 +94,6 @@ func main() {
 
 	if err != nil {
 		logging.Error("Failed to get current device Tailscale IP: %v", err)
-		logging.Error("Current device's Tailscale IP is required for proper NS record configuration")
-		logging.Error("Without Tailscale IP, NS records would point to 127.0.0.1, making DNS unusable for external clients")
-
-		if deviceName == "" {
-			logging.Error("Suggestions:")
-			logging.Error("  1. Set 'tailscale.device_name' in your configuration to specify which Tailscale device to use")
-			logging.Error("  2. Check that the current device is connected to Tailscale network")
-			logging.Error("  3. Verify Tailscale API configuration is correct")
-		} else {
-			logging.Error("Suggestions:")
-			logging.Error("  1. Verify the device name '%s' exists in your Tailscale network", deviceName)
-			logging.Error("  2. Check that the device is online")
-			logging.Error("  3. Verify Tailscale API configuration is correct")
-		}
 		os.Exit(1)
 	}
 
@@ -124,12 +101,8 @@ func main() {
 
 	dnsManager = newCoreDNSManager(currentDeviceIP)
 
-	// Ensure a Corefile exists; if not, write a minimal one from the template so
-	// the CoreDNS container can start successfully on first deploy.
 	ensureCorefileExists(dnsManager)
 
-	// Ensure zone file exists before CoreDNS starts by adding the base domain zone
-	// This prevents CoreDNS from failing to start due to missing zone files
 	domain := config.GetString(coredns.DNSDomainKey)
 	if domain != "" {
 		if err := dnsManager.AddZone(domain); err != nil {
@@ -137,31 +110,26 @@ func main() {
 		}
 	}
 
-	// Create DNS health checker
 	dnsServer := "127.0.0.1:53"
 	if healthcheck.IsDockerEnvironment() {
 		dnsServer = "coredns:53"
 	}
 	dnsChecker = healthcheck.NewDNSHealthChecker(dnsServer, 10*time.Second, 10, 2*time.Second)
 
-	// First, test basic connectivity to CoreDNS
 	logging.Info("Testing basic connectivity to CoreDNS at %s...", dnsServer)
 	conn, err := net.DialTimeout("udp", dnsServer, 5*time.Second)
 	if err != nil {
 		logging.Error("Cannot establish UDP connection to CoreDNS: %v", err)
-		logging.Error("This suggests CoreDNS container is not running or not accessible")
 		os.Exit(1)
 	}
 	conn.Close()
 	logging.Info("Basic UDP connectivity to CoreDNS successful")
 
-	// Wait for CoreDNS to become healthy before proceeding
 	logging.Info("Waiting for CoreDNS to report healthy status on %s...", dnsServer)
 
-	// Add diagnostic logging for health check attempts
 	healthCheckAttempts := 0
-	maxAttempts := 15             // Increased from 10 to give CoreDNS more time to start
-	retryDelay := 3 * time.Second // Slightly longer delay
+	maxAttempts := 15
+	retryDelay := 3 * time.Second
 
 	for i := 0; i < maxAttempts; i++ {
 		healthCheckAttempts++
@@ -175,7 +143,6 @@ func main() {
 			if err != nil {
 				logging.Warn("Health check failed: %v", err)
 
-				// Try a simple connectivity test to see if CoreDNS port is open
 				testConn, dialErr := net.DialTimeout("udp", dnsServer, 2*time.Second)
 				if dialErr != nil {
 					logging.Warn("CoreDNS port appears to be closed or unreachable: %v", dialErr)
@@ -187,26 +154,19 @@ func main() {
 				logging.Warn("Health check failed: no error details")
 			}
 
-			if i < maxAttempts-1 { // Don't sleep on the last attempt
+			if i < maxAttempts-1 {
 				logging.Info("Retrying in %v...", retryDelay)
 				time.Sleep(retryDelay)
 			}
 		}
 
-		// If we've reached the last attempt, exit with error
 		if i == maxAttempts-1 {
 			totalWaitTime := time.Duration(maxAttempts) * retryDelay
 			logging.Error("CoreDNS did not become healthy after %d attempts over %v", maxAttempts, totalWaitTime)
-			logging.Error("This may indicate:")
-			logging.Error("  1. CoreDNS is taking longer than expected to start")
-			logging.Error("  2. CoreDNS configuration (Corefile) has errors")
-			logging.Error("  3. Network connectivity issues between containers")
-			logging.Error("  4. CoreDNS container failed to start properly")
 			os.Exit(1)
 		}
 	}
 
-	// Start TLS certificate process early in background (if enabled)
 	tlsEnabled := config.GetBool(ServerTLSEnabledKey)
 	var certReadyCh chan struct{}
 
@@ -226,7 +186,6 @@ func main() {
 		}()
 	}
 
-	// Start sync process in background (non-blocking)
 	logging.Info("Starting sync process in background...")
 	go func() {
 		if sm := maybeSync(dnsManager, tailscaleClient); sm != nil {
@@ -237,13 +196,11 @@ func main() {
 		}
 	}()
 
-	// Create record handler and setup routes
 	recordHandler := handler.NewRecordHandler(dnsManager)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthCheckHandler)
 	mux.HandleFunc("/add-record", recordHandler.AddRecord)
 
-	// Create and start HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", config.GetString(ServerHostKey), config.GetInt(ServerPortKey)),
 		ReadTimeout:  config.GetDuration(ServerReadTimeoutKey),
@@ -252,7 +209,6 @@ func main() {
 		Handler:      mux,
 	}
 
-	// Start server in a goroutine
 	serverStarted := make(chan bool, 1)
 	go func() {
 		logging.Info("Starting HTTP server on port %d", config.GetInt(ServerPortKey))
@@ -265,11 +221,9 @@ func main() {
 		}
 	}()
 
-	// Wait for server to start
 	<-serverStarted
 	logging.Info("HTTP server started successfully")
 
-	// If TLS is enabled, wait for certificate and switch to HTTPS
 	if tlsEnabled && certReadyCh != nil {
 		logging.Info("TLS is enabled, setting up HTTPS transition goroutine...")
 		go func() {
@@ -277,7 +231,6 @@ func main() {
 			<-certReadyCh
 			logging.Info("Certificate ready signal received, switching to HTTPS...")
 
-			// Gracefully stop the HTTP server
 			logging.Info("Shutting down HTTP server...")
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			shutdownErr := server.Shutdown(ctx)
@@ -289,7 +242,6 @@ func main() {
 				logging.Info("HTTP server shutdown completed")
 			}
 
-			// Start HTTPS server
 			tlsPort := config.GetInt(ServerTLSPortKey)
 			certFile := config.GetString(ServerTLSCertFileKey)
 			keyFile := config.GetString(ServerTLSKeyFileKey)
@@ -307,7 +259,6 @@ func main() {
 				},
 			}
 
-			// Update the server pointer for graceful shutdown
 			server = httpsSrv
 
 			logging.Info("HTTPS server now listening on port %d", tlsPort)
@@ -321,12 +272,10 @@ func main() {
 		logging.Info("TLS disabled or no certificate channel - continuing with HTTP only")
 	}
 
-	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	// Graceful shutdown
 	logging.Info("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -375,7 +324,6 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add sync status if enabled
 	if config.GetBool(SyncEnabledKey) {
 		if syncManager != nil && syncManager.IsZoneSynced() {
 			components["sync"] = map[string]string{
@@ -388,7 +336,6 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 				"message": "Sync manager created but zone not synced",
 			}
 		} else {
-			// syncManager is nil, which could mean sync is still starting up
 			components["sync"] = map[string]string{
 				"status":  "starting",
 				"message": "Dynamic zone sync is starting in background",
@@ -439,7 +386,6 @@ func newCoreDNSManager(currentDeviceIP string) *coredns.Manager {
 
 	dnsMgr := coredns.NewManager(configPath, templatePath, zonesPath, domain, currentDeviceIP)
 
-	// Add base domain so zone files can refer to it.
 	baseDomain := config.GetString(coredns.DNSDomainKey)
 	_ = dnsMgr.AddDomain(baseDomain, nil)
 
@@ -456,7 +402,6 @@ func maybeSync(dnsMgr *coredns.Manager, tailscaleClient *tailscale.Client) *sync
 
 	logging.Info("Sync is enabled, initializing dynamic zone sync...")
 
-	// If we don't have a Tailscale client from main, try to create one
 	if tailscaleClient == nil {
 		logging.Info("No Tailscale client provided, attempting to create one for sync...")
 		var err error
@@ -491,7 +436,7 @@ func maybeSync(dnsMgr *coredns.Manager, tailscaleClient *tailscale.Client) *sync
 func ensureCorefileExists(dnsMgr *coredns.Manager) {
 	configPath := config.GetString(coredns.DNSConfigPathKey)
 	if _, err := os.Stat(configPath); err == nil {
-		return // already exists
+		return
 	}
 
 	templatePath := config.GetString(coredns.DNSTemplatePathKey)
@@ -521,7 +466,6 @@ func runCertificateProcess(dnsMgr *coredns.Manager, certReadyCh chan struct{}) e
 		return err
 	}
 
-	// Integrate certificate manager with ConfigManager for TLS enablement
 	certManager.SetCoreDNSManager(dnsMgr)
 
 	domain := config.GetString(certificate.CertDomainKey)
@@ -530,13 +474,11 @@ func runCertificateProcess(dnsMgr *coredns.Manager, certReadyCh chan struct{}) e
 		return nil
 	}
 
-	// First, try to restore TLS configuration with existing certificates
 	logging.Info("Checking for existing certificates for domain: %s", domain)
 	if err := certManager.RestoreTLSWithExistingCertificates(domain); err != nil {
 		logging.Warn("Could not restore existing certificates: %v", err)
 		logging.Info("Attempting to obtain new certificate...")
 
-		// Use retry logic for certificate obtainment only if restore failed
 		if err := certManager.ObtainCertificateWithRetry(domain); err != nil {
 			return err
 		}
@@ -544,10 +486,8 @@ func runCertificateProcess(dnsMgr *coredns.Manager, certReadyCh chan struct{}) e
 		logging.Info("Successfully restored TLS configuration with existing certificates")
 	}
 
-	// Signal the main routine that the certificate is ready.
 	close(certReadyCh)
 
-	// Start background renewal loop if enabled
 	if config.GetBool(certificate.CertRenewalEnabledKey) {
 		go certManager.StartRenewalLoop(domain)
 	}
