@@ -15,6 +15,7 @@ import (
 	"github.com/jerkytreats/dns/internal/certificate"
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/firewall"
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/persistence"
@@ -39,9 +40,10 @@ const (
 )
 
 var (
-	syncManager *sync.Manager
-	dnsManager  *coredns.Manager
-	dnsChecker  healthcheck.Checker
+	syncManager     *sync.Manager
+	dnsManager      *coredns.Manager
+	dnsChecker      healthcheck.Checker
+	firewallManager *firewall.Manager
 )
 
 func init() {
@@ -96,6 +98,23 @@ func main() {
 	}
 
 	logging.Info("Tailscale client initialized successfully, device IP: %s", currentDeviceIP)
+
+	// Initialize firewall manager
+	logging.Info("Initializing firewall manager...")
+	firewallManager, err = firewall.NewManager()
+	if err != nil {
+		logging.Error("Failed to initialize firewall manager: %v", err)
+		os.Exit(1)
+	}
+
+	// Setup firewall rules for Tailscale CIDR protection
+	logging.Info("Setting up firewall rules for Tailscale CIDR...")
+	if err := firewallManager.EnsureFirewallRules(); err != nil {
+		logging.Error("Failed to setup firewall rules: %v", err)
+		logging.Warn("Continuing without firewall management...")
+	} else {
+		logging.Info("Firewall rules configured successfully")
+	}
 
 	dnsManager = newCoreDNSManager(currentDeviceIP)
 

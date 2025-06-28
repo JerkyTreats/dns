@@ -22,6 +22,11 @@ services:
     restart: unless-stopped  # Restart on failure for reliability
     networks:
       - dns-network
+    # Required for firewall management (ipset/iptables)
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
 
   coredns:
     image: coredns/coredns:1.11.1

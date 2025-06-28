@@ -22,8 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/api ./cmd/api
 # Final stage
 FROM alpine:3.19
 
-# Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata
+# Install runtime dependencies including firewall tools
+RUN apk add --no-cache ca-certificates tzdata iptables ipset
 
 # Set working directory
 WORKDIR /app
