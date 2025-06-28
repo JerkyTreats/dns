@@ -104,6 +104,13 @@ func main() {
 		if err := dnsManager.AddZone(domain); err != nil {
 			logging.Warn("Failed to ensure zone file exists for domain %s: %v", domain, err)
 		}
+
+		// Add DNS record for the API endpoint (dns.{domain})
+		if err := dnsManager.AddRecord(domain, "dns", currentDeviceIP); err != nil {
+			logging.Warn("Failed to add API endpoint record dns.%s -> %s: %v", domain, currentDeviceIP, err)
+		} else {
+			logging.Info("Added API endpoint record: dns.%s -> %s", domain, currentDeviceIP)
+		}
 	}
 
 	dnsServer := "coredns:53"
@@ -183,22 +190,11 @@ func main() {
 	logging.Info("HTTP server started successfully")
 
 	if tlsEnabled && certReadyCh != nil {
-		logging.Info("TLS is enabled, setting up HTTPS transition goroutine...")
+		logging.Info("TLS is enabled, setting up dual HTTP/HTTPS servers...")
 		go func() {
 			logging.Info("Waiting for certificate ready signal...")
 			<-certReadyCh
-			logging.Info("Certificate ready signal received, switching to HTTPS...")
-
-			logging.Info("Shutting down HTTP server...")
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			shutdownErr := server.Shutdown(ctx)
-			cancel()
-
-			if shutdownErr != nil {
-				logging.Warn("HTTP server shutdown encountered error: %v", shutdownErr)
-			} else {
-				logging.Info("HTTP server shutdown completed")
-			}
+			logging.Info("Certificate ready signal received, starting HTTPS server...")
 
 			tlsPort := config.GetInt(ServerTLSPortKey)
 			certFile := config.GetString(ServerTLSCertFileKey)
@@ -216,8 +212,6 @@ func main() {
 					MinVersion: tls.VersionTLS12,
 				},
 			}
-
-			server = httpsSrv
 
 			logging.Info("HTTPS server now listening on port %d", tlsPort)
 			if err := httpsSrv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {

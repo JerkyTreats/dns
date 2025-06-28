@@ -5,20 +5,20 @@ app:
 
 server:
   host: 0.0.0.0
-  port: 8080
+  port: 80
   read_timeout: 5s
   write_timeout: 10s
   idle_timeout: 120s
   tls:
-    enabled: false
-    port: 8443
+    enabled: false    # Set to true to enable HTTPS on port 443
+    port: 443
     cert_file: /etc/letsencrypt/live/INTERNAL_DOMAIN_PLACEHOLDER/cert.pem
     key_file: /etc/letsencrypt/live/INTERNAL_DOMAIN_PLACEHOLDER/privkey.pem
     min_version: "1.2"
     max_version: "1.3"
 
 dns:
-  domain: INTERNAL_DOMAIN_PLACEHOLDER
+  domain: INTERNAL_DOMAIN_PLACEHOLDER    # API will be available at dns.{domain} on ports 80/443
   # Dynamic sync configuration
   internal:
     enabled: true  # Set to false to disable sync
@@ -58,9 +58,9 @@ logging:
   output: stdout
 
 certificate:
-  provider: "lego"
+  provider: "lego"                    # Uses Lego for Let's Encrypt certificates
   email: "LETSENCRYPT_EMAIL_PLACEHOLDER"
-  domain: "INTERNAL_DOMAIN_PLACEHOLDER"
+  domain: "INTERNAL_DOMAIN_PLACEHOLDER"    # Should match dns.domain for automatic HTTPS
   ca_dir_url: "LETSENCRYPT_URL_PLACEHOLDER"
   # DNS resolvers for ACME challenge verification (use public DNS servers instead of Docker's internal resolver)
   dns_resolvers:
