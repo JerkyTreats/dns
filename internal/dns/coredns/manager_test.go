@@ -85,6 +85,125 @@ func TestManager(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, string(content), string(contentAfterBogusDrop), "Dropping a non-existent record should not change the file")
 	})
+
+	t.Run("ListRecords", func(t *testing.T) {
+		// Create separate test environment for this test
+		tempDirList, err := os.MkdirTemp("", "coredns-list-test-*")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDirList)
+
+		configPathList := filepath.Join(tempDirList, "Corefile")
+		templatePathList := filepath.Join(tempDirList, "Corefile.template")
+		zonesPathList := filepath.Join(tempDirList, "zones")
+		domainList := "test.local"
+
+		config.SetForTest(DNSConfigPathKey, configPathList)
+		config.SetForTest(DNSTemplatePathKey, templatePathList)
+		config.SetForTest(DNSZonesPathKey, zonesPathList)
+		config.SetForTest(DNSDomainKey, domainList)
+
+		// Prepare Corefile template
+		templateContent := `. {
+    errors
+    log
+}
+`
+		_ = os.WriteFile(templatePathList, []byte(templateContent), 0644)
+
+		managerList := NewManager("")
+
+		// Setup: Create a zone with multiple records
+		err = managerList.AddZone("test-service-list")
+		require.NoError(t, err)
+		err = managerList.AddRecord("test-service-list", "device1", "100.64.1.1")
+		require.NoError(t, err)
+		err = managerList.AddRecord("test-service-list", "device2", "100.64.1.2")
+		require.NoError(t, err)
+		err = managerList.AddRecord("test-service-list", "server", "192.168.1.100")
+		require.NoError(t, err)
+
+		// Test listing records
+		records, err := managerList.ListRecords("test-service-list")
+		require.NoError(t, err)
+
+		// Verify correct number of records (3 added + 1 NS record)
+		assert.Len(t, records, 4)
+
+		// Verify record content
+		recordMap := make(map[string]string)
+		for _, record := range records {
+			assert.Equal(t, "A", record.Type)
+			recordMap[record.Name] = record.IP
+		}
+
+		assert.Equal(t, "100.64.1.1", recordMap["device1"])
+		assert.Equal(t, "100.64.1.2", recordMap["device2"])
+		assert.Equal(t, "192.168.1.100", recordMap["server"])
+		assert.Equal(t, "127.0.0.1", recordMap["ns"]) // NS record automatically created
+	})
+
+	t.Run("ListRecords_EmptyZone", func(t *testing.T) {
+		// Create separate test environment for this test
+		tempDirEmpty, err := os.MkdirTemp("", "coredns-empty-test-*")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDirEmpty)
+
+		configPathEmpty := filepath.Join(tempDirEmpty, "Corefile")
+		templatePathEmpty := filepath.Join(tempDirEmpty, "Corefile.template")
+		zonesPathEmpty := filepath.Join(tempDirEmpty, "zones")
+		domainEmpty := "test.local"
+
+		config.SetForTest(DNSConfigPathKey, configPathEmpty)
+		config.SetForTest(DNSTemplatePathKey, templatePathEmpty)
+		config.SetForTest(DNSZonesPathKey, zonesPathEmpty)
+		config.SetForTest(DNSDomainKey, domainEmpty)
+
+		// Prepare Corefile template
+		templateContent := `. {
+    errors
+    log
+}
+`
+		_ = os.WriteFile(templatePathEmpty, []byte(templateContent), 0644)
+
+		managerEmpty := NewManager("")
+
+		// Setup: Create an empty zone
+		err = managerEmpty.AddZone("empty-service")
+		require.NoError(t, err)
+
+		// Test listing records from empty zone (should have 1 NS record)
+		records, err := managerEmpty.ListRecords("empty-service")
+		require.NoError(t, err)
+		assert.Len(t, records, 1)
+		assert.Equal(t, "ns", records[0].Name)
+		assert.Equal(t, "A", records[0].Type)
+		assert.Equal(t, "127.0.0.1", records[0].IP)
+	})
+
+	t.Run("ListRecords_NonExistentZone", func(t *testing.T) {
+		// Create separate test environment for this test
+		tempDirNonExistent, err := os.MkdirTemp("", "coredns-nonexistent-test-*")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDirNonExistent)
+
+		configPathNonExistent := filepath.Join(tempDirNonExistent, "Corefile")
+		templatePathNonExistent := filepath.Join(tempDirNonExistent, "Corefile.template")
+		zonesPathNonExistent := filepath.Join(tempDirNonExistent, "zones")
+		domainNonExistent := "test.local"
+
+		config.SetForTest(DNSConfigPathKey, configPathNonExistent)
+		config.SetForTest(DNSTemplatePathKey, templatePathNonExistent)
+		config.SetForTest(DNSZonesPathKey, zonesPathNonExistent)
+		config.SetForTest(DNSDomainKey, domainNonExistent)
+
+		managerNonExistent := NewManager("")
+
+		// Test listing records from non-existent zone
+		records, err := managerNonExistent.ListRecords("non-existent-service")
+		require.NoError(t, err)
+		assert.Len(t, records, 0)
+	})
 }
 
 func TestZoneValidation(t *testing.T) {
@@ -286,6 +405,87 @@ func TestManager_AddDomain_NoUnnecessaryRegeneration(t *testing.T) {
 	// The modification time should be different (regeneration occurred)
 	if firstStat.ModTime().Equal(thirdStat.ModTime()) {
 		t.Errorf("Corefile should have been regenerated for TLS config change. Mod time: %v", thirdStat.ModTime())
+	}
+}
+
+func TestParseRecordsFromZone(t *testing.T) {
+	manager := NewManager("127.0.0.1")
+
+	tests := []struct {
+		name     string
+		content  string
+		expected []Record
+	}{
+		{
+			name: "Multiple A records",
+			content: `$ORIGIN test.local.
+$TTL 300
+@       IN SOA  ns.test.local. admin.test.local. (
+                2023010101 ; serial
+                3600       ; refresh
+                1800       ; retry
+                604800     ; expire
+                300        ; minimum
+                )
+@       IN NS   ns.test.local.
+device1	IN A	100.64.1.1
+device2	IN A	100.64.1.2
+server	IN A	192.168.1.100`,
+			expected: []Record{
+				{Name: "device1", Type: "A", IP: "100.64.1.1"},
+				{Name: "device2", Type: "A", IP: "100.64.1.2"},
+				{Name: "server", Type: "A", IP: "192.168.1.100"},
+			},
+		},
+		{
+			name:     "Empty zone",
+			content:  `$ORIGIN test.local.`,
+			expected: []Record{},
+		},
+		{
+			name: "Mixed record types - only A records returned",
+			content: `device1	IN A	100.64.1.1
+device2	IN CNAME	device1
+device3	IN A	100.64.1.3
+@	IN MX	10 mail.test.local.`,
+			expected: []Record{
+				{Name: "device1", Type: "A", IP: "100.64.1.1"},
+				{Name: "device3", Type: "A", IP: "100.64.1.3"},
+			},
+		},
+		{
+			name: "Records with comments and empty lines",
+			content: `; This is a comment
+device1	IN A	100.64.1.1
+
+; Another comment
+device2	IN A	100.64.1.2
+# This is also a comment
+device3	IN A	100.64.1.3`,
+			expected: []Record{
+				{Name: "device1", Type: "A", IP: "100.64.1.1"},
+				{Name: "device2", Type: "A", IP: "100.64.1.2"},
+				{Name: "device3", Type: "A", IP: "100.64.1.3"},
+			},
+		},
+		{
+			name: "Records with varying whitespace",
+			content: `device1    IN   A    100.64.1.1
+device2		IN	A	100.64.1.2
+device3 IN A 100.64.1.3`,
+			expected: []Record{
+				{Name: "device1", Type: "A", IP: "100.64.1.1"},
+				{Name: "device2", Type: "A", IP: "100.64.1.2"},
+				{Name: "device3", Type: "A", IP: "100.64.1.3"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			records := manager.parseRecordsFromZone(tt.content)
+			assert.Equal(t, tt.expected, records)
+		})
 	}
 }
 

@@ -495,6 +495,61 @@ func (m *Manager) RemoveRecord(serviceName, name string) error {
 	return nil
 }
 
+// ListRecords returns all A records from the specified zone file
+func (m *Manager) ListRecords(serviceName string) ([]Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logging.Debug("Listing records for service %s", serviceName)
+
+	zoneFile := filepath.Join(m.zonesPath, fmt.Sprintf("%s.zone", m.domain))
+
+	content, err := os.ReadFile(zoneFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logging.Warn("Zone file for service %s not found", serviceName)
+			return []Record{}, nil
+		}
+		return nil, fmt.Errorf("failed to read zone file: %w", err)
+	}
+
+	return m.parseRecordsFromZone(string(content)), nil
+}
+
+// Record represents a DNS A record
+type Record struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	IP   string `json:"ip"`
+}
+
+// parseRecordsFromZone extracts A records from zone file content
+func (m *Manager) parseRecordsFromZone(content string) []Record {
+	records := make([]Record, 0)
+	lines := strings.Split(content, "\n")
+
+	// Regex to match A records: name IN A ip
+	recordRegex := regexp.MustCompile(`^([^\s]+)\s+IN\s+A\s+([^\s]+)`)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		matches := recordRegex.FindStringSubmatch(line)
+		if len(matches) >= 3 {
+			records = append(records, Record{
+				Name: matches[1],
+				Type: "A",
+				IP:   matches[2],
+			})
+		}
+	}
+
+	return records
+}
+
 // ------------------- Corefile generation -------------------- //
 
 func (m *Manager) applyConfiguration() error {

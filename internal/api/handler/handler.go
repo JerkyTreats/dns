@@ -58,6 +58,7 @@ func (hr *HandlerRegistry) RegisterHandlers(mux *http.ServeMux) {
 	// Register all handlers
 	mux.Handle("/health", hr.healthHandler)
 	mux.HandleFunc("/add-record", hr.recordHandler.AddRecord)
+	mux.HandleFunc("/list-records", hr.recordHandler.ListRecords)
 
 	// Register device management endpoints
 	mux.HandleFunc("/list-devices", hr.deviceHandler.ListDevices)

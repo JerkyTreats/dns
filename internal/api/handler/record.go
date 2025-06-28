@@ -50,3 +50,29 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte("Record added successfully"))
 }
+
+// ListRecords handles listing all DNS records from the internal zone
+func (h *RecordHandler) ListRecords(w http.ResponseWriter, r *http.Request) {
+	logging.Info("Processing list records request")
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	records, err := h.manager.ListRecords("internal")
+	if err != nil {
+		logging.Error("Failed to list records: %v", err)
+		http.Error(w, "Failed to list records", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(records); err != nil {
+		logging.Error("Failed to encode records to JSON: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	logging.Info("Successfully returned %d records", len(records))
+}

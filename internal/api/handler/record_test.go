@@ -124,3 +124,111 @@ func TestAddRecordHandler(t *testing.T) {
 		})
 	}
 }
+
+func TestListRecordsHandler(t *testing.T) {
+	handler := setupTestHandler(t)
+
+	// Add some test records
+	manager := coredns.NewManager("127.0.0.1")
+
+	// Set up test configuration
+	tempDir, err := os.MkdirTemp("", "coredns-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	config.SetForTest("dns.coredns.config_path", filepath.Join(tempDir, "Corefile"))
+	config.SetForTest("dns.coredns.zones_path", filepath.Join(tempDir, "zones"))
+	config.SetForTest("dns.domain", "test.local")
+
+	err = os.MkdirAll(filepath.Join(tempDir, "zones"), 0755)
+	require.NoError(t, err)
+
+	err = manager.AddZone("test-service")
+	require.NoError(t, err)
+	err = manager.AddRecord("test-service", "device1", "100.64.1.1")
+	require.NoError(t, err)
+	err = manager.AddRecord("test-service", "device2", "100.64.1.2")
+	require.NoError(t, err)
+
+	// Create handler with the manager that has records
+	handler, err = NewRecordHandler(manager)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name           string
+		method         string
+		expectedStatus int
+		expectedCount  int
+	}{
+		{
+			name:           "Valid GET request",
+			method:         http.MethodGet,
+			expectedStatus: http.StatusOK,
+			expectedCount:  3, // 2 added records + 1 NS record
+		},
+		{
+			name:           "Invalid method",
+			method:         http.MethodPost,
+			expectedStatus: http.StatusMethodNotAllowed,
+			expectedCount:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/list-records", nil)
+			w := httptest.NewRecorder()
+
+			handler.ListRecords(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+
+			if tt.expectedStatus == http.StatusOK {
+				assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+				var records []coredns.Record
+				err := json.Unmarshal(w.Body.Bytes(), &records)
+				require.NoError(t, err)
+				assert.Len(t, records, tt.expectedCount)
+
+				if tt.expectedCount > 0 {
+					// Verify the structure of returned records
+					for _, record := range records {
+						assert.NotEmpty(t, record.Name)
+						assert.Equal(t, "A", record.Type)
+						assert.NotEmpty(t, record.IP)
+					}
+
+					// Verify specific records exist
+					recordMap := make(map[string]string)
+					for _, record := range records {
+						recordMap[record.Name] = record.IP
+					}
+					assert.Equal(t, "100.64.1.1", recordMap["device1"])
+					assert.Equal(t, "100.64.1.2", recordMap["device2"])
+					assert.Equal(t, "127.0.0.1", recordMap["ns"]) // NS record automatically created
+				}
+			}
+		})
+	}
+}
+
+func TestListRecordsHandler_EmptyZone(t *testing.T) {
+	handler := setupTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/list-records", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListRecords(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var records []coredns.Record
+	err := json.Unmarshal(w.Body.Bytes(), &records)
+	require.NoError(t, err)
+	assert.Len(t, records, 1) // Should have 1 NS record
+	assert.Equal(t, "ns", records[0].Name)
+	assert.Equal(t, "A", records[0].Type)
+	assert.Equal(t, "127.0.0.1", records[0].IP)
+}
