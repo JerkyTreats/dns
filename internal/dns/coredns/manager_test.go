@@ -247,7 +247,10 @@ func TestZoneValidation(t *testing.T) {
 {{end}}
 {{end}}
 `), 0644)
+	config.SetForTest(DNSConfigPathKey, configPath)
 	config.SetForTest(DNSTemplatePathKey, templatePath2)
+	config.SetForTest(DNSZonesPathKey, zonesPath)
+	config.SetForTest(DNSDomainKey, "test.local")
 	manager := NewManager("")
 
 	t.Run("AddZone creates new zone", func(t *testing.T) {
@@ -349,6 +352,13 @@ func TestManager_AddDomain_NoUnnecessaryRegeneration(t *testing.T) {
 	if err := os.WriteFile(templatePath, []byte(templateContent), 0644); err != nil {
 		t.Fatalf("Failed to write template: %v", err)
 	}
+
+	// Set up configuration for the manager
+	zonesPath := filepath.Join(tempDir, "zones")
+	config.SetForTest(DNSConfigPathKey, configPath)
+	config.SetForTest(DNSTemplatePathKey, templatePath)
+	config.SetForTest(DNSZonesPathKey, zonesPath)
+	config.SetForTest(DNSDomainKey, "test.local")
 
 	manager := NewManager("")
 
