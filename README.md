@@ -1,152 +1,137 @@
 # Tailscale Internal DNS Manager
 
-A lightweight API for managing internal DNS records with dynamic zone bootstrapping using Tailscale device discovery. This service provides automated DNS record management for internal services, with CoreDNS integration for reliable DNS resolution and automated Let's Encrypt SSL/TLS certification.
+A lightweight API for managing internal DNS records with dynamic zone synchronization using Tailscale device discovery. Provides automated DNS record management, CoreDNS integration, and Let's Encrypt SSL/TLS certification.
 
-## Overview
+## Features
 
-This project automatically discovers devices in your Tailscale network and creates DNS records for them, eliminating the need to manually manage static IP addresses. It provides:
-
-- **Dynamic Zone Bootstrap**: Automatically discovers Tailscale devices and creates DNS records
+- **Dynamic Device Discovery**: Automatically discovers Tailscale devices and creates DNS records
 - **RESTful API**: Simple interface for DNS record management
 - **CoreDNS Integration**: Reliable DNS resolution with automatic zone file management
-- **Let's Encrypt Integration**: Automated SSL/TLS certificate management
-- **Docker Deployment**: Easy containerized setup
+- **Let's Encrypt Integration**: Automated SSL/TLS certificate management via DNS-01 challenge
+- **Firewall Management**: Automatic ipset/iptables configuration for Tailscale CIDR protection
+- **Device Persistence**: Persistent storage of device metadata with backup support
 
 ## Prerequisites
 
-### Required Software
-- **Docker and Docker Compose**: For containerized deployment
-- **Tailscale Account**: With API access enabled
-- **Domain Control**: A domain you control for DNS-01 challenge validation
+- **Docker and Docker Compose**
+- **Tailscale Account** with API access enabled
+- **Domain Control** for DNS-01 challenge validation
 
-### Tailscale Setup
+## Quick Start
 
-1. **Create a Tailscale API Key**:
-   - Go to the [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys)
-   - Generate an API key with appropriate permissions
-   - Note your Tailnet name (usually your organization name or email domain)
-
-2. **Enable API Access**:
-   - Ensure your Tailscale account has API access enabled
-   - Verify you can see your devices in the admin console
-
-## First-Time Setup
-
-### 1. Clone and Configure
+### 1. Setup
 
 ```bash
 git clone https://github.com/jerkytreats/dns.git
 cd dns
-```
-
-### 2. Run Setup Script
-
-Run the interactive setup script to configure your installation:
-
-```bash
 ./scripts/setup.sh
 ```
 
-The setup script will:
-- Prompt for your Tailscale API key and Tailnet name
-- Ask for your internal domain and Let's Encrypt email
-- Create a personalized configuration file with your credentials
-- Optionally open the config file for device configuration
+The setup script will prompt for:
+- Tailscale API key and tailnet name
+- Internal domain and Let's Encrypt email
+- Creates personalized configuration
 
-### 3. Configuration Details
-
-The setup script creates `configs/config.yaml` from a template. This file contains your credentials and is automatically excluded from git. You can customize:
-
-```yaml
-dns:
-  internal:
-    bootstrap_devices:
-      - name: "server"
-        tailscale_name: "your-actual-tailscale-device-name"  # Change this
-        aliases: ["api", "dns"]
-        description: "Main server"
-        enabled: true
-      # Add more devices as needed
-```
-
-The setup script handles the domain, credentials, and certificate configuration automatically.
-
-### 4. Deploy Services
+### 2. Deploy
 
 ```bash
-# Using Docker Compose
 docker-compose up --build -d
-
-# Or using the deployment script
-./scripts/deploy.sh
 ```
 
-### 5. Verify Deployment
+### 3. Verify
 
-1. **Check Service Health**:
-   ```bash
-   curl http://localhost:8080/health
-   ```
+```bash
+# Check service health
+curl http://localhost:8080/health
 
-2. **Test DNS Resolution**:
-   ```bash
-   # Test internal domain resolution
-   dig @localhost your-device.internal.yourdomain.com
+# Test DNS resolution
+dig @localhost your-device.internal.yourdomain.com
+```
 
-   # Test with specific device
-   nslookup server.internal.yourdomain.com localhost
-   ```
+## Configuration
 
-3. **Check Logs**:
-   ```bash
-   docker-compose logs api
-   docker-compose logs coredns
-   ```
-
-## Configuration Reference
-
-### Dynamic Bootstrap Configuration
-
-The `dns.internal.bootstrap_devices` section defines which Tailscale devices to automatically create DNS records for:
+The main configuration file `configs/config.yaml` contains:
 
 ```yaml
 dns:
+  domain: "internal.yourdomain.com"    # Base domain for DNS records
   internal:
-    enabled: true
-    origin: "internal.yourdomain.com"
-    bootstrap_devices:
-      - name: "server"                    # DNS record name
-        tailscale_name: "my-server"       # Tailscale device name
-        aliases: ["api", "web"]           # Additional DNS names
-        description: "Main server"        # Documentation
-        enabled: true                     # Enable/disable this device
+    enabled: true                      # Enable dynamic device sync
+    origin: "internal.yourdomain.com"  # Zone origin for device records
+    polling:
+      enabled: true                    # Enable periodic sync
+      interval: "1h"                   # Sync interval
+
+tailscale:
+  api_key: "your-api-key"             # Tailscale API key
+  tailnet: "your-tailnet"             # Tailscale tailnet name
+  device_name: "your-device-name"     # Optional: specific device name
+
+certificate:
+  email: "your-email@domain.com"      # Let's Encrypt email
+  domain: "internal.yourdomain.com"   # Domain for certificates
+  renewal:
+    enabled: true                     # Enable auto-renewal
+    renew_before: "720h"              # Renew 30 days before expiry
 ```
 
-### Configuration Files
-
-| File | Description |
-|------|-------------|
-| `configs/config.yaml` | Main configuration with your credentials (gitignored) |
-| `configs/config.yaml.template` | Template used by setup script |
-
-## API Usage
+## API Reference
 
 ### Health Check
 ```bash
 curl http://localhost:8080/health
 ```
 
-### Add DNS Record
+### DNS Record Management
 ```bash
+# Add a DNS record
 curl -X POST http://localhost:8080/add-record \
   -H "Content-Type: application/json" \
-  -d '{"service_name": "my-new-service"}'
+  -d '{"service_name": "my-service", "name": "my-service", "ip": "192.168.1.100"}'
+
+# List DNS records
+curl http://localhost:8080/list-records?service_name=my-service
 ```
+
+### Device Management
+```bash
+# List Tailscale devices
+curl http://localhost:8080/list-devices
+
+# Annotate a device
+curl -X POST http://localhost:8080/annotate-device \
+  -H "Content-Type: application/json" \
+  -d '{"hostname": "my-device", "annotations": {"description": "Main server"}}'
+
+# Get device storage info
+curl http://localhost:8080/device-storage-info
+```
+
+## Architecture
+
+### Core Components
+
+- **API Service** (`cmd/api/main.go`): Go application managing DNS records, certificates, and device sync
+- **CoreDNS Manager** (`internal/dns/coredns/`): Manages CoreDNS configuration and zone files
+- **Tailscale Client** (`internal/tailscale/`): Integrates with Tailscale API for device discovery
+- **Sync Manager** (`internal/tailscale/sync/`): Handles dynamic zone synchronization
+- **Certificate Manager** (`internal/certificate/`): Manages Let's Encrypt certificates via DNS-01 challenge
+- **Firewall Manager** (`internal/firewall/`): Configures ipset/iptables for Tailscale CIDR protection
+- **Device Persistence** (`internal/persistence/`): Stores device metadata with backup support
+
+### Data Flow
+
+1. **Startup**: API service initializes Tailscale client, CoreDNS manager, and firewall rules
+2. **Device Discovery**: Sync manager fetches devices from Tailscale API
+3. **DNS Record Creation**: CoreDNS manager creates zone files and DNS records
+4. **Certificate Management**: Certificate manager handles Let's Encrypt challenges via CoreDNS
+5. **Ongoing Sync**: Periodic polling keeps DNS records synchronized with Tailscale devices
 
 ## Security
 
 - **Network Security**: All services run behind Tailscale network isolation
 - **TLS Encryption**: Automatic Let's Encrypt certificates with modern cipher suites
+- **Firewall Protection**: Automatic ipset/iptables configuration for Tailscale CIDR (100.64.0.0/10)
 - **Private Keys**: Securely managed with proper file permissions
 - **API Authentication**: Protected by Tailscale network access
 
@@ -154,26 +139,25 @@ curl -X POST http://localhost:8080/add-record \
 
 ### Common Issues
 
-1. **Tailscale API Connection Failed**:
-   - Verify `TAILSCALE_API_KEY` is correct
-   - Check your Tailnet name in `TAILSCALE_TAILNET`
-   - Ensure API access is enabled in Tailscale admin console
+**Tailscale API Connection Failed**:
+- Verify `tailscale.api_key` is correct
+- Check your `tailscale.tailnet` name
+- Ensure API access is enabled in Tailscale admin console
 
-2. **Device Not Found**:
-   - Check device name matches exactly in Tailscale admin console
-   - Ensure device is online and connected to Tailscale
-   - Verify device appears in `tailscale status` output
+**Device Not Found**:
+- Check device name matches exactly in Tailscale admin console
+- Ensure device is online and connected to Tailscale
+- Verify device appears in `tailscale status` output
 
-3. **Let's Encrypt Certificate Issues**:
-   - Ensure your domain's DNS points to your server
-   - Check firewall allows ports 80, 443, 53, and 853
-   - Verify email address is valid in configuration
-   - For testing, use staging URL to avoid rate limits
+**Let's Encrypt Certificate Issues**:
+- Ensure your domain's DNS points to your server
+- Check firewall allows ports 80, 443, 53, and 853
+- Verify email address is valid in configuration
 
-4. **DNS Resolution Issues**:
-   - Test CoreDNS directly: `dig @localhost internal.yourdomain.com`
-   - Check CoreDNS logs: `docker-compose logs coredns`
-   - Verify zone files in `configs/coredns/zones/`
+**DNS Resolution Issues**:
+- Test CoreDNS directly: `dig @localhost internal.yourdomain.com`
+- Check CoreDNS logs: `docker-compose logs coredns`
+- Verify zone files in `configs/coredns/zones/`
 
 ### Debug Mode
 
@@ -190,9 +174,6 @@ docker-compose logs -f api
 
 # CoreDNS logs
 docker-compose logs -f coredns
-
-# Follow all logs
-docker-compose logs -f
 ```
 
 ## Maintenance
@@ -204,7 +185,7 @@ docker-compose logs -f
 
 ### Device Updates
 - New devices are automatically discovered on service restart
-- Modify `bootstrap_devices` in config and restart to add/remove devices
+- Dynamic sync updates DNS records when device IPs change
 - Use the API to add temporary records without config changes
 
 ### Updates
@@ -213,13 +194,6 @@ git pull origin main
 docker-compose down
 docker-compose up --build -d
 ```
-
-## Architecture
-
-- **API Service**: Go application managing DNS records and certificates
-- **CoreDNS**: DNS server with dynamic zone file management
-- **Tailscale Integration**: Device discovery and IP resolution
-- **Let's Encrypt**: Automated certificate management via DNS-01 challenge
 
 ## License
 
