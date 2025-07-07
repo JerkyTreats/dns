@@ -21,9 +21,47 @@ error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if docker is running
-if ! docker info > /dev/null 2>&1; then
-    error "Docker is not running. Please start Docker and try again."
+# Detect container runtime
+DOCKER_CMD=""
+COMPOSE_CMD=""
+
+# Check for Docker
+if command -v docker &> /dev/null; then
+    DOCKER_CMD="docker"
+    # Check if Docker Compose is available
+    if docker-compose --version &> /dev/null; then
+        COMPOSE_CMD="docker-compose"
+    elif docker compose version &> /dev/null; then
+        COMPOSE_CMD="docker compose"
+    fi
+fi
+
+# Check for nerdctl
+if command -v nerdctl &> /dev/null; then
+    DOCKER_CMD="nerdctl"
+    # Check if nerdctl compose is available
+    if nerdctl compose version &> /dev/null; then
+        COMPOSE_CMD="nerdctl compose"
+    fi
+fi
+
+# Validate we have both a container runtime and compose
+if [ -z "$DOCKER_CMD" ]; then
+    error "Neither Docker nor nerdctl is installed. Please install Docker or nerdctl and try again."
+    exit 1
+fi
+
+if [ -z "$COMPOSE_CMD" ]; then
+    error "Docker Compose is not available. Please install Docker Compose or ensure nerdctl compose is available."
+    exit 1
+fi
+
+log "Using container runtime: $DOCKER_CMD"
+log "Using compose command: $COMPOSE_CMD"
+
+# Check if container runtime is running
+if ! $DOCKER_CMD info > /dev/null 2>&1; then
+    error "$DOCKER_CMD is not running. Please start $DOCKER_CMD and try again."
     exit 1
 fi
 
@@ -59,7 +97,7 @@ if [ ! -d "ssl" ]; then
 fi
 
 log "Starting services..."
-docker-compose up -d
+$COMPOSE_CMD up -d
 
 # Wait for services to be ready with health checks
 log "Waiting for services to be ready..."
@@ -78,7 +116,7 @@ while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
 
     if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
         error "API service health check failed after $MAX_ATTEMPTS attempts"
-        echo "Check logs with: docker-compose logs api"
+        echo "Check logs with: $COMPOSE_CMD logs api"
         exit 1
     fi
 
@@ -89,7 +127,7 @@ done
 
 # Check CoreDNS service
 log "Checking CoreDNS service..."
-if docker-compose ps coredns | grep -q "Up"; then
+if $COMPOSE_CMD ps coredns | grep -q "Up"; then
     # Test DNS resolution if dig is available
     if command -v dig >/dev/null 2>&1; then
         if timeout 5 dig @localhost version.bind TXT CH +short > /dev/null 2>&1; then
@@ -102,7 +140,7 @@ if docker-compose ps coredns | grep -q "Up"; then
     fi
 else
     error "CoreDNS service failed to start"
-    echo "Check logs with: docker-compose logs coredns"
+    echo "Check logs with: $COMPOSE_CMD logs coredns"
     exit 1
 fi
 
@@ -113,7 +151,7 @@ echo
 
 # Display service information
 log "Service Status:"
-docker-compose ps
+$COMPOSE_CMD ps
 
 echo
 log "Service URLs:"
@@ -128,11 +166,11 @@ fi
 
 echo
 log "Useful commands:"
-echo "  docker-compose logs -f           # View all logs"
-echo "  docker-compose logs -f api       # View API logs"
-echo "  docker-compose logs -f coredns   # View CoreDNS logs"
-echo "  docker-compose down              # Stop services"
-echo "  docker-compose restart           # Restart services"
+echo "  $COMPOSE_CMD logs -f           # View all logs"
+echo "  $COMPOSE_CMD logs -f api       # View API logs"
+echo "  $COMPOSE_CMD logs -f coredns   # View CoreDNS logs"
+echo "  $COMPOSE_CMD down              # Stop services"
+echo "  $COMPOSE_CMD restart           # Restart services"
 echo
 
 # Show quick test commands

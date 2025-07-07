@@ -41,21 +41,47 @@ echo
 # Check prerequisites
 log "Checking prerequisites..."
 
-# Check if Docker is installed
-if ! command -v docker &> /dev/null; then
-    error "Docker is not installed. Please install Docker and try again."
+# Detect container runtime
+DOCKER_CMD=""
+COMPOSE_CMD=""
+
+# Check for Docker
+if command -v docker &> /dev/null; then
+    DOCKER_CMD="docker"
+    # Check if Docker Compose is available
+    if docker-compose --version &> /dev/null; then
+        COMPOSE_CMD="docker-compose"
+    elif docker compose version &> /dev/null; then
+        COMPOSE_CMD="docker compose"
+    fi
+fi
+
+# Check for nerdctl
+if command -v nerdctl &> /dev/null; then
+    DOCKER_CMD="nerdctl"
+    # Check if nerdctl compose is available
+    if nerdctl compose version &> /dev/null; then
+        COMPOSE_CMD="nerdctl compose"
+    fi
+fi
+
+# Validate we have both a container runtime and compose
+if [ -z "$DOCKER_CMD" ]; then
+    error "Neither Docker nor nerdctl is installed. Please install Docker or nerdctl and try again."
     exit 1
 fi
 
-# Check if Docker Compose is available
-if ! docker-compose --version &> /dev/null && ! docker compose version &> /dev/null; then
-    error "Docker Compose is not installed. Please install Docker Compose and try again."
+if [ -z "$COMPOSE_CMD" ]; then
+    error "Docker Compose is not available. Please install Docker Compose or ensure nerdctl compose is available."
     exit 1
 fi
 
-# Check if docker is running
-if ! docker info > /dev/null 2>&1; then
-    error "Docker is not running. Please start Docker and try again."
+log "Using container runtime: $DOCKER_CMD"
+log "Using compose command: $COMPOSE_CMD"
+
+# Check if container runtime is running
+if ! $DOCKER_CMD info > /dev/null 2>&1; then
+    error "$DOCKER_CMD is not running. Please start $DOCKER_CMD and try again."
     exit 1
 fi
 
@@ -119,8 +145,6 @@ if [ -z "$TAILSCALE_TAILNET" ]; then
     error "Tailnet name cannot be empty"
     exit 1
 fi
-
-
 
 # Prompt for domain customization
 echo "What domain will you use for internal DNS? (e.g., internal.yourdomain.com)"
@@ -187,8 +211,6 @@ if command -v python3 &> /dev/null; then
     # Run Python template substitution
     python3 scripts/template_substitute.py configs/config.yaml.template configs/config.yaml "${PYTHON_ARGS[@]}"
 
-
-
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
         python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
             -s "provider: \"lego\"" "provider: \"lego\"
@@ -209,8 +231,6 @@ elif command -v perl &> /dev/null; then
     perl -i -pe "s|LETSENCRYPT_URL_PLACEHOLDER|\Q$LETSENCRYPT_URL\E|g" configs/config.yaml
     perl -i -pe "s/TAILSCALE_API_KEY_PLACEHOLDER/\Q$TAILSCALE_API_KEY\E/g" configs/config.yaml
     perl -i -pe "s/TAILSCALE_TAILNET_PLACEHOLDER/\Q$TAILSCALE_TAILNET\E/g" configs/config.yaml
-
-
 
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
         perl -i -pe 's/(provider: "lego")/$1\n  dns_provider: cloudflare/g' configs/config.yaml
@@ -294,8 +314,8 @@ echo
 info "Useful commands:"
 echo "- ./scripts/deploy.sh    # Deploy services"
 echo "- ./scripts/start.sh     # Start existing services"
-echo "- docker-compose logs -f # View logs"
-echo "- docker-compose down    # Stop services"
+echo "- $COMPOSE_CMD logs -f   # View logs"
+echo "- $COMPOSE_CMD down      # Stop services"
 echo
 
 # Step 6: Handle Cloudflare token in .env if needed
