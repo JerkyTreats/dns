@@ -39,8 +39,11 @@ vendor/
 # Agent files (documentation)
 .agent/
 
-# Scripts not needed for build
-scripts/
+# Scripts not needed for build (exclude specific scripts but keep Python config scripts)
+scripts/deploy.sh
+scripts/start.sh
+scripts/setup.sh
+scripts/build-unified.sh
 
 # Docker files not needed in build context
 Dockerfile*
