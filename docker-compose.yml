@@ -14,7 +14,6 @@ services:
       - ./ssl:/etc/letsencrypt
       - coredns-zones:/etc/coredns/zones
     environment:
-      - APP_ENV=development
       - TAILSCALE_API_KEY=${TAILSCALE_API_KEY}
       - TAILSCALE_TAILNET=${TAILSCALE_TAILNET}
     depends_on:

@@ -1,0 +1,194 @@
+<?xml version="1.0"?>
+<Container version="2">
+    <Name>Tailscale DNS Manager</Name>
+    <Repository>jerkytreats/dns</Repository>
+    <Registry>https://hub.docker.com/r/jerkytreats/</Registry>
+    <Network>bridge</Network>
+    <MyIP/>
+    <Shell>sh</Shell>
+    <Privileged>true</Privileged>
+    <Support>https://github.com/JerkyTreats/dns</Support>
+    <Project>https://github.com/JerkyTreats/dns</Project>
+    <Overview>
+        Tailscale Internal DNS Manager - Automatically manages DNS records for Tailscale devices with dynamic CoreDNS configuration and Let's Encrypt certificates.
+
+        This container runs both the API service and CoreDNS in a single container for simplified Unraid deployment.
+
+        Features:
+        • Dynamic Tailscale device discovery and DNS record creation
+        • Let's Encrypt certificate automation with DNS-01 challenges
+        • RESTful API for DNS record management
+        • Automatic firewall protection for Tailscale networks
+        • Health monitoring and device persistence
+    </Overview>
+    <Category>Network:DNS Network:VPN</Category>
+    <WebUI>http://[IP]:[PORT:8080]/health</WebUI>
+    <TemplateURL/>
+    <Icon>https://raw.githubusercontent.com/JerkyTreats/dns/main/docs/icon.png</Icon>
+    <ExtraParams>--cap-add=NET_ADMIN --cap-add=NET_RAW</ExtraParams>
+    <PostArgs/>
+    <CPUset/>
+    <DateInstalled>1640995200</DateInstalled>
+    <DonateText/>
+    <DonateLink/>
+    <DonateImg/>
+    <MinVer>6.9</MinVer>
+    <Description>
+        Manages internal DNS for Tailscale networks with automatic device discovery, dynamic DNS record creation, and Let's Encrypt certificate integration.
+
+        IMPORTANT: This container requires privileged mode for firewall management (iptables/ipset).
+
+        After installation:
+        1. Configure your Tailscale API key and tailnet
+        2. Set your internal domain (must be a domain you control)
+        3. Provide email for Let's Encrypt certificates
+        4. Container will automatically discover Tailscale devices and create DNS records
+
+        Web interface available at: http://[IP]:8080/health
+        DNS queries: point devices to [IP]:53
+    </Description>
+    <Networking>
+        <Mode>bridge</Mode>
+        <Publish>
+            <Port>
+                <HostPort>8080</HostPort>
+                <ContainerPort>8080</ContainerPort>
+                <Protocol>tcp</Protocol>
+            </Port>
+            <Port>
+                <HostPort>8443</HostPort>
+                <ContainerPort>8443</ContainerPort>
+                <Protocol>tcp</Protocol>
+            </Port>
+            <Port>
+                <HostPort>53</HostPort>
+                <ContainerPort>53</ContainerPort>
+                <Protocol>udp</Protocol>
+            </Port>
+            <Port>
+                <HostPort>53</HostPort>
+                <ContainerPort>53</ContainerPort>
+                <Protocol>tcp</Protocol>
+            </Port>
+            <Port>
+                <HostPort>853</HostPort>
+                <ContainerPort>853</ContainerPort>
+                <Protocol>tcp</Protocol>
+            </Port>
+        </Publish>
+    </Networking>
+    <Data>
+        <Volume>
+            <HostDir>/mnt/user/appdata/tailscale-dns/configs</HostDir>
+            <ContainerDir>/app/configs</ContainerDir>
+            <Mode>rw</Mode>
+        </Volume>
+        <Volume>
+            <HostDir>/mnt/user/appdata/tailscale-dns/ssl</HostDir>
+            <ContainerDir>/etc/letsencrypt</ContainerDir>
+            <Mode>rw</Mode>
+        </Volume>
+        <Volume>
+            <HostDir>/mnt/user/appdata/tailscale-dns/data</HostDir>
+            <ContainerDir>/app/data</ContainerDir>
+            <Mode>rw</Mode>
+        </Volume>
+        <Volume>
+            <HostDir>/mnt/user/appdata/tailscale-dns/coredns</HostDir>
+            <ContainerDir>/etc/coredns</ContainerDir>
+            <Mode>rw</Mode>
+        </Volume>
+    </Data>
+    <Environment>
+    </Environment>
+    <Labels/>
+
+    <!-- Port Configuration -->
+    <Config Name="API HTTP Port" Target="8080" Default="8080" Mode="tcp"
+            Description="Port for HTTP API and web interface"
+            Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+
+    <Config Name="API HTTPS Port" Target="8443" Default="8443" Mode="tcp"
+            Description="Port for HTTPS API (when TLS certificates are ready)"
+            Type="Port" Display="always" Required="true" Mask="false">8443</Config>
+
+    <Config Name="DNS Port (UDP)" Target="53" Default="53" Mode="udp"
+            Description="DNS server port - UDP protocol"
+            Type="Port" Display="always" Required="true" Mask="false">53</Config>
+
+    <Config Name="DNS Port (TCP)" Target="53" Default="53" Mode="tcp"
+            Description="DNS server port - TCP protocol"
+            Type="Port" Display="always" Required="true" Mask="false">53</Config>
+
+    <Config Name="DNS over TLS Port" Target="853" Default="853" Mode="tcp"
+            Description="DNS over TLS port (when certificates are available)"
+            Type="Port" Display="advanced" Required="false" Mask="false">853</Config>
+
+    <!-- Volume Configuration -->
+    <Config Name="Config Directory" Target="/app/configs" Default="/mnt/user/appdata/tailscale-dns/configs"
+            Mode="rw" Description="Directory to store application configuration files"
+            Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/configs</Config>
+
+    <Config Name="SSL Certificates" Target="/etc/letsencrypt" Default="/mnt/user/appdata/tailscale-dns/ssl"
+            Mode="rw" Description="Directory for Let's Encrypt SSL certificates"
+            Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/ssl</Config>
+
+    <Config Name="Data Directory" Target="/app/data" Default="/mnt/user/appdata/tailscale-dns/data"
+            Mode="rw" Description="Directory for device data and persistent storage"
+            Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/data</Config>
+
+    <Config Name="CoreDNS Config" Target="/etc/coredns" Default="/mnt/user/appdata/tailscale-dns/coredns"
+            Mode="rw" Description="Directory for CoreDNS configuration and zone files"
+            Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/coredns</Config>
+
+    <!-- Required Tailscale Configuration -->
+    <Config Name="Tailscale API Key" Target="TAILSCALE_API_KEY" Default=""
+            Description="Your Tailscale API key (get from https://login.tailscale.com/admin/settings/keys)"
+            Type="Variable" Display="always" Required="true" Mask="true"></Config>
+
+    <Config Name="Tailnet Name" Target="TAILSCALE_TAILNET" Default=""
+            Description="Your Tailnet name (e.g., example.com or your-org-name)"
+            Type="Variable" Display="always" Required="true" Mask="false"></Config>
+
+    <!-- DNS and Certificate Configuration -->
+    <Config Name="Internal Domain" Target="INTERNAL_DOMAIN" Default=""
+            Description="Domain for internal DNS (e.g., internal.yourdomain.com) - Must be a domain you control!"
+            Type="Variable" Display="always" Required="true" Mask="false"></Config>
+
+    <Config Name="Let's Encrypt Email" Target="LETSENCRYPT_EMAIL" Default=""
+            Description="Email address for Let's Encrypt certificate registration"
+            Type="Variable" Display="always" Required="true" Mask="false"></Config>
+
+    <!-- Optional Advanced Configuration -->
+    <Config Name="Use Production Certificates" Target="USE_PRODUCTION_CERTS" Default="false"
+            Description="Use Let's Encrypt production (true) or staging (false) certificates. Use staging for testing!"
+            Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+
+    <Config Name="Let's Encrypt ACME URL" Target="LETSENCRYPT_URL" Default="https://acme-staging-v02.api.letsencrypt.org/directory"
+            Description="Let's Encrypt ACME directory URL (use staging for testing, production for live certificates)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">https://acme-staging-v02.api.letsencrypt.org/directory</Config>
+
+    <Config Name="Cloudflare API Token" Target="CLOUDFLARE_API_TOKEN" Default=""
+            Description="Cloudflare API token for DNS-01 challenges (leave empty if not using Cloudflare)"
+            Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+
+    <Config Name="Tailscale Device Name" Target="TAILSCALE_DEVICE_NAME" Default="[HOSTNAME]"
+            Description="Tailscale device name for this DNS server (defaults to container hostname, or leave empty for auto-detection)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">[HOSTNAME]</Config>
+
+    <Config Name="Sync Interval" Target="SYNC_INTERVAL" Default="1h"
+            Description="How often to sync Tailscale devices (e.g., 30m, 1h, 2h)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">1h</Config>
+
+    <Config Name="Enable TLS" Target="ENABLE_TLS" Default="false"
+            Description="Enable HTTPS/TLS when certificates are ready"
+            Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+
+    <Config Name="DNS Resolvers" Target="DNS_RESOLVERS" Default="8.8.8.8:53,1.1.1.1:53"
+            Description="Comma-separated list of DNS resolvers for ACME challenge verification"
+            Type="Variable" Display="advanced" Required="false" Mask="false">8.8.8.8:53,1.1.1.1:53</Config>
+
+    <Config Name="Certificate Renewal Check Interval" Target="CERT_CHECK_INTERVAL" Default="24h"
+            Description="How often to check for certificate renewal (e.g., 1h, 24h)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">24h</Config>
+</Container>
