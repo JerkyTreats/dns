@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <Container version="2">
-    <Name>Tailscale DNS Manager</Name>
+    <Name>JerkyTreats DNS Manager</Name>
     <Repository>jerkytreats/dns</Repository>
     <Registry>https://hub.docker.com/r/jerkytreats/</Registry>
     <Network>bridge</Network>
@@ -10,9 +10,11 @@
     <Support>https://github.com/JerkyTreats/dns</Support>
     <Project>https://github.com/JerkyTreats/dns</Project>
     <Overview>
-        Tailscale DNS Manager - Automatically manages DNS records for Tailscale devices with dynamic CoreDNS configuration and Let's Encrypt certificates.
+        JerkyTreats DNS Manager - Automatically manages DNS records for Tailscale devices with dynamic CoreDNS configuration and Let's Encrypt certificates.
 
         Works alongside existing Unraid Tailscale plugin (manages DNS, not connectivity).
+
+        IMPORTANT: Keep "Use Tailscale" toggle OFF in container settings!
 
         Features:
         • Dynamic Tailscale device discovery via API
@@ -34,12 +36,15 @@
     <DonateLink/>
     <DonateImg/>
     <MinVer>6.9</MinVer>
-    <Description>
-        Manages internal DNS for Tailscale networks with automatic device discovery, dynamic DNS record creation, and Let's Encrypt certificate integration.
+        <Description>
+        JerkyTreats DNS Manager - Manages internal DNS for Tailscale networks with automatic device discovery, dynamic DNS record creation, and Let's Encrypt certificate integration.
 
         COMPATIBLE: Works alongside existing Unraid Tailscale plugin - this manages DNS records, not connectivity.
 
-        IMPORTANT: This container requires privileged mode for firewall management (iptables/ipset).
+        IMPORTANT:
+        • This container requires privileged mode for firewall management (iptables/ipset)
+        • DO NOT enable "Use Tailscale" toggle in container settings - this creates conflicts
+        • This app uses Tailscale API to manage DNS, not for container connectivity
 
         After installation:
         1. Configure your Tailscale API key (for reading device data, not connecting)
@@ -82,22 +87,22 @@
     </Networking>
     <Data>
         <Volume>
-            <HostDir>/mnt/user/appdata/tailscale-dns/configs</HostDir>
+            <HostDir>/mnt/user/appdata/jerkytreats-dns/configs</HostDir>
             <ContainerDir>/app/configs</ContainerDir>
             <Mode>rw</Mode>
         </Volume>
         <Volume>
-            <HostDir>/mnt/user/appdata/tailscale-dns/ssl</HostDir>
+            <HostDir>/mnt/user/appdata/jerkytreats-dns/ssl</HostDir>
             <ContainerDir>/etc/letsencrypt</ContainerDir>
             <Mode>rw</Mode>
         </Volume>
         <Volume>
-            <HostDir>/mnt/user/appdata/tailscale-dns/data</HostDir>
+            <HostDir>/mnt/user/appdata/jerkytreats-dns/data</HostDir>
             <ContainerDir>/app/data</ContainerDir>
             <Mode>rw</Mode>
         </Volume>
         <Volume>
-            <HostDir>/mnt/user/appdata/tailscale-dns/coredns</HostDir>
+            <HostDir>/mnt/user/appdata/jerkytreats-dns/coredns</HostDir>
             <ContainerDir>/etc/coredns</ContainerDir>
             <Mode>rw</Mode>
         </Volume>
@@ -128,21 +133,21 @@
             Type="Port" Display="advanced" Required="false" Mask="false">853</Config>
 
     <!-- Volume Configuration -->
-    <Config Name="Config Directory" Target="/app/configs" Default="/mnt/user/appdata/tailscale-dns/configs"
+    <Config Name="Config Directory" Target="/app/configs" Default="/mnt/user/appdata/jerkytreats-dns/configs"
             Mode="rw" Description="Directory to store application configuration files"
-            Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/configs</Config>
+            Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/jerkytreats-dns/configs</Config>
 
-    <Config Name="SSL Certificates" Target="/etc/letsencrypt" Default="/mnt/user/appdata/tailscale-dns/ssl"
+    <Config Name="SSL Certificates" Target="/etc/letsencrypt" Default="/mnt/user/appdata/jerkytreats-dns/ssl"
             Mode="rw" Description="Directory for Let's Encrypt SSL certificates"
-            Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/ssl</Config>
+            Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/jerkytreats-dns/ssl</Config>
 
-    <Config Name="Data Directory" Target="/app/data" Default="/mnt/user/appdata/tailscale-dns/data"
+    <Config Name="Data Directory" Target="/app/data" Default="/mnt/user/appdata/jerkytreats-dns/data"
             Mode="rw" Description="Directory for device data and persistent storage"
-            Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/data</Config>
+            Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/jerkytreats-dns/data</Config>
 
-    <Config Name="CoreDNS Config" Target="/etc/coredns" Default="/mnt/user/appdata/tailscale-dns/coredns"
+    <Config Name="CoreDNS Config" Target="/etc/coredns" Default="/mnt/user/appdata/jerkytreats-dns/coredns"
             Mode="rw" Description="Directory for CoreDNS configuration and zone files"
-            Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/tailscale-dns/coredns</Config>
+            Type="Path" Display="advanced" Required="true" Mask="false">/mnt/user/appdata/jerkytreats-dns/coredns</Config>
 
     <!-- Required Tailscale Configuration -->
     <Config Name="Tailscale API Key" Target="TAILSCALE_API_KEY" Default=""
@@ -163,21 +168,25 @@
             Type="Variable" Display="always" Required="true" Mask="false"></Config>
 
     <!-- Optional Advanced Configuration -->
-    <Config Name="Use Production Certificates" Target="USE_PRODUCTION_CERTS" Default="false"
+    <Config Name="Use Production Certificates" Target="USE_PRODUCTION_CERTS" Default="true"
             Description="Use Let's Encrypt production (true) or staging (false) certificates. Use staging for testing!"
-            Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+            Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 
-    <Config Name="Let's Encrypt ACME URL" Target="LETSENCRYPT_URL" Default="https://acme-staging-v02.api.letsencrypt.org/directory"
-            Description="Let's Encrypt ACME directory URL (use staging for testing, production for live certificates)"
-            Type="Variable" Display="advanced" Required="false" Mask="false">https://acme-staging-v02.api.letsencrypt.org/directory</Config>
+    <Config Name="Let's Encrypt ACME URL" Target="LETSENCRYPT_URL" Default="https://acme-v02.api.letsencrypt.org/directory"
+            Description="Let's Encrypt ACME directory URL (production endpoint - use staging URL for testing)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">https://acme-v02.api.letsencrypt.org/directory</Config>
+
+    <Config Name="DNS Provider" Target="CERTIFICATE_DNS_PROVIDER" Default="coredns"
+            Description="DNS provider for ACME challenges: 'coredns' (internal) or 'cloudflare' (requires API token)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">coredns</Config>
 
     <Config Name="Cloudflare API Token" Target="CLOUDFLARE_API_TOKEN" Default=""
-            Description="Cloudflare API token for DNS-01 challenges (leave empty if not using Cloudflare)"
+            Description="Cloudflare API token for DNS-01 challenges (required when DNS Provider is 'cloudflare')"
             Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 
-    <Config Name="Tailscale Device Name" Target="TAILSCALE_DEVICE_NAME" Default="[HOSTNAME]"
-            Description="Tailscale device name for this DNS server (defaults to container hostname, or leave empty for auto-detection)"
-            Type="Variable" Display="advanced" Required="false" Mask="false">[HOSTNAME]</Config>
+    <Config Name="Tailscale Device Name" Target="TAILSCALE_DEVICE_NAME" Default=""
+            Description="Your Tailscale device name (e.g., 'anton'). Leave empty to auto-detect, or check 'tailscale status' on your server"
+            Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
     <Config Name="Sync Interval" Target="SYNC_INTERVAL" Default="1h"
             Description="How often to sync Tailscale devices (e.g., 30m, 1h, 2h)"
