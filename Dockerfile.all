@@ -133,19 +133,18 @@ ls -la /app/templates/ || true
 log "Debug: Files in /app/scripts/:"
 ls -la /app/scripts/ || true
 
-# Check if config.yaml exists, if not create from template
-if [ ! -f "/app/configs/config.yaml" ]; then
-    log "Creating configuration from template and environment variables..."
+# Always regenerate config.yaml from template with current environment variables
+log "Creating configuration from template and environment variables..."
 
-        if [ ! -f "/app/templates/config.yaml.template" ]; then
-        error "Template file not found!"
-        error "Contents of /app/templates/:"
-        ls -la /app/templates/ || true
-        exit 1
-    fi
+if [ ! -f "/app/templates/config.yaml.template" ]; then
+    error "Template file not found!"
+    error "Contents of /app/templates/:"
+    ls -la /app/templates/ || true
+    exit 1
+fi
 
-    # Copy template to config (from internal templates to mounted volume)
-    cp /app/templates/config.yaml.template /app/configs/config.yaml
+# Copy template to config (from internal templates to mounted volume)
+cp /app/templates/config.yaml.template /app/configs/config.yaml
 
     # Substitute environment variables using Python
     if [ -n "$INTERNAL_DOMAIN" ]; then
@@ -193,9 +192,6 @@ if [ ! -f "/app/configs/config.yaml" ]; then
     fi
 
     log "Configuration created successfully"
-else
-    log "Using existing configuration file"
-fi
 
 # Try to auto-configure Tailscale device name if not set and Python/API are available
 if [ -z "$TAILSCALE_DEVICE_NAME" ]; then
