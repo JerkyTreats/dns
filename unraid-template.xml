@@ -10,12 +10,13 @@
     <Support>https://github.com/JerkyTreats/dns</Support>
     <Project>https://github.com/JerkyTreats/dns</Project>
     <Overview>
-        Tailscale Internal DNS Manager - Automatically manages DNS records for Tailscale devices with dynamic CoreDNS configuration and Let's Encrypt certificates.
+        Tailscale DNS Manager - Automatically manages DNS records for Tailscale devices with dynamic CoreDNS configuration and Let's Encrypt certificates.
 
-        This container runs both the API service and CoreDNS in a single container for simplified Unraid deployment.
+        Works alongside existing Unraid Tailscale plugin (manages DNS, not connectivity).
 
         Features:
-        • Dynamic Tailscale device discovery and DNS record creation
+        • Dynamic Tailscale device discovery via API
+        • Automatic DNS record creation and management
         • Let's Encrypt certificate automation with DNS-01 challenges
         • RESTful API for DNS record management
         • Automatic firewall protection for Tailscale networks
@@ -36,10 +37,12 @@
     <Description>
         Manages internal DNS for Tailscale networks with automatic device discovery, dynamic DNS record creation, and Let's Encrypt certificate integration.
 
+        COMPATIBLE: Works alongside existing Unraid Tailscale plugin - this manages DNS records, not connectivity.
+
         IMPORTANT: This container requires privileged mode for firewall management (iptables/ipset).
 
         After installation:
-        1. Configure your Tailscale API key and tailnet
+        1. Configure your Tailscale API key (for reading device data, not connecting)
         2. Set your internal domain (must be a domain you control)
         3. Provide email for Let's Encrypt certificates
         4. Container will automatically discover Tailscale devices and create DNS records
@@ -143,7 +146,7 @@
 
     <!-- Required Tailscale Configuration -->
     <Config Name="Tailscale API Key" Target="TAILSCALE_API_KEY" Default=""
-            Description="Your Tailscale API key (get from https://login.tailscale.com/admin/settings/keys)"
+            Description="Tailscale API key for reading device data (NOT auth key) - Get from https://login.tailscale.com/admin/settings/keys"
             Type="Variable" Display="always" Required="true" Mask="true"></Config>
 
     <Config Name="Tailnet Name" Target="TAILSCALE_TAILNET" Default=""
