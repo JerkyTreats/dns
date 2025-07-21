@@ -56,7 +56,9 @@ RUN wget -q https://github.com/coredns/coredns/releases/download/v1.11.1/coredns
 
 # Copy configuration files and scripts
 COPY configs/ /app/configs/
-COPY scripts/ /app/scripts/
+RUN mkdir -p /app/scripts
+COPY scripts/template_substitute.py /app/scripts/
+COPY scripts/configure_ns.py /app/scripts/
 
 # Create necessary directories and set permissions
 RUN mkdir -p /etc/coredns/zones /etc/coredns /app/data /var/log/supervisor /etc/letsencrypt && \
@@ -122,12 +124,20 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 log "Starting DNS Manager initialization..."
 
+# Debug: List what files are actually present
+log "Debug: Files in /app/configs/"
+ls -la /app/configs/ || true
+log "Debug: Files in /app/scripts/"
+ls -la /app/scripts/ || true
+
 # Check if config.yaml exists, if not create from template
 if [ ! -f "/app/configs/config.yaml" ]; then
     log "Creating configuration from template and environment variables..."
 
     if [ ! -f "/app/configs/config.yaml.template" ]; then
         error "Template file not found!"
+        error "Contents of /app/configs/:"
+        ls -la /app/configs/ || true
         exit 1
     fi
 
