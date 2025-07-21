@@ -127,17 +127,17 @@ func (c *Client) GetDevice(nameOrHostname string) (*Device, error) {
 		return nil, fmt.Errorf("failed to list devices: %w", err)
 	}
 
-	// Try exact match first
+	// Try exact match first (case-insensitive)
 	for _, device := range devices {
-		if device.Name == nameOrHostname || device.Hostname == nameOrHostname {
+		if strings.EqualFold(device.Name, nameOrHostname) || strings.EqualFold(device.Hostname, nameOrHostname) {
 			return &device, nil
 		}
 	}
 
-	// Try hostname without domain suffix
+	// Try hostname without domain suffix (case-insensitive)
 	for _, device := range devices {
 		hostname := strings.Split(device.Hostname, ".")[0]
-		if hostname == nameOrHostname {
+		if strings.EqualFold(hostname, nameOrHostname) {
 			return &device, nil
 		}
 	}
@@ -205,8 +205,8 @@ func (c *Client) GetCurrentDeviceIPByName(deviceName string) (string, error) {
 
 	// Try to find the device by matching name or hostname
 	for _, device := range devices {
-		// Try exact name match first
-		if device.Name == deviceName {
+		// Try exact name match first (case-insensitive)
+		if strings.EqualFold(device.Name, deviceName) {
 			// Find the Tailscale IP (typically 100.x.x.x range) first
 			for _, addr := range device.Addresses {
 				if strings.HasPrefix(addr, "100.") {
@@ -225,8 +225,8 @@ func (c *Client) GetCurrentDeviceIPByName(deviceName string) (string, error) {
 			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
 		}
 
-		// Try hostname match
-		if device.Hostname == deviceName {
+		// Try hostname match (case-insensitive)
+		if strings.EqualFold(device.Hostname, deviceName) {
 			// Find the Tailscale IP (typically 100.x.x.x range) first
 			for _, addr := range device.Addresses {
 				if strings.HasPrefix(addr, "100.") {
@@ -245,9 +245,9 @@ func (c *Client) GetCurrentDeviceIPByName(deviceName string) (string, error) {
 			return "", fmt.Errorf("no Tailscale IP found for device '%s'", deviceName)
 		}
 
-		// Try hostname without domain suffix match
+		// Try hostname without domain suffix match (case-insensitive)
 		deviceShortName := strings.Split(device.Hostname, ".")[0]
-		if deviceShortName == deviceName {
+		if strings.EqualFold(deviceShortName, deviceName) {
 			// Find the Tailscale IP (typically 100.x.x.x range) first
 			for _, addr := range device.Addresses {
 				if strings.HasPrefix(addr, "100.") {

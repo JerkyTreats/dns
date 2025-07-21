@@ -147,6 +147,24 @@ func TestTailscaleClient_GetDevice(t *testing.T) {
 			deviceName:  "non-existent",
 			expectError: true,
 		},
+		{
+			name:         "Get device by case-insensitive name",
+			deviceName:   "OMNITRON", // uppercase, should match "omnitron"
+			expectError:  false,
+			expectedName: "omnitron",
+		},
+		{
+			name:         "Get device by case-insensitive hostname",
+			deviceName:   "REVENANTOR.test-tailnet.ts.net", // uppercase hostname
+			expectError:  false,
+			expectedName: "revenantor",
+		},
+		{
+			name:         "Get device by case-insensitive short hostname",
+			deviceName:   "REVENANTOR", // uppercase short hostname
+			expectError:  false,
+			expectedName: "revenantor",
+		},
 	}
 
 	for _, tt := range tests {
