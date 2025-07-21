@@ -202,7 +202,7 @@ fi
 log "Initialization complete, starting services..."
 EOF
 
-chmod +x /app/init.sh
+RUN chmod +x /app/init.sh
 
 # Set environment variables for better DNS propagation checking in containers
 ENV DNS_RESOLVERS="8.8.8.8:53,1.1.1.1:53"
