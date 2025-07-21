@@ -54,16 +54,16 @@ RUN wget -q https://github.com/coredns/coredns/releases/download/v1.11.1/coredns
     && rm coredns_1.11.1_linux_amd64.tgz \
     && chmod +x /usr/local/bin/coredns
 
-# Copy configuration files and scripts
-RUN mkdir -p /app/configs /app/scripts
-COPY configs/config.yaml.template /app/configs/
-COPY configs/coredns/ /app/configs/coredns/
+# Copy configuration templates and scripts to internal locations
+RUN mkdir -p /app/templates /app/scripts
+COPY configs/config.yaml.template /app/templates/
+COPY configs/coredns/ /app/templates/coredns/
 COPY scripts/template_substitute.py /app/scripts/
 COPY scripts/configure_ns.py /app/scripts/
 
-# Create necessary directories and set permissions
-RUN mkdir -p /etc/coredns/zones /etc/coredns /app/data /var/log/supervisor /etc/letsencrypt && \
-    chmod -R 755 /etc/coredns /app/data && \
+# Create necessary directories and set permissions (including volume mount points)
+RUN mkdir -p /etc/coredns/zones /etc/coredns /app/data /app/configs /var/log/supervisor /etc/letsencrypt && \
+    chmod -R 755 /etc/coredns /app/data /app/configs && \
     chmod +x /app/api /app/scripts/*.py
 
 # Create supervisord configuration
@@ -126,24 +126,26 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log "Starting DNS Manager initialization..."
 
 # Debug: List what files are actually present
-log "Debug: Files in /app/configs/"
+log "Debug: Files in /app/configs/ (mounted volume):"
 ls -la /app/configs/ || true
-log "Debug: Files in /app/scripts/"
+log "Debug: Files in /app/templates/ (built-in):"
+ls -la /app/templates/ || true
+log "Debug: Files in /app/scripts/:"
 ls -la /app/scripts/ || true
 
 # Check if config.yaml exists, if not create from template
 if [ ! -f "/app/configs/config.yaml" ]; then
     log "Creating configuration from template and environment variables..."
 
-    if [ ! -f "/app/configs/config.yaml.template" ]; then
+        if [ ! -f "/app/templates/config.yaml.template" ]; then
         error "Template file not found!"
-        error "Contents of /app/configs/:"
-        ls -la /app/configs/ || true
+        error "Contents of /app/templates/:"
+        ls -la /app/templates/ || true
         exit 1
     fi
 
-    # Copy template to config
-    cp /app/configs/config.yaml.template /app/configs/config.yaml
+    # Copy template to config (from internal templates to mounted volume)
+    cp /app/templates/config.yaml.template /app/configs/config.yaml
 
     # Substitute environment variables using Python
     if [ -n "$INTERNAL_DOMAIN" ]; then
@@ -204,8 +206,15 @@ elif [ -n "$TAILSCALE_DEVICE_NAME" ]; then
         -s "# device_name: \"your-device-name\"" "device_name: \"$TAILSCALE_DEVICE_NAME\""
 fi
 
+# Copy CoreDNS template to mounted config location if it doesn't exist
+if [ ! -f "/etc/coredns/Corefile.template" ]; then
+    log "Copying CoreDNS template to mounted location..."
+    mkdir -p /etc/coredns
+    cp /app/templates/coredns/Corefile.template /etc/coredns/
+fi
+
 # Ensure CoreDNS template exists
-if [ ! -f "/app/configs/coredns/Corefile.template" ]; then
+if [ ! -f "/etc/coredns/Corefile.template" ]; then
     error "CoreDNS template not found!"
     exit 1
 fi
