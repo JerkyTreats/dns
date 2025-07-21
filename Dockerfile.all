@@ -61,7 +61,7 @@ COPY scripts/ /app/scripts/
 # Create necessary directories and set permissions
 RUN mkdir -p /etc/coredns/zones /etc/coredns /app/data /var/log/supervisor /etc/letsencrypt && \
     chmod -R 755 /etc/coredns /app/data && \
-    chmod +x /app/api /app/scripts/*.sh /app/scripts/*.py
+    chmod +x /app/api /app/scripts/*.py
 
 # Create supervisord configuration
 RUN cat > /etc/supervisord.conf << 'EOF'
