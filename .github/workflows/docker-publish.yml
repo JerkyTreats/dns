@@ -1,4 +1,4 @@
-name: Build and Publish Docker Image
+name: Build and Publish Unified Container
 
 on:
   push:
@@ -15,7 +15,7 @@ env:
   IMAGE_NAME: jerkytreats/dns
 
 jobs:
-  build:
+  build-unified:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,7 +36,7 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Extract metadata
+    - name: Extract metadata for Unified Container
       id: meta
       uses: docker/metadata-action@v5
       with:
@@ -46,13 +46,14 @@ jobs:
           type=ref,event=pr
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
+          type=raw,value=unified,enable={{is_default_branch}}
           type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: Build and push Docker image
+    - name: Build and push Unified Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
-        file: ./Dockerfile.api
+        file: ./Dockerfile.all
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}

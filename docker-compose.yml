@@ -28,7 +28,9 @@ services:
       - NET_RAW
 
   coredns:
-    image: coredns/coredns:1.11.1
+    build:
+      context: .
+      dockerfile: Dockerfile.coredns
     ports:
       - "53:53/udp"
       - "53:53/tcp"

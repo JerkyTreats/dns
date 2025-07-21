@@ -1,0 +1,55 @@
+version: '3.8'
+
+# Test configuration for Unraid-style unified container
+# Use this to test Dockerfile.all locally before Unraid deployment
+services:
+  dns-manager-unified:
+    build:
+      context: .
+      dockerfile: Dockerfile.all
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "853:853/tcp"
+    volumes:
+      - ./test-data/configs:/app/configs
+      - ./test-data/ssl:/etc/letsencrypt
+      - ./test-data/data:/app/data
+      - ./test-data/coredns:/etc/coredns
+    environment:
+      # Required configuration
+      - TAILSCALE_API_KEY=${TAILSCALE_API_KEY}
+      - TAILSCALE_TAILNET=${TAILSCALE_TAILNET}
+      - INTERNAL_DOMAIN=${INTERNAL_DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+
+      # Optional configuration
+      - USE_PRODUCTION_CERTS=${USE_PRODUCTION_CERTS:-false}
+      - LETSENCRYPT_URL=${LETSENCRYPT_URL:-https://acme-staging-v02.api.letsencrypt.org/directory}
+      - CERTIFICATE_DNS_PROVIDER=${CERTIFICATE_DNS_PROVIDER:-coredns}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - TAILSCALE_DEVICE_NAME=${TAILSCALE_DEVICE_NAME}
+      - ENABLE_TLS=${ENABLE_TLS:-false}
+      - DNS_RESOLVERS=${DNS_RESOLVERS:-8.8.8.8:53,1.1.1.1:53}
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-1h}
+      - CERT_CHECK_INTERVAL=${CERT_CHECK_INTERVAL:-24h}
+
+    # Required for firewall management (ipset/iptables)
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    restart: unless-stopped
+    networks:
+      - dns-network
+
+volumes:
+  test-data:
+    driver: local
+
+networks:
+  dns-network:
+    driver: bridge
