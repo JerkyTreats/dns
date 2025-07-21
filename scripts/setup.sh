@@ -206,6 +206,7 @@ if command -v python3 &> /dev/null; then
         -s "LETSENCRYPT_URL_PLACEHOLDER" "$LETSENCRYPT_URL"
         -s "TAILSCALE_API_KEY_PLACEHOLDER" "$TAILSCALE_API_KEY"
         -s "TAILSCALE_TAILNET_PLACEHOLDER" "$TAILSCALE_TAILNET"
+        -s "SERVER_PORT_PLACEHOLDER" "${SERVER_PORT:-8080}"
     )
 
     # Run Python template substitution
@@ -231,6 +232,7 @@ elif command -v perl &> /dev/null; then
     perl -i -pe "s|LETSENCRYPT_URL_PLACEHOLDER|\Q$LETSENCRYPT_URL\E|g" configs/config.yaml
     perl -i -pe "s/TAILSCALE_API_KEY_PLACEHOLDER/\Q$TAILSCALE_API_KEY\E/g" configs/config.yaml
     perl -i -pe "s/TAILSCALE_TAILNET_PLACEHOLDER/\Q$TAILSCALE_TAILNET\E/g" configs/config.yaml
+    perl -i -pe "s/SERVER_PORT_PLACEHOLDER/\Q${SERVER_PORT:-8080}\E/g" configs/config.yaml
 
     if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
         perl -i -pe 's/(provider: "lego")/$1\n  dns_provider: cloudflare/g' configs/config.yaml

@@ -173,6 +173,11 @@ if [ ! -f "/app/configs/config.yaml" ]; then
     python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
         -s "LETSENCRYPT_URL_PLACEHOLDER" "$LETSENCRYPT_URL"
 
+    # Set server port based on environment
+    SERVER_PORT="${SERVER_PORT:-8080}"
+    python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+        -s "SERVER_PORT_PLACEHOLDER" "$SERVER_PORT"
+
     # Configure TLS if enabled
     if [ "$ENABLE_TLS" = "true" ]; then
         python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
