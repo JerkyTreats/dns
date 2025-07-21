@@ -203,4 +203,8 @@
     <Config Name="Certificate Renewal Check Interval" Target="CERT_CHECK_INTERVAL" Default="24h"
             Description="How often to check for certificate renewal (e.g., 1h, 24h)"
             Type="Variable" Display="advanced" Required="false" Mask="false">24h</Config>
+
+    <Config Name="DNS Server Address" Target="DNS_SERVER" Default="localhost:53"
+            Description="DNS server address for health checks (localhost:53 for unified container)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">localhost:53</Config>
 </Container>

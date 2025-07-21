@@ -132,7 +132,11 @@ func main() {
 		}
 	}
 
-	dnsServer := "coredns:53"
+	// DNS server address - configurable for different deployment scenarios
+	dnsServer := os.Getenv("DNS_SERVER")
+	if dnsServer == "" {
+		dnsServer = "coredns:53" // Default for multi-container (docker-compose)
+	}
 	dnsChecker = healthcheck.NewDNSHealthChecker(dnsServer, 10*time.Second, 10, 2*time.Second)
 
 	if err := healthcheck.TestBasicConnectivity(dnsServer, 5*time.Second); err != nil {

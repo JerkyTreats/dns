@@ -94,7 +94,7 @@ startretries=3
 redirect_stderr=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
-environment=GIN_MODE=release,DNS_RESOLVERS="8.8.8.8:53,1.1.1.1:53",LEGO_DISABLE_CNAME_SUPPORT=false,LEGO_DNS_TIMEOUT=10s
+environment=GIN_MODE=release,DNS_RESOLVERS="8.8.8.8:53,1.1.1.1:53",LEGO_DISABLE_CNAME_SUPPORT=false,LEGO_DNS_TIMEOUT=10s,DNS_SERVER="localhost:53"
 
 [program:coredns]
 command=/app/start-coredns.sh
