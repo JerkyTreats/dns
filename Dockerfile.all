@@ -55,8 +55,9 @@ RUN wget -q https://github.com/coredns/coredns/releases/download/v1.11.1/coredns
     && chmod +x /usr/local/bin/coredns
 
 # Copy configuration files and scripts
-COPY configs/ /app/configs/
-RUN mkdir -p /app/scripts
+RUN mkdir -p /app/configs /app/scripts
+COPY configs/config.yaml.template /app/configs/
+COPY configs/coredns/ /app/configs/coredns/
 COPY scripts/template_substitute.py /app/scripts/
 COPY scripts/configure_ns.py /app/scripts/
 
