@@ -50,14 +50,11 @@ jobs:
         go test -coverprofile=coverage.out ./...
         go tool cover -func=coverage.out
 
-    - name: Run specific template tests (verification)
-      run: go test -v ./internal/dns/coredns -run="TestManager_TemplateHealthPortGeneration|TestManager_GetHealthPort"
-
     - name: Test summary
       run: |
         echo "✅ All unit tests passed"
         echo "✅ Race condition tests passed"
-        echo "✅ Template health port tests passed"
+        echo "✅ Coverage analysis completed"
         echo "✅ Ready to build Docker images"
 
   # Build and publish Docker image only if all tests pass

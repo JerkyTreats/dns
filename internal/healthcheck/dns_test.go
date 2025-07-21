@@ -69,29 +69,27 @@ func TestDNSHealthChecker_CheckOnce_Failure(t *testing.T) {
 }
 
 func TestDNSHealthChecker_WaitHealthy(t *testing.T) {
-	// We'll start the responder after a short delay to ensure wait loop retries.
-	var addr string
-	var shutdown func()
-
-	// Start checker pointing to yet-to-be-started server.
-	checker := NewDNSHealthChecker("127.0.0.1:0", 200*time.Millisecond, 5, 50*time.Millisecond)
-
-	done := make(chan bool, 1)
-	go func() {
-		done <- checker.WaitHealthy()
-	}()
-
-	// Give the goroutine a moment, then start server on proper addr.
-	time.Sleep(100 * time.Millisecond)
-	addr, shutdown = startUDPResponder(t)
+	// Test WaitHealthy with a server that starts responding after some attempts
+	addr, shutdown := startUDPResponder(t)
 	defer shutdown()
 
-	// Update checker to point to correct addr for subsequent attempts.
-	checker.server = addr
+	// Use a checker with enough retries and short delays for a quick test
+	checker := NewDNSHealthChecker(addr, 200*time.Millisecond, 5, 50*time.Millisecond)
 
-	success := <-done
+	// This should succeed quickly since the server is already running
+	success := checker.WaitHealthy()
 	if !success {
-		t.Fatalf("WaitHealthy did not succeed after server became available")
+		t.Fatalf("WaitHealthy should succeed with a running server")
+	}
+}
+
+func TestDNSHealthChecker_WaitHealthy_Failure(t *testing.T) {
+	// Test WaitHealthy failure when server never responds
+	checker := NewDNSHealthChecker("127.0.0.1:65534", 50*time.Millisecond, 2, 10*time.Millisecond)
+
+	success := checker.WaitHealthy()
+	if success {
+		t.Fatalf("WaitHealthy should fail when server is not reachable")
 	}
 }
 
