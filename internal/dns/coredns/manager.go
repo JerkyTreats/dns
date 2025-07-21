@@ -635,12 +635,14 @@ func (m *Manager) renderCorefile() ([]byte, error) {
 		ZonesPath   string
 		GeneratedAt string
 		Version     int
+		HealthPort  string
 	}{
 		BaseDomain:  m.domain,
 		Domains:     m.getDomainListInternal(),
 		ZonesPath:   m.zonesPath,
 		GeneratedAt: time.Now().Format("2006-01-02 15:04:05 MST"),
 		Version:     m.configVersion + 1,
+		HealthPort:  m.getHealthPort(),
 	}
 
 	var buf bytes.Buffer
@@ -713,6 +715,15 @@ func (m *Manager) getDomainListInternal() []*DomainConfig {
 }
 
 // ------------------- Misc helpers -------------------- //
+
+// getHealthPort returns the CoreDNS health port from environment variable with fallback
+func (m *Manager) getHealthPort() string {
+	port := os.Getenv("COREDNS_HEALTH_PORT")
+	if port == "" {
+		port = "8082" // Default fallback
+	}
+	return port
+}
 
 // zoneExistsInConfig is retained for test compatibility.
 func (m *Manager) zoneExistsInConfig(config, zoneName string) bool {

@@ -570,3 +570,152 @@ func TestManager_AddZone_OverwritesExistingZone(t *testing.T) {
 		t.Error("Custom record was overwritten - AddZone should have preserved existing content")
 	}
 }
+
+func TestManager_TemplateHealthPortGeneration(t *testing.T) {
+	tests := []struct {
+		name         string
+		envValue     string
+		expectedPort string
+	}{
+		{
+			name:         "Default health port when env var not set",
+			envValue:     "",
+			expectedPort: "8082",
+		},
+		{
+			name:         "Custom health port from environment variable",
+			envValue:     "8083",
+			expectedPort: "8083",
+		},
+		{
+			name:         "Alternative custom port",
+			envValue:     "9090",
+			expectedPort: "9090",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temporary directory for this test
+			tempDir := t.TempDir()
+			configPath := filepath.Join(tempDir, "Corefile")
+			templatePath := filepath.Join(tempDir, "Corefile.template")
+			zonesPath := filepath.Join(tempDir, "zones")
+
+			// Set up configuration
+			config.SetForTest(DNSConfigPathKey, configPath)
+			config.SetForTest(DNSTemplatePathKey, templatePath)
+			config.SetForTest(DNSZonesPathKey, zonesPath)
+			config.SetForTest(DNSDomainKey, "test.local")
+
+			// Create template with HealthPort variable
+			templateContent := `. {
+    errors
+    log
+    forward . /etc/resolv.conf
+
+    # Health check endpoint (configurable via COREDNS_HEALTH_PORT env var)
+    health :{{.HealthPort}}
+
+    # Cache configuration for better performance
+    cache 30
+
+    # Reload configuration for dynamic updates
+    reload
+}
+
+{{range .Domains}}
+{{if .Enabled}}
+
+# Configuration for {{.Domain}}
+{{.Domain}}:{{.Port}} {
+    file {{.ZoneFile}} {{.Domain}}
+    errors
+    log
+}
+
+{{end}}
+{{end}}
+`
+			require.NoError(t, os.WriteFile(templatePath, []byte(templateContent), 0644))
+
+			// Set or unset environment variable
+			if tt.envValue != "" {
+				t.Setenv("COREDNS_HEALTH_PORT", tt.envValue)
+			} else {
+				// Ensure env var is not set
+				os.Unsetenv("COREDNS_HEALTH_PORT")
+			}
+
+			// Create manager and add a domain to trigger template generation
+			manager := NewManager("127.0.0.1")
+			err := manager.AddDomain("test.local", nil)
+			require.NoError(t, err)
+
+			// Verify Corefile was generated
+			require.FileExists(t, configPath)
+
+			// Read and verify the generated content
+			content, err := os.ReadFile(configPath)
+			require.NoError(t, err)
+
+			generatedContent := string(content)
+
+			// Verify the health port was correctly substituted
+			expectedHealthLine := "health :" + tt.expectedPort
+			assert.Contains(t, generatedContent, expectedHealthLine,
+				"Generated Corefile should contain health port %s", tt.expectedPort)
+
+			// Verify no HealthPort template variables remain unsubstituted
+			assert.NotContains(t, generatedContent, "{{.HealthPort}}",
+				"HealthPort template variable should be substituted")
+
+			// Verify the template was properly processed (should have domain config)
+			assert.Contains(t, generatedContent, "test.local:53",
+				"Generated Corefile should contain domain configuration")
+			assert.Contains(t, generatedContent, "file ",
+				"Generated Corefile should contain file directive")
+		})
+	}
+}
+
+func TestManager_GetHealthPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		expected string
+	}{
+		{
+			name:     "Default port when env var not set",
+			envValue: "",
+			expected: "8082",
+		},
+		{
+			name:     "Custom port from environment",
+			envValue: "8083",
+			expected: "8083",
+		},
+		{
+			name:     "Non-standard port",
+			envValue: "9999",
+			expected: "9999",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set or unset environment variable
+			if tt.envValue != "" {
+				t.Setenv("COREDNS_HEALTH_PORT", tt.envValue)
+			} else {
+				os.Unsetenv("COREDNS_HEALTH_PORT")
+			}
+
+			manager := NewManager("127.0.0.1")
+			result := manager.getHealthPort()
+
+			assert.Equal(t, tt.expected, result,
+				"getHealthPort should return expected port")
+		})
+	}
+}

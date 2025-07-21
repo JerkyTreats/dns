@@ -9,8 +9,8 @@
     log
     forward . /etc/resolv.conf
 
-    # Health check endpoint (using different port to avoid conflict with API)
-    health :8082
+    # Health check endpoint (configurable via COREDNS_HEALTH_PORT env var)
+    health :{{.HealthPort}}
 
     # Cache configuration for better performance
     cache 30

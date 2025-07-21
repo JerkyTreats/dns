@@ -207,4 +207,8 @@
     <Config Name="DNS Server Address" Target="DNS_SERVER" Default="localhost:53"
             Description="DNS server address for health checks (localhost:53 for unified container)"
             Type="Variable" Display="advanced" Required="false" Mask="false">localhost:53</Config>
+
+    <Config Name="CoreDNS Health Port" Target="COREDNS_HEALTH_PORT" Default="8082"
+            Description="Port for CoreDNS internal health endpoint (must be different from API port 8080)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">8082</Config>
 </Container>
