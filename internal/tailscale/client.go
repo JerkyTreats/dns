@@ -28,6 +28,19 @@ const (
 	TailscaleDeviceNameKey = "tailscale.device_name"
 )
 
+// TailscaleClientInterface defines the interface for tailscale client operations
+type TailscaleClientInterface interface {
+	ListDevices() ([]Device, error)
+	GetDevice(nameOrHostname string) (*Device, error)
+	GetDeviceIP(deviceName string) (string, error)
+	IsDeviceOnline(deviceName string) (bool, error)
+	ValidateConnection() error
+	GetCurrentDeviceIPByName(deviceName string) (string, error)
+	GetCurrentDeviceIP() (string, error)
+	GetDeviceByIP(ip string) (*Device, error)
+	GetTailscaleIP(device *Device) string
+}
+
 // Client represents a Tailscale API client
 type Client struct {
 	apiKey  string
@@ -35,6 +48,9 @@ type Client struct {
 	baseURL string
 	client  *http.Client
 }
+
+// Ensure Client implements TailscaleClientInterface
+var _ TailscaleClientInterface = (*Client)(nil)
 
 // Device represents a Tailscale device from the API
 type Device struct {

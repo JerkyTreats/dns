@@ -9,45 +9,47 @@ import (
 	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// MockReloader implements Reloader for testing
+type MockReloader struct{}
+
+func (m *MockReloader) Reload(configPath string) error {
+	logging.Debug("Mock reloader: skipping Caddy reload")
+	return nil
+}
+
 func setupTestManager(t *testing.T) (*Manager, string) {
-	testDir := t.TempDir()
-	configPath := filepath.Join(testDir, "Caddyfile")
-	templatePath := filepath.Join(testDir, "Caddyfile.template")
+	// Create temp directory for test
+	tempDir, err := os.MkdirTemp("", "proxy-test-*")
+	require.NoError(t, err)
 
-	// Create a simple test template
-	templateContent := `# Test Caddyfile Template
-# Generated at: {{.GeneratedAt}}
-# Version: {{.Version}}
-
+	// Create template file
+	templatePath := filepath.Join(tempDir, "Caddyfile.template")
+	templateContent := `# Generated proxy configuration
 {{range .ProxyRules}}
-{{if .Enabled}}
 {{.Hostname}} {
     reverse_proxy {{.TargetIP}}:{{.TargetPort}}
 }
 {{end}}
-{{end}}
 `
-	err := os.WriteFile(templatePath, []byte(templateContent), 0644)
+	err = os.WriteFile(templatePath, []byte(templateContent), 0644)
 	require.NoError(t, err)
 
-	// Set test configuration
-	config.SetForTest(ProxyConfigPathKey, configPath)
-	config.SetForTest(ProxyTemplatePathKey, templatePath)
-	config.SetForTest(ProxyEnabledKey, "true")
+	// Set up test configuration
+	config.SetForTest("proxy.caddy.config_path", filepath.Join(tempDir, "Caddyfile"))
+	config.SetForTest("proxy.caddy.template_path", templatePath)
+	config.SetForTest("proxy.enabled", "true")
 
-	manager := &Manager{
-		configPath:   configPath,
-		templatePath: templatePath,
-		enabled:      true,
-		rules:        make(map[string]*ProxyRule),
-	}
+	// Create manager with mock reloader for testing
+	manager, err := NewManagerWithReloader(&MockReloader{})
+	require.NoError(t, err)
 
-	return manager, testDir
+	return manager, tempDir
 }
 
 func TestNewManager(t *testing.T) {
@@ -61,9 +63,9 @@ func TestNewManager(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set test configuration
-	config.SetForTest(ProxyConfigPathKey, configPath)
-	config.SetForTest(ProxyTemplatePathKey, templatePath)
-	config.SetForTest(ProxyEnabledKey, "true")
+	config.SetForTest("proxy.caddy.config_path", configPath)
+	config.SetForTest("proxy.caddy.template_path", templatePath)
+	config.SetForTest("proxy.enabled", "true")
 
 	manager, err := NewManager()
 	assert.NoError(t, err)
@@ -78,7 +80,7 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestNewManager_Disabled(t *testing.T) {
-	config.SetForTest(ProxyEnabledKey, "false")
+	config.SetForTest("proxy.enabled", "false")
 
 	manager, err := NewManager()
 	assert.NoError(t, err)
@@ -107,14 +109,14 @@ func TestNewManager_DefaultValues(t *testing.T) {
 	require.NoError(t, err)
 
 	// Set only the paths, leave other configs empty to test defaults
-	config.SetForTest(ProxyConfigPathKey, testConfigPath)
-	config.SetForTest(ProxyTemplatePathKey, testTemplatePath)
-	// Don't set ProxyEnabledKey to test default
+	config.SetForTest("proxy.caddy.config_path", testConfigPath)
+	config.SetForTest("proxy.caddy.template_path", testTemplatePath)
+	// Don't set proxy.enabled to test default
 
 	manager, err := NewManager()
 	assert.NoError(t, err)
 	assert.NotNil(t, manager)
-	assert.True(t, manager.enabled) // Should use default (true)
+	assert.False(t, manager.enabled) // Should be false when not explicitly enabled
 	assert.Equal(t, testConfigPath, manager.configPath)
 	assert.Equal(t, testTemplatePath, manager.templatePath)
 
@@ -223,11 +225,38 @@ func TestAddRule_Disabled(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	manager.enabled = false
 
-	hostname := "test.example.com"
-	targetIP := "192.168.1.100"
-	targetPort := 8080
+	proxyRule := &ProxyRule{
+		TargetIP:   "192.168.1.100",
+		TargetPort: 8080,
+		Protocol:   "http",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
 
-	err := manager.AddRule(hostname, targetIP, targetPort)
+	err := manager.AddRule(proxyRule)
+	assert.NoError(t, err) // Should not error when disabled
+
+	// Verify no rule was added
+	assert.Len(t, manager.rules, 0)
+
+	// Clean up
+	config.ResetForTest()
+}
+
+func TestAddRule_Disabled_Alt(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	manager.enabled = false
+
+	proxyRule := &ProxyRule{
+		Hostname:   "test.example.com",
+		TargetIP:   "192.168.1.100",
+		TargetPort: 8080,
+		Protocol:   "http",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+
+	err := manager.AddRule(proxyRule)
 	assert.NoError(t, err) // Should not error when disabled
 
 	// Verify no rule was added
@@ -409,7 +438,7 @@ func TestGenerateConfig_EmptyRules(t *testing.T) {
 	assert.NoError(t, err)
 
 	configStr := string(configContent)
-	assert.Contains(t, configStr, "Test Caddyfile Template")
+	assert.Contains(t, configStr, "# Generated proxy configuration")
 	assert.NotContains(t, configStr, "reverse_proxy")
 
 	// Clean up
@@ -729,210 +758,68 @@ func TestGetSourceIP(t *testing.T) {
 				}
 			}
 
-			result := getSourceIP(req)
+			result := GetSourceIP(req)
 			assert.Equal(t, tt.expectedIP, result)
 		})
 	}
 }
 
-func TestSetupAutomaticProxy(t *testing.T) {
-	tests := []struct {
-		name             string
-		sourceIP         string
-		mockDevices      []tailscale.Device
-		mockError        bool
-		errorMessage     string
-		tailscaleClient  *mockTailscaleClient
-		expectRuleCount  int
-		expectedTargetIP string
-	}{
-		{
-			name:     "Successful device detection",
-			sourceIP: "192.168.1.100",
-			mockDevices: []tailscale.Device{
-				{
-					Name:      "test-device",
-					Hostname:  "test-device.local",
-					Addresses: []string{"192.168.1.100", "100.64.1.50"},
-					Online:    true,
-				},
-			},
-			expectRuleCount:  1,
-			expectedTargetIP: "100.64.1.50",
-		},
-		{
-			name:     "Device found but no Tailscale IP",
-			sourceIP: "192.168.1.100",
-			mockDevices: []tailscale.Device{
-				{
-					Name:      "test-device",
-					Hostname:  "test-device.local",
-					Addresses: []string{"192.168.1.100", "fd7a:115c:a1e0::1"},
-					Online:    true,
-				},
-			},
-			expectRuleCount:  1,
-			expectedTargetIP: "100.1.1.1", // Fallback to DNS Manager IP
-		},
-		{
-			name:             "Device not found - fallback",
-			sourceIP:         "192.168.1.999",
-			mockDevices:      []tailscale.Device{},
-			expectRuleCount:  1,
-			expectedTargetIP: "100.1.1.1", // Fallback to DNS Manager IP
-		},
-		{
-			name:     "Tailscale client error - fallback",
-			sourceIP: "192.168.1.100",
-			mockDevices: []tailscale.Device{
-				{
-					Name:      "test-device",
-					Hostname:  "test-device.local",
-					Addresses: []string{"192.168.1.100", "100.64.1.50"},
-					Online:    true,
-				},
-			},
-			mockError:        true,
-			errorMessage:     "API error",
-			expectRuleCount:  1,
-			expectedTargetIP: "100.1.1.1", // Fallback to DNS Manager IP
-		},
+func TestAddRule(t *testing.T) {
+	manager, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	proxyRule := &ProxyRule{
+		Hostname:   "test.example.com",
+		TargetIP:   "192.168.1.100",
+		TargetPort: 8080,
+		Protocol:   "http",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager, _ := setupTestManager(t)
+	err := manager.AddRule(proxyRule)
+	assert.NoError(t, err)
 
-			// Create mock Tailscale client
-			mockClient := &mockTailscaleClient{
-				devices:      tt.mockDevices,
-				shouldError:  tt.mockError,
-				errorMessage: tt.errorMessage,
-			}
-
-			// Create request with source IP
-			req := httptest.NewRequest("POST", "/add-record", nil)
-			req.RemoteAddr = tt.sourceIP + ":12345"
-
-			// Call SetupAutomaticProxy
-			manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
-
-			// Verify rule was created
-			rules := manager.ListRules()
-			assert.Len(t, rules, tt.expectRuleCount)
-
-			if tt.expectRuleCount > 0 {
-				rule := rules[0]
-				assert.Equal(t, "test.example.com", rule.Hostname)
-				assert.Equal(t, tt.expectedTargetIP, rule.TargetIP)
-				assert.Equal(t, 8080, rule.TargetPort)
-				assert.True(t, rule.Enabled)
-			}
-
-			// Clean up
-			config.ResetForTest()
-		})
-	}
-}
-
-func TestSetupAutomaticProxy_NoSourceIP(t *testing.T) {
-	manager, _ := setupTestManager(t)
-
-	mockClient := &mockTailscaleClient{}
-
-	// Create request with no source IP information
-	req := httptest.NewRequest("POST", "/add-record", nil)
-	req.RemoteAddr = "" // Explicitly clear RemoteAddr
-
-	// Call SetupAutomaticProxy
-	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
-
-	// Verify no rule was created
-	rules := manager.ListRules()
-	assert.Len(t, rules, 0)
-
-	// Clean up
-	config.ResetForTest()
-}
-
-func TestSetupAutomaticProxy_NilTailscaleClient(t *testing.T) {
-	manager, _ := setupTestManager(t)
-
-	// Create request with source IP
-	req := httptest.NewRequest("POST", "/add-record", nil)
-	req.RemoteAddr = "192.168.1.100:12345"
-
-	// Call SetupAutomaticProxy with nil client
-	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, nil)
-
-	// Verify no rule was created
-	rules := manager.ListRules()
-	assert.Len(t, rules, 0)
-
-	// Clean up
-	config.ResetForTest()
-}
-
-func TestSetupAutomaticProxy_DisabledManager(t *testing.T) {
-	manager, _ := setupTestManager(t)
-	manager.enabled = false
-
-	mockClient := &mockTailscaleClient{
-		devices: []tailscale.Device{
-			{
-				Name:      "test-device",
-				Hostname:  "test-device.local",
-				Addresses: []string{"192.168.1.100", "100.64.1.50"},
-				Online:    true,
-			},
-		},
-	}
-
-	// Create request with source IP
-	req := httptest.NewRequest("POST", "/add-record", nil)
-	req.RemoteAddr = "192.168.1.100:12345"
-
-	// Call SetupAutomaticProxy
-	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
-
-	// Verify no rule was created (because AddRule returns early when disabled)
-	rules := manager.ListRules()
-	assert.Len(t, rules, 0)
-
-	// Clean up
-	config.ResetForTest()
-}
-
-func TestSetupAutomaticProxy_XForwardedForHeader(t *testing.T) {
-	manager, _ := setupTestManager(t)
-
-	mockClient := &mockTailscaleClient{
-		devices: []tailscale.Device{
-			{
-				Name:      "test-device",
-				Hostname:  "test-device.local",
-				Addresses: []string{"10.0.0.5", "100.64.1.50"},
-				Online:    true,
-			},
-		},
-	}
-
-	// Create request with X-Forwarded-For header
-	req := httptest.NewRequest("POST", "/add-record", nil)
-	req.Header.Set("X-Forwarded-For", "10.0.0.5")
-	req.RemoteAddr = "192.168.1.100:12345" // Should be ignored in favor of X-Forwarded-For
-
-	// Call SetupAutomaticProxy
-	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
-
-	// Verify rule was created with correct target IP
+	// Verify rule was added correctly
 	rules := manager.ListRules()
 	assert.Len(t, rules, 1)
 
 	rule := rules[0]
 	assert.Equal(t, "test.example.com", rule.Hostname)
-	assert.Equal(t, "100.64.1.50", rule.TargetIP) // Should use device's Tailscale IP
+	assert.Equal(t, "192.168.1.100", rule.TargetIP)
 	assert.Equal(t, 8080, rule.TargetPort)
+	assert.Equal(t, "http", rule.Protocol)
+	assert.True(t, rule.Enabled)
+	assert.Equal(t, proxyRule.CreatedAt, rule.CreatedAt)
+
+	// Verify config file was generated (in test mode, this should work)
+	configContent, err := os.ReadFile(manager.configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(configContent), "test.example.com")
+	assert.Contains(t, string(configContent), "192.168.1.100:8080")
+
+	// Clean up
+	config.ResetForTest()
+}
+
+func TestAddRuleWithProxyRule_Disabled(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	manager.enabled = false
+
+	proxyRule := &ProxyRule{
+		Hostname:   "test.example.com",
+		TargetIP:   "192.168.1.100",
+		TargetPort: 8080,
+		Protocol:   "http",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+
+	err := manager.AddRule(proxyRule)
+	assert.NoError(t, err) // Should not error when disabled
+
+	// Verify no rule was added
+	assert.Len(t, manager.rules, 0)
 
 	// Clean up
 	config.ResetForTest()

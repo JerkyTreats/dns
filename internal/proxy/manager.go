@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"text/template"
@@ -21,6 +20,24 @@ import (
 type TailscaleClientInterface interface {
 	GetDeviceByIP(ip string) (*tailscale.Device, error)
 	GetTailscaleIP(device *tailscale.Device) string
+}
+
+// Reloader interface for dependency injection
+type Reloader interface {
+	Reload(configPath string) error
+}
+
+// CaddyReloader implements Reloader for actual Caddy reloads
+type CaddyReloader struct{}
+
+func (c *CaddyReloader) Reload(configPath string) error {
+	cmd := exec.Command("/usr/local/bin/caddy", "reload", "--config", configPath)
+	if err := cmd.Run(); err != nil {
+		logging.Warn("Failed to reload Caddy via API, will restart via supervisor")
+		return fmt.Errorf("failed to reload caddy: %w", err)
+	}
+	logging.Debug("Successfully reloaded Caddy configuration")
+	return nil
 }
 
 const (
@@ -54,82 +71,88 @@ type ProxyConfig struct {
 	Version     int
 }
 
-// Manager manages Caddy reverse proxy configuration and lifecycle
+// ProxyManagerInterface defines the interface for proxy management
+type ProxyManagerInterface interface {
+	AddRule(proxyRule *ProxyRule) error
+	RemoveRule(hostname string) error
+	ListRules() []*ProxyRule
+	IsEnabled() bool
+	GetStats() map[string]interface{}
+}
+
+// Manager manages reverse proxy rules and configuration
 type Manager struct {
 	mu sync.RWMutex
 
 	configPath   string
 	templatePath string
 	enabled      bool
+	reloader     Reloader
 
 	rules         map[string]*ProxyRule
 	configVersion int
 	lastGenerated time.Time
 }
 
+// Ensure Manager implements ProxyManagerInterface
+var _ ProxyManagerInterface = (*Manager)(nil)
+
 // NewManager creates a new proxy manager
 func NewManager() (*Manager, error) {
-	configPath := config.GetString(ProxyConfigPathKey)
+	return NewManagerWithReloader(&CaddyReloader{})
+}
+
+// NewManagerWithReloader creates a new proxy manager with a custom reloader
+func NewManagerWithReloader(reloader Reloader) (*Manager, error) {
+	configPath := config.GetString("proxy.caddy.config_path")
 	if configPath == "" {
-		configPath = DefaultProxyConfigPath
+		configPath = "/etc/caddy/Caddyfile"
 	}
 
-	templatePath := config.GetString(ProxyTemplatePathKey)
+	templatePath := config.GetString("proxy.caddy.template_path")
 	if templatePath == "" {
-		templatePath = DefaultProxyTemplatePath
+		templatePath = "/etc/caddy/Caddyfile.template"
 	}
 
-	enabled := DefaultProxyEnabled
-	if config.GetString(ProxyEnabledKey) != "" {
-		enabled = config.GetBool(ProxyEnabledKey)
-	}
-
+	enabled := config.GetBool("proxy.enabled")
 	if !enabled {
 		logging.Info("Reverse proxy is disabled")
-		return &Manager{enabled: false}, nil
-	}
-
-	// Ensure config directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create proxy config directory: %w", err)
-	}
-
-	manager := &Manager{
-		configPath:   configPath,
-		templatePath: templatePath,
-		enabled:      enabled,
-		rules:        make(map[string]*ProxyRule),
+		return &Manager{
+			configPath:   configPath,
+			templatePath: templatePath,
+			enabled:      false,
+			reloader:     reloader,
+			rules:        make(map[string]*ProxyRule),
+		}, nil
 	}
 
 	logging.Info("Proxy manager initialized with config path: %s", configPath)
-	return manager, nil
+
+	return &Manager{
+		configPath:   configPath,
+		templatePath: templatePath,
+		enabled:      true,
+		reloader:     reloader,
+		rules:        make(map[string]*ProxyRule),
+	}, nil
 }
 
-// AddRule adds or updates a reverse proxy rule
-func (m *Manager) AddRule(hostname, targetIP string, targetPort int) error {
+// AddRule adds or updates a reverse proxy rule from ProxyRule
+func (m *Manager) AddRule(proxyRule *ProxyRule) error {
 	if !m.enabled {
-		logging.Debug("Proxy disabled, skipping rule addition for %s", hostname)
+		logging.Debug("Proxy disabled, skipping rule addition for %s", proxyRule.Hostname)
 		return nil
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logging.Info("Adding proxy rule: %s -> %s:%d", hostname, targetIP, targetPort)
+	logging.Info("Adding proxy rule: %s -> %s:%d", proxyRule.Hostname, proxyRule.TargetIP, proxyRule.TargetPort)
 
-	rule := &ProxyRule{
-		Hostname:   hostname,
-		TargetIP:   targetIP,
-		TargetPort: targetPort,
-		Protocol:   "http", // Default to HTTP
-		Enabled:    true,
-		CreatedAt:  time.Now(),
-	}
-
-	m.rules[hostname] = rule
+	m.rules[proxyRule.Hostname] = proxyRule
 
 	if err := m.generateConfig(); err != nil {
-		delete(m.rules, hostname)
+		delete(m.rules, proxyRule.Hostname)
 		return fmt.Errorf("failed to generate proxy config: %w", err)
 	}
 
@@ -237,23 +260,13 @@ func (m *Manager) generateConfig() error {
 	return nil
 }
 
-// reloadProxy signals Caddy to reload its configuration
+// reloadProxy signals the reloader to reload configuration
 func (m *Manager) reloadProxy() error {
 	if !m.enabled {
 		return nil
 	}
 
-	// Use Caddy's reload API endpoint
-	cmd := exec.Command("/usr/local/bin/caddy", "reload", "--config", m.configPath)
-	if err := cmd.Run(); err != nil {
-		logging.Warn("Failed to reload Caddy via API, will restart via supervisor")
-		// If reload fails, we could potentially signal supervisord to restart Caddy
-		// For now, we'll just log the error and continue
-		return fmt.Errorf("failed to reload caddy: %w", err)
-	}
-
-	logging.Debug("Successfully reloaded Caddy configuration")
-	return nil
+	return m.reloader.Reload(m.configPath)
 }
 
 // IsEnabled returns whether the proxy manager is enabled
@@ -274,52 +287,9 @@ func (m *Manager) GetStats() map[string]interface{} {
 	}
 }
 
-// SetupAutomaticProxy handles automatic proxy rule creation based on request source
-func (m *Manager) SetupAutomaticProxy(r *http.Request, dnsName, dnsManagerIP string, port int, tailscaleClient TailscaleClientInterface) {
-	// Extract source IP from request
-	sourceIP := getSourceIP(r)
-	if sourceIP == "" {
-		logging.Warn("Unable to determine source IP - skipping proxy setup")
-		return
-	}
-
-	if tailscaleClient == nil {
-		logging.Warn("Tailscale client not available - skipping automatic proxy setup")
-		return
-	}
-
-	// Find corresponding Tailscale device
-	device, err := tailscaleClient.GetDeviceByIP(sourceIP)
-	var targetIP string
-
-	if err != nil {
-		logging.Warn("Failed to find device for IP %s: %v - using DNS Manager as fallback", sourceIP, err)
-		// Fallback: use DNS Manager's own IP
-		targetIP = dnsManagerIP
-	} else {
-		// Use device's Tailscale IP
-		targetIP = tailscaleClient.GetTailscaleIP(device)
-		if targetIP == "" {
-			logging.Warn("No Tailscale IP found for device %s - using DNS Manager as fallback", device.Name)
-			targetIP = dnsManagerIP
-		} else {
-			logging.Info("Found source device: %s (%s) -> %s", device.Name, device.Hostname, targetIP)
-		}
-	}
-
-	// Create proxy rule
-	if err := m.AddRule(dnsName, targetIP, port); err != nil {
-		logging.Error("Failed to add proxy rule: %v", err)
-		// Don't fail the entire request, but log the error
-		logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
-	} else {
-		logging.Info("Successfully added proxy rule: %s -> %s:%d", dnsName, targetIP, port)
-	}
-}
-
-// getSourceIP extracts the client IP from HTTP request headers
+// GetSourceIP extracts the client IP from HTTP request headers
 // Checks X-Forwarded-For, X-Real-IP, and RemoteAddr in that order
-func getSourceIP(r *http.Request) string {
+func GetSourceIP(r *http.Request) string {
 	// Check X-Forwarded-For header (handles multiple proxies)
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// X-Forwarded-For can contain multiple IPs, take the first one

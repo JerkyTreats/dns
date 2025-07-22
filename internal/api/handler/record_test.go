@@ -3,19 +3,147 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/proxy"
+	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// mockProxyManager is a mock implementation of the proxy manager for testing
+type mockProxyManager struct {
+	rules map[string]*proxy.ProxyRule
+}
+
+func newMockProxyManager() proxy.ProxyManagerInterface {
+	return &mockProxyManager{
+		rules: make(map[string]*proxy.ProxyRule),
+	}
+}
+
+func (m *mockProxyManager) AddRule(proxyRule *proxy.ProxyRule) error {
+	m.rules[proxyRule.Hostname] = proxyRule
+	return nil
+}
+
+func (m *mockProxyManager) RemoveRule(hostname string) error {
+	delete(m.rules, hostname)
+	return nil
+}
+
+func (m *mockProxyManager) ListRules() []*proxy.ProxyRule {
+	rules := make([]*proxy.ProxyRule, 0, len(m.rules))
+	for _, rule := range m.rules {
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+func (m *mockProxyManager) IsEnabled() bool {
+	return true
+}
+
+func (m *mockProxyManager) GetStats() map[string]interface{} {
+	return map[string]interface{}{
+		"enabled":     true,
+		"total_rules": len(m.rules),
+	}
+}
+
+// mockTailscaleClient is a mock implementation of the tailscale client for testing
+type mockTailscaleClient struct {
+	devices []tailscale.Device
+}
+
+func newMockTailscaleClient() tailscale.TailscaleClientInterface {
+	return &mockTailscaleClient{
+		devices: []tailscale.Device{
+			{
+				Name:     "test-device",
+				Hostname: "test-device.local",
+				Addresses: []string{
+					"100.64.1.1",
+					"192.168.1.100",
+				},
+			},
+		},
+	}
+}
+
+func (m *mockTailscaleClient) GetDeviceByIP(ip string) (*tailscale.Device, error) {
+	// Return the first device for any IP in tests
+	if len(m.devices) > 0 {
+		return &m.devices[0], nil
+	}
+	return nil, fmt.Errorf("device not found")
+}
+
+func (m *mockTailscaleClient) GetTailscaleIP(device *tailscale.Device) string {
+	// Return the first Tailscale IP (100.64.x.x) from the device
+	for _, addr := range device.Addresses {
+		if strings.HasPrefix(addr, "100.64.") {
+			return addr
+		}
+	}
+	return ""
+}
+
+func (m *mockTailscaleClient) ListDevices() ([]tailscale.Device, error) {
+	return m.devices, nil
+}
+
+func (m *mockTailscaleClient) GetDevice(name string) (*tailscale.Device, error) {
+	for _, device := range m.devices {
+		if device.Name == name {
+			return &device, nil
+		}
+	}
+	return nil, fmt.Errorf("device not found")
+}
+
+func (m *mockTailscaleClient) GetDeviceIP(name string) (string, error) {
+	for _, device := range m.devices {
+		if device.Name == name {
+			for _, addr := range device.Addresses {
+				if strings.HasPrefix(addr, "100.64.") {
+					return addr, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("device not found")
+}
+
+func (m *mockTailscaleClient) IsDeviceOnline(name string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockTailscaleClient) ValidateConnection() error {
+	return nil
+}
+
+func (m *mockTailscaleClient) GetCurrentDeviceIP() (string, error) {
+	return "100.64.1.1", nil
+}
+
+func (m *mockTailscaleClient) GetCurrentDeviceIPByName(name string) (string, error) {
+	return "100.64.1.1", nil
+}
+
 func setupTestHandler(t *testing.T) *RecordHandler {
+	return setupTestHandlerWithProxy(t, nil, nil)
+}
+
+func setupTestHandlerWithProxy(t *testing.T, proxyManager proxy.ProxyManagerInterface, tailscaleClient tailscale.TailscaleClientInterface) *RecordHandler {
 	// Create temp directory for test
 	tempDir, err := os.MkdirTemp("", "coredns-test-*")
 	require.NoError(t, err)
@@ -54,126 +182,216 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = manager.AddZone("test-service")
 	require.NoError(t, err)
 
-	// Create nil tailscale client for tests (simplified mode can handle this)
-	handler, err := NewRecordHandler(manager, nil, nil)
-	require.NoError(t, err)
+	// Create handler with mock dependencies if provided
+	var handler *RecordHandler
+	var err2 error
+	if proxyManager != nil && tailscaleClient != nil {
+		handler, err2 = NewRecordHandler(manager, proxyManager, tailscaleClient)
+	} else {
+		handler, err2 = NewRecordHandler(manager, nil, nil)
+	}
+	require.NoError(t, err2)
 
 	return handler
 }
 
 func TestAddRecordHandler(t *testing.T) {
-	handler := setupTestHandler(t)
+	// Test without proxy manager (original behavior)
+	t.Run("Without proxy manager", func(t *testing.T) {
+		handler := setupTestHandler(t)
 
-	tests := []struct {
-		name           string
-		method         string
-		requestBody    interface{}
-		expectedStatus int
-		expectedBody   string
-		expectJSON     bool
-	}{
-		{
-			name:   "Valid request without port",
-			method: http.MethodPost,
-			requestBody: map[string]string{
-				"service_name": "test-service",
-				"name":         "test-record",
+		tests := []struct {
+			name           string
+			method         string
+			requestBody    interface{}
+			expectedStatus int
+			expectedBody   string
+			expectJSON     bool
+		}{
+			{
+				name:   "Valid request without port",
+				method: http.MethodPost,
+				requestBody: map[string]string{
+					"service_name": "test-service",
+					"name":         "test-record",
+				},
+				expectedStatus: http.StatusCreated,
+				expectJSON:     true,
 			},
-			expectedStatus: http.StatusCreated,
-			expectJSON:     true,
-		},
-		{
-			name:   "Valid request with port",
-			method: http.MethodPost,
-			requestBody: map[string]interface{}{
-				"service_name": "test-service",
-				"name":         "test-record-with-port",
-				"port":         3000,
+			{
+				name:   "Valid request with port (no proxy manager)",
+				method: http.MethodPost,
+				requestBody: map[string]interface{}{
+					"service_name": "test-service",
+					"name":         "test-record-with-port",
+					"port":         3000,
+				},
+				expectedStatus: http.StatusCreated,
+				expectJSON:     true,
 			},
-			expectedStatus: http.StatusCreated,
-			expectJSON:     true,
-		},
-		{
-			name:   "Invalid method",
-			method: http.MethodGet,
-			requestBody: map[string]string{
-				"service_name": "test-service",
-				"name":         "test-record",
+			{
+				name:   "Invalid method",
+				method: http.MethodGet,
+				requestBody: map[string]string{
+					"service_name": "test-service",
+					"name":         "test-record",
+				},
+				expectedStatus: http.StatusMethodNotAllowed,
+				expectedBody:   "Method not allowed\n",
 			},
-			expectedStatus: http.StatusMethodNotAllowed,
-			expectedBody:   "Method not allowed\n",
-		},
-		{
-			name:           "Invalid JSON",
-			method:         http.MethodPost,
-			requestBody:    "invalid json",
-			expectedStatus: http.StatusBadRequest,
-			expectedBody:   "Invalid request body\n",
-		},
-		{
-			name:   "Missing service_name",
-			method: http.MethodPost,
-			requestBody: map[string]string{
-				"name": "test-record",
+			{
+				name:           "Invalid JSON",
+				method:         http.MethodPost,
+				requestBody:    "invalid json",
+				expectedStatus: http.StatusBadRequest,
+				expectedBody:   "Invalid request body\n",
 			},
-			expectedStatus: http.StatusBadRequest,
-			expectedBody:   "Missing required fields: service_name, name\n",
-		},
-		{
-			name:   "Invalid port",
-			method: http.MethodPost,
-			requestBody: map[string]interface{}{
-				"service_name": "test-service",
-				"name":         "test-record",
-				"port":         70000, // Invalid port
+			{
+				name:   "Missing service_name",
+				method: http.MethodPost,
+				requestBody: map[string]string{
+					"name": "test-record",
+				},
+				expectedStatus: http.StatusBadRequest,
+				expectedBody:   "Missing required fields: service_name, name\n",
 			},
-			expectedStatus: http.StatusBadRequest,
-			expectedBody:   "Port must be between 1 and 65535\n",
-		},
-	}
+			{
+				name:   "Invalid port",
+				method: http.MethodPost,
+				requestBody: map[string]interface{}{
+					"service_name": "test-service",
+					"name":         "test-record",
+					"port":         70000, // Invalid port
+				},
+				expectedStatus: http.StatusBadRequest,
+				expectedBody:   "Port must be between 1 and 65535\n",
+			},
+		}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var body []byte
-			if tt.requestBody != nil {
-				if strBody, ok := tt.requestBody.(string); ok {
-					body = []byte(strBody)
-				} else {
-					body, _ = json.Marshal(tt.requestBody)
-				}
-			}
-
-			req := httptest.NewRequest(tt.method, "/add-record", bytes.NewBuffer(body))
-			w := httptest.NewRecorder()
-
-			handler.AddRecord(w, req)
-
-			assert.Equal(t, tt.expectedStatus, w.Code)
-
-			if tt.expectJSON {
-				// For JSON responses, just verify it's valid JSON and contains expected fields
-				var response map[string]interface{}
-				err := json.Unmarshal(w.Body.Bytes(), &response)
-				assert.NoError(t, err)
-				assert.Contains(t, response, "message")
-				assert.Contains(t, response, "dns_record")
-
-				// Verify proxy_port inference: present if port was in request, absent otherwise
-				if reqBody, ok := tt.requestBody.(map[string]interface{}); ok {
-					if _, hasPort := reqBody["port"]; hasPort {
-						assert.Contains(t, response, "proxy_port", "proxy_port should be present when port is specified")
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var body []byte
+				if tt.requestBody != nil {
+					if strBody, ok := tt.requestBody.(string); ok {
+						body = []byte(strBody)
 					} else {
-						assert.NotContains(t, response, "proxy_port", "proxy_port should be absent when no port is specified")
+						body, _ = json.Marshal(tt.requestBody)
 					}
-				} else if _, ok := tt.requestBody.(map[string]string); ok {
-					// For string-only requests (no port field possible)
-					assert.NotContains(t, response, "proxy_port", "proxy_port should be absent when no port is specified")
 				}
-			} else if tt.expectedBody != "" {
-				assert.Equal(t, tt.expectedBody, w.Body.String())
-			}
-		})
-	}
+
+				req := httptest.NewRequest(tt.method, "/add-record", bytes.NewBuffer(body))
+				w := httptest.NewRecorder()
+
+				handler.AddRecord(w, req)
+
+				assert.Equal(t, tt.expectedStatus, w.Code)
+
+				if tt.expectJSON {
+					// For JSON responses, verify it's a valid Record
+					var response Record
+					err := json.Unmarshal(w.Body.Bytes(), &response)
+					assert.NoError(t, err)
+					assert.NotNil(t, response.Record)
+					assert.NotEmpty(t, response.Record.Name)
+					assert.Equal(t, "A", response.Record.Type)
+					assert.NotEmpty(t, response.Record.IP)
+
+					// Verify proxy_rule inference: present if port was in request, absent otherwise
+					if reqBody, ok := tt.requestBody.(map[string]interface{}); ok {
+						if _, hasPort := reqBody["port"]; hasPort {
+							// When no proxy manager is available, proxy_rule should be nil
+							assert.Nil(t, response.ProxyRule, "proxy_rule should be nil when proxy manager is not available")
+						} else {
+							assert.Nil(t, response.ProxyRule, "proxy_rule should be absent when no port is specified")
+						}
+					} else if _, ok := tt.requestBody.(map[string]string); ok {
+						// For string-only requests (no port field possible)
+						assert.Nil(t, response.ProxyRule, "proxy_rule should be absent when no port is specified")
+					}
+				} else if tt.expectedBody != "" {
+					assert.Equal(t, tt.expectedBody, w.Body.String())
+				}
+			})
+		}
+	})
+
+	// Test with mock proxy manager
+	t.Run("With proxy manager", func(t *testing.T) {
+		mockProxy := newMockProxyManager()
+		mockTailscale := newMockTailscaleClient()
+		handler := setupTestHandlerWithProxy(t, mockProxy, mockTailscale)
+
+		tests := []struct {
+			name           string
+			method         string
+			requestBody    interface{}
+			expectedStatus int
+			expectedBody   string
+			expectJSON     bool
+		}{
+			{
+				name:   "Valid request with port (with proxy manager)",
+				method: http.MethodPost,
+				requestBody: map[string]interface{}{
+					"service_name": "test-service",
+					"name":         "test-record-with-port",
+					"port":         3000,
+				},
+				expectedStatus: http.StatusCreated,
+				expectJSON:     true,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var body []byte
+				if tt.requestBody != nil {
+					if strBody, ok := tt.requestBody.(string); ok {
+						body = []byte(strBody)
+					} else {
+						body, _ = json.Marshal(tt.requestBody)
+					}
+				}
+
+				req := httptest.NewRequest(tt.method, "/add-record", bytes.NewBuffer(body))
+				// Set a mock source IP for the request
+				req.Header.Set("X-Forwarded-For", "192.168.1.100")
+				w := httptest.NewRecorder()
+
+				handler.AddRecord(w, req)
+
+				assert.Equal(t, tt.expectedStatus, w.Code)
+
+				if tt.expectJSON {
+					// For JSON responses, verify it's a valid Record
+					var response Record
+					err := json.Unmarshal(w.Body.Bytes(), &response)
+					assert.NoError(t, err)
+					assert.NotNil(t, response.Record)
+					assert.NotEmpty(t, response.Record.Name)
+					assert.Equal(t, "A", response.Record.Type)
+					assert.NotEmpty(t, response.Record.IP)
+
+					// Verify proxy_rule inference: present if port was in request
+					if reqBody, ok := tt.requestBody.(map[string]interface{}); ok {
+						if _, hasPort := reqBody["port"]; hasPort {
+							assert.NotNil(t, response.ProxyRule, "proxy_rule should be present when port is specified")
+							if response.ProxyRule != nil {
+								assert.Greater(t, response.ProxyRule.TargetPort, 0, "proxy rule should have valid target port")
+								assert.Equal(t, "test-record-with-port", response.ProxyRule.Hostname)
+								assert.Equal(t, 3000, response.ProxyRule.TargetPort)
+								assert.Equal(t, "100.64.1.1", response.ProxyRule.TargetIP)
+							}
+						} else {
+							assert.Nil(t, response.ProxyRule, "proxy_rule should be absent when no port is specified")
+						}
+					}
+				} else if tt.expectedBody != "" {
+					assert.Equal(t, tt.expectedBody, w.Body.String())
+				}
+			})
+		}
+	})
 }
 
 func TestListRecordsHandler(t *testing.T) {
@@ -237,7 +455,7 @@ func TestListRecordsHandler(t *testing.T) {
 			if tt.expectedStatus == http.StatusOK {
 				assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-				var records []coredns.Record
+				var records []Record
 				err := json.Unmarshal(w.Body.Bytes(), &records)
 				require.NoError(t, err)
 				assert.Len(t, records, tt.expectedCount)
@@ -245,15 +463,16 @@ func TestListRecordsHandler(t *testing.T) {
 				if tt.expectedCount > 0 {
 					// Verify the structure of returned records
 					for _, record := range records {
-						assert.NotEmpty(t, record.Name)
-						assert.Equal(t, "A", record.Type)
-						assert.NotEmpty(t, record.IP)
+						assert.NotNil(t, record.Record)
+						assert.NotEmpty(t, record.Record.Name)
+						assert.Equal(t, "A", record.Record.Type)
+						assert.NotEmpty(t, record.Record.IP)
 					}
 
 					// Verify specific records exist
 					recordMap := make(map[string]string)
 					for _, record := range records {
-						recordMap[record.Name] = record.IP
+						recordMap[record.Record.Name] = record.Record.IP
 					}
 					assert.Equal(t, "100.64.1.1", recordMap["device1"])
 					assert.Equal(t, "100.64.1.2", recordMap["device2"])

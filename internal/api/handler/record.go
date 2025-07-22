@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
@@ -21,15 +22,21 @@ type AddRecordRequest struct {
 	Port        *int   `json:"port,omitempty"` // Optional: triggers automatic proxy setup
 }
 
+// Record represents a DNS record with optional proxy information
+type Record struct {
+	*coredns.Record                  // Embed CoreDNS record
+	ProxyRule       *proxy.ProxyRule `json:"proxy_rule,omitempty"`
+}
+
 // RecordHandler handles DNS record operations
 type RecordHandler struct {
 	manager         *coredns.Manager
-	proxyManager    *proxy.Manager
-	tailscaleClient *tailscale.Client
+	proxyManager    proxy.ProxyManagerInterface
+	tailscaleClient tailscale.TailscaleClientInterface
 }
 
 // NewRecordHandler creates a new record handler
-func NewRecordHandler(manager *coredns.Manager, proxyManager *proxy.Manager, tailscaleClient *tailscale.Client) (*RecordHandler, error) {
+func NewRecordHandler(manager *coredns.Manager, proxyManager proxy.ProxyManagerInterface, tailscaleClient tailscale.TailscaleClientInterface) (*RecordHandler, error) {
 	return &RecordHandler{
 		manager:         manager,
 		proxyManager:    proxyManager,
@@ -145,26 +152,77 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 
 	logging.Info("Successfully added DNS record: %s -> %s", req.Name, dnsManagerIP)
 
-	// If port is specified, create automatic proxy rule
-	if req.Port != nil && h.proxyManager != nil {
-		h.proxyManager.SetupAutomaticProxy(r, req.Name, dnsManagerIP, *req.Port, h.tailscaleClient)
+	// Create unified record response
+	record := Record{
+		Record: &coredns.Record{
+			Name: req.Name,
+			Type: "A",
+			IP:   dnsManagerIP,
+		},
+	}
+
+	// If port is specified, create proxy rule with device detection
+	if req.Port != nil && h.proxyManager != nil && h.tailscaleClient != nil {
+		// Extract source IP from request
+		sourceIP := proxy.GetSourceIP(r)
+		if sourceIP != "" {
+			logging.Info("Detected source IP: %s", sourceIP)
+
+			// Find corresponding Tailscale device
+			device, err := h.tailscaleClient.GetDeviceByIP(sourceIP)
+			var targetIP string
+
+			if err != nil {
+				logging.Warn("Failed to find device for IP %s: %v - using DNS Manager as fallback", sourceIP, err)
+				targetIP = dnsManagerIP
+			} else {
+				// Use device's Tailscale IP
+				targetIP = h.tailscaleClient.GetTailscaleIP(device)
+				if targetIP == "" {
+					logging.Warn("No Tailscale IP found for device %s - using DNS Manager as fallback", device.Name)
+					targetIP = dnsManagerIP
+				} else {
+					logging.Info("Found source device: %s (%s) -> %s", device.Name, device.Hostname, targetIP)
+				}
+			}
+
+			// Create ProxyRule directly
+			proxyRule := &proxy.ProxyRule{
+				Hostname:   req.Name,
+				TargetIP:   targetIP,
+				TargetPort: *req.Port,
+				Protocol:   "http",
+				Enabled:    true,
+				CreatedAt:  time.Now(),
+			}
+
+			// Create proxy rule using ProxyRule
+			if err := h.proxyManager.AddRule(proxyRule); err != nil {
+				logging.Error("Failed to add proxy rule: %v", err)
+				logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
+			} else {
+				logging.Info("Successfully added proxy rule: %s -> %s:%d", req.Name, targetIP, *req.Port)
+				// Use the same ProxyRule directly in response
+				record.ProxyRule = proxyRule
+			}
+		} else {
+			logging.Warn("Unable to determine source IP - skipping proxy setup")
+		}
+	} else if req.Port != nil {
+		if h.proxyManager == nil {
+			logging.Warn("Proxy manager not available - skipping proxy setup")
+		}
+		if h.tailscaleClient == nil {
+			logging.Warn("Tailscale client not available - skipping proxy setup")
+		}
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	response := map[string]interface{}{
-		"message":    "Record added successfully",
-		"dns_record": fmt.Sprintf("%s -> %s", req.Name, dnsManagerIP),
-	}
-
-	if req.Port != nil {
-		response["proxy_port"] = *req.Port
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(record)
 }
 
-// ListRecords handles listing all DNS records from the internal zone
+// ListRecords handles listing all DNS records from the internal zone with proxy information
 func (h *RecordHandler) ListRecords(w http.ResponseWriter, r *http.Request) {
 	logging.Info("Processing list records request")
 
@@ -173,11 +231,38 @@ func (h *RecordHandler) ListRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := h.manager.ListRecords("internal")
+	dnsRecords, err := h.manager.ListRecords("internal")
 	if err != nil {
 		logging.Error("Failed to list records: %v", err)
 		http.Error(w, "Failed to list records", http.StatusInternalServerError)
 		return
+	}
+
+	// Get proxy rules to join with DNS records
+	var proxyRules []*proxy.ProxyRule
+	if h.proxyManager != nil {
+		proxyRules = h.proxyManager.ListRules()
+	}
+
+	// Create map of proxy rules by hostname for efficient lookup
+	proxyRuleMap := make(map[string]*proxy.ProxyRule)
+	for _, rule := range proxyRules {
+		proxyRuleMap[rule.Hostname] = rule
+	}
+
+	// Create records by joining DNS records with proxy rules
+	records := make([]Record, 0, len(dnsRecords))
+	for _, dnsRecord := range dnsRecords {
+		record := Record{
+			Record: &dnsRecord,
+		}
+
+		// Check if there's a corresponding proxy rule
+		if proxyRule, exists := proxyRuleMap[dnsRecord.Name]; exists {
+			record.ProxyRule = proxyRule
+		}
+
+		records = append(records, record)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
