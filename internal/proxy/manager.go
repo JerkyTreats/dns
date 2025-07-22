@@ -31,12 +31,20 @@ type Reloader interface {
 type CaddyReloader struct{}
 
 func (c *CaddyReloader) Reload(configPath string) error {
-	cmd := exec.Command("/usr/local/bin/caddy", "reload", "--config", configPath)
-	if err := cmd.Run(); err != nil {
-		logging.Warn("Failed to reload Caddy via API, will restart via supervisor")
-		return fmt.Errorf("failed to reload caddy: %w", err)
+	// Caddy admin API is disabled, so use supervisord to reload configuration
+	// First reread the configuration
+	rereadCmd := exec.Command("supervisorctl", "reread")
+	if err := rereadCmd.Run(); err != nil {
+		return fmt.Errorf("failed to reread supervisor configuration: %w", err)
 	}
-	logging.Debug("Successfully reloaded Caddy configuration")
+
+	// Then update to restart applications with changed configuration
+	updateCmd := exec.Command("supervisorctl", "update")
+	if err := updateCmd.Run(); err != nil {
+		return fmt.Errorf("failed to update supervisor configuration: %w", err)
+	}
+
+	logging.Debug("Successfully reloaded Caddy configuration via supervisord")
 	return nil
 }
 
