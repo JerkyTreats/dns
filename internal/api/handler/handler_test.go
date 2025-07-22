@@ -17,7 +17,7 @@ func TestNewHandlerRegistry(t *testing.T) {
 	mockDNSChecker := &mockDNSChecker{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestHandlerRegistry_RegisterHandlers(t *testing.T) {
 	mockDNSChecker := &mockDNSChecker{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestHandlerRegistry_GetServeMux(t *testing.T) {
 	mockDNSChecker := &mockDNSChecker{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestHandlerRegistry_GetRecordHandler(t *testing.T) {
 	mockDNSChecker := &mockDNSChecker{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestHandlerRegistry_GetHealthHandler(t *testing.T) {
 	mockDNSChecker := &mockDNSChecker{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}

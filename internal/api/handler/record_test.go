@@ -54,7 +54,8 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = manager.AddZone("test-service")
 	require.NoError(t, err)
 
-	handler, err := NewRecordHandler(manager, nil)
+	// Create nil tailscale client for tests (simplified mode can handle this)
+	handler, err := NewRecordHandler(manager, nil, nil)
 	require.NoError(t, err)
 
 	return handler
@@ -69,17 +70,28 @@ func TestAddRecordHandler(t *testing.T) {
 		requestBody    interface{}
 		expectedStatus int
 		expectedBody   string
+		expectJSON     bool
 	}{
 		{
-			name:   "Valid request",
+			name:   "Valid request without port",
 			method: http.MethodPost,
 			requestBody: map[string]string{
 				"service_name": "test-service",
 				"name":         "test-record",
-				"ip":           "192.168.1.10",
 			},
 			expectedStatus: http.StatusCreated,
-			expectedBody:   "Record added successfully",
+			expectJSON:     true,
+		},
+		{
+			name:   "Valid request with port",
+			method: http.MethodPost,
+			requestBody: map[string]interface{}{
+				"service_name": "test-service",
+				"name":         "test-record-with-port",
+				"port":         3000,
+			},
+			expectedStatus: http.StatusCreated,
+			expectJSON:     true,
 		},
 		{
 			name:   "Invalid method",
@@ -87,7 +99,6 @@ func TestAddRecordHandler(t *testing.T) {
 			requestBody: map[string]string{
 				"service_name": "test-service",
 				"name":         "test-record",
-				"ip":           "192.168.1.10",
 			},
 			expectedStatus: http.StatusMethodNotAllowed,
 			expectedBody:   "Method not allowed\n",
@@ -98,6 +109,26 @@ func TestAddRecordHandler(t *testing.T) {
 			requestBody:    "invalid json",
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   "Invalid request body\n",
+		},
+		{
+			name:   "Missing service_name",
+			method: http.MethodPost,
+			requestBody: map[string]string{
+				"name": "test-record",
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Missing required fields: service_name, name\n",
+		},
+		{
+			name:   "Invalid port",
+			method: http.MethodPost,
+			requestBody: map[string]interface{}{
+				"service_name": "test-service",
+				"name":         "test-record",
+				"port":         70000, // Invalid port
+			},
+			expectedStatus: http.StatusBadRequest,
+			expectedBody:   "Port must be between 1 and 65535\n",
 		},
 	}
 
@@ -118,7 +149,27 @@ func TestAddRecordHandler(t *testing.T) {
 			handler.AddRecord(w, req)
 
 			assert.Equal(t, tt.expectedStatus, w.Code)
-			if tt.expectedBody != "" {
+
+			if tt.expectJSON {
+				// For JSON responses, just verify it's valid JSON and contains expected fields
+				var response map[string]interface{}
+				err := json.Unmarshal(w.Body.Bytes(), &response)
+				assert.NoError(t, err)
+				assert.Contains(t, response, "message")
+				assert.Contains(t, response, "dns_record")
+
+				// Verify proxy_port inference: present if port was in request, absent otherwise
+				if reqBody, ok := tt.requestBody.(map[string]interface{}); ok {
+					if _, hasPort := reqBody["port"]; hasPort {
+						assert.Contains(t, response, "proxy_port", "proxy_port should be present when port is specified")
+					} else {
+						assert.NotContains(t, response, "proxy_port", "proxy_port should be absent when no port is specified")
+					}
+				} else if _, ok := tt.requestBody.(map[string]string); ok {
+					// For string-only requests (no port field possible)
+					assert.NotContains(t, response, "proxy_port", "proxy_port should be absent when no port is specified")
+				}
+			} else if tt.expectedBody != "" {
 				assert.Equal(t, tt.expectedBody, w.Body.String())
 			}
 		})
@@ -151,7 +202,7 @@ func TestListRecordsHandler(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create handler with the manager that has records
-	handler, err = NewRecordHandler(manager, nil)
+	handler, err = NewRecordHandler(manager, nil, nil)
 	require.NoError(t, err)
 
 	tests := []struct {

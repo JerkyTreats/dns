@@ -24,7 +24,7 @@ func TestHealthCheckHandler(t *testing.T) {
 	mockDNSChecker := &mockDNSChecker{}
 
 	// Create handler registry
-	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil)
+	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create a mux and register handlers

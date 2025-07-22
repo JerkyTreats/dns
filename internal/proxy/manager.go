@@ -3,16 +3,25 @@ package proxy
 import (
 	"bytes"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"text/template"
 	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/jerkytreats/dns/internal/tailscale"
 )
+
+// TailscaleClientInterface defines the minimal interface needed for automatic proxy setup
+type TailscaleClientInterface interface {
+	GetDeviceByIP(ip string) (*tailscale.Device, error)
+	GetTailscaleIP(device *tailscale.Device) string
+}
 
 const (
 	// Proxy configuration keys
@@ -263,4 +272,84 @@ func (m *Manager) GetStats() map[string]interface{} {
 		"config_version": m.configVersion,
 		"last_generated": m.lastGenerated.Format(time.RFC3339),
 	}
+}
+
+// SetupAutomaticProxy handles automatic proxy rule creation based on request source
+func (m *Manager) SetupAutomaticProxy(r *http.Request, dnsName, dnsManagerIP string, port int, tailscaleClient TailscaleClientInterface) {
+	// Extract source IP from request
+	sourceIP := getSourceIP(r)
+	if sourceIP == "" {
+		logging.Warn("Unable to determine source IP - skipping proxy setup")
+		return
+	}
+
+	if tailscaleClient == nil {
+		logging.Warn("Tailscale client not available - skipping automatic proxy setup")
+		return
+	}
+
+	// Find corresponding Tailscale device
+	device, err := tailscaleClient.GetDeviceByIP(sourceIP)
+	var targetIP string
+
+	if err != nil {
+		logging.Warn("Failed to find device for IP %s: %v - using DNS Manager as fallback", sourceIP, err)
+		// Fallback: use DNS Manager's own IP
+		targetIP = dnsManagerIP
+	} else {
+		// Use device's Tailscale IP
+		targetIP = tailscaleClient.GetTailscaleIP(device)
+		if targetIP == "" {
+			logging.Warn("No Tailscale IP found for device %s - using DNS Manager as fallback", device.Name)
+			targetIP = dnsManagerIP
+		} else {
+			logging.Info("Found source device: %s (%s) -> %s", device.Name, device.Hostname, targetIP)
+		}
+	}
+
+	// Create proxy rule
+	if err := m.AddRule(dnsName, targetIP, port); err != nil {
+		logging.Error("Failed to add proxy rule: %v", err)
+		// Don't fail the entire request, but log the error
+		logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
+	} else {
+		logging.Info("Successfully added proxy rule: %s -> %s:%d", dnsName, targetIP, port)
+	}
+}
+
+// getSourceIP extracts the client IP from HTTP request headers
+// Checks X-Forwarded-For, X-Real-IP, and RemoteAddr in that order
+func getSourceIP(r *http.Request) string {
+	// Check X-Forwarded-For header (handles multiple proxies)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For can contain multiple IPs, take the first one
+		ips := strings.Split(xff, ",")
+		if len(ips) > 0 {
+			ip := strings.TrimSpace(ips[0])
+			if ip != "" {
+				logging.Debug("Source IP from X-Forwarded-For: %s", ip)
+				return ip
+			}
+		}
+	}
+
+	// Check X-Real-IP header (simpler proxy setup)
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		ip := strings.TrimSpace(xri)
+		if ip != "" {
+			logging.Debug("Source IP from X-Real-IP: %s", ip)
+			return ip
+		}
+	}
+
+	// Fall back to RemoteAddr (direct connection)
+	if r.RemoteAddr != "" {
+		// RemoteAddr is in format "IP:port", extract just the IP
+		ip := strings.Split(r.RemoteAddr, ":")[0]
+		logging.Debug("Source IP from RemoteAddr: %s", ip)
+		return ip
+	}
+
+	logging.Warn("Unable to determine source IP from request")
+	return ""
 }

@@ -2,12 +2,14 @@ package proxy
 
 import (
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -596,6 +598,341 @@ func TestConcurrentAccess(t *testing.T) {
 	// Verify final state
 	rules := manager.ListRules()
 	assert.Len(t, rules, 10)
+
+	// Clean up
+	config.ResetForTest()
+}
+
+// Mock Tailscale client for testing
+type mockTailscaleClient struct {
+	devices      []tailscale.Device
+	shouldError  bool
+	errorMessage string
+}
+
+func (m *mockTailscaleClient) GetDeviceByIP(ip string) (*tailscale.Device, error) {
+	if m.shouldError {
+		return nil, fmt.Errorf("%s", m.errorMessage)
+	}
+
+	for _, device := range m.devices {
+		for _, addr := range device.Addresses {
+			if addr == ip {
+				return &device, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("device not found for IP %s", ip)
+}
+
+func (m *mockTailscaleClient) GetTailscaleIP(device *tailscale.Device) string {
+	for _, addr := range device.Addresses {
+		if len(addr) > 4 && addr[:4] == "100." {
+			return addr
+		}
+	}
+	return ""
+}
+
+// Other required methods for interface compatibility
+func (m *mockTailscaleClient) ListDevices() ([]tailscale.Device, error)         { return m.devices, nil }
+func (m *mockTailscaleClient) GetDevice(name string) (*tailscale.Device, error) { return nil, nil }
+func (m *mockTailscaleClient) GetDeviceIP(name string) (string, error)          { return "", nil }
+func (m *mockTailscaleClient) IsDeviceOnline(name string) (bool, error)         { return true, nil }
+func (m *mockTailscaleClient) ValidateConnection() error                        { return nil }
+func (m *mockTailscaleClient) GetCurrentDeviceIP() (string, error)              { return "100.1.1.1", nil }
+func (m *mockTailscaleClient) GetCurrentDeviceIPByName(name string) (string, error) {
+	return "100.1.1.1", nil
+}
+
+func TestGetSourceIP(t *testing.T) {
+	tests := []struct {
+		name       string
+		headers    map[string]string
+		remoteAddr string
+		expectedIP string
+	}{
+		{
+			name: "X-Forwarded-For single IP",
+			headers: map[string]string{
+				"X-Forwarded-For": "192.168.1.100",
+			},
+			expectedIP: "192.168.1.100",
+		},
+		{
+			name: "X-Forwarded-For multiple IPs",
+			headers: map[string]string{
+				"X-Forwarded-For": "192.168.1.100, 10.0.0.1, 172.16.0.1",
+			},
+			expectedIP: "192.168.1.100",
+		},
+		{
+			name: "X-Real-IP",
+			headers: map[string]string{
+				"X-Real-IP": "192.168.1.200",
+			},
+			expectedIP: "192.168.1.200",
+		},
+		{
+			name: "X-Forwarded-For takes precedence over X-Real-IP",
+			headers: map[string]string{
+				"X-Forwarded-For": "192.168.1.100",
+				"X-Real-IP":       "192.168.1.200",
+			},
+			expectedIP: "192.168.1.100",
+		},
+		{
+			name:       "RemoteAddr fallback",
+			headers:    map[string]string{},
+			remoteAddr: "192.168.1.150:12345",
+			expectedIP: "192.168.1.150",
+		},
+		{
+			name: "X-Forwarded-For with spaces",
+			headers: map[string]string{
+				"X-Forwarded-For": " 192.168.1.100 , 10.0.0.1 ",
+			},
+			expectedIP: "192.168.1.100",
+		},
+		{
+			name:       "No headers, no RemoteAddr",
+			headers:    map[string]string{},
+			remoteAddr: "clear", // Special marker to clear RemoteAddr
+			expectedIP: "",
+		},
+		{
+			name: "Empty headers",
+			headers: map[string]string{
+				"X-Forwarded-For": "",
+				"X-Real-IP":       "",
+			},
+			remoteAddr: "192.168.1.150:12345",
+			expectedIP: "192.168.1.150",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/test", nil)
+
+			// Set headers
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			// Set RemoteAddr
+			if tt.remoteAddr != "" {
+				if tt.remoteAddr == "clear" {
+					req.RemoteAddr = ""
+				} else {
+					req.RemoteAddr = tt.remoteAddr
+				}
+			}
+
+			result := getSourceIP(req)
+			assert.Equal(t, tt.expectedIP, result)
+		})
+	}
+}
+
+func TestSetupAutomaticProxy(t *testing.T) {
+	tests := []struct {
+		name             string
+		sourceIP         string
+		mockDevices      []tailscale.Device
+		mockError        bool
+		errorMessage     string
+		tailscaleClient  *mockTailscaleClient
+		expectRuleCount  int
+		expectedTargetIP string
+	}{
+		{
+			name:     "Successful device detection",
+			sourceIP: "192.168.1.100",
+			mockDevices: []tailscale.Device{
+				{
+					Name:      "test-device",
+					Hostname:  "test-device.local",
+					Addresses: []string{"192.168.1.100", "100.64.1.50"},
+					Online:    true,
+				},
+			},
+			expectRuleCount:  1,
+			expectedTargetIP: "100.64.1.50",
+		},
+		{
+			name:     "Device found but no Tailscale IP",
+			sourceIP: "192.168.1.100",
+			mockDevices: []tailscale.Device{
+				{
+					Name:      "test-device",
+					Hostname:  "test-device.local",
+					Addresses: []string{"192.168.1.100", "fd7a:115c:a1e0::1"},
+					Online:    true,
+				},
+			},
+			expectRuleCount:  1,
+			expectedTargetIP: "100.1.1.1", // Fallback to DNS Manager IP
+		},
+		{
+			name:             "Device not found - fallback",
+			sourceIP:         "192.168.1.999",
+			mockDevices:      []tailscale.Device{},
+			expectRuleCount:  1,
+			expectedTargetIP: "100.1.1.1", // Fallback to DNS Manager IP
+		},
+		{
+			name:     "Tailscale client error - fallback",
+			sourceIP: "192.168.1.100",
+			mockDevices: []tailscale.Device{
+				{
+					Name:      "test-device",
+					Hostname:  "test-device.local",
+					Addresses: []string{"192.168.1.100", "100.64.1.50"},
+					Online:    true,
+				},
+			},
+			mockError:        true,
+			errorMessage:     "API error",
+			expectRuleCount:  1,
+			expectedTargetIP: "100.1.1.1", // Fallback to DNS Manager IP
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, _ := setupTestManager(t)
+
+			// Create mock Tailscale client
+			mockClient := &mockTailscaleClient{
+				devices:      tt.mockDevices,
+				shouldError:  tt.mockError,
+				errorMessage: tt.errorMessage,
+			}
+
+			// Create request with source IP
+			req := httptest.NewRequest("POST", "/add-record", nil)
+			req.RemoteAddr = tt.sourceIP + ":12345"
+
+			// Call SetupAutomaticProxy
+			manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
+
+			// Verify rule was created
+			rules := manager.ListRules()
+			assert.Len(t, rules, tt.expectRuleCount)
+
+			if tt.expectRuleCount > 0 {
+				rule := rules[0]
+				assert.Equal(t, "test.example.com", rule.Hostname)
+				assert.Equal(t, tt.expectedTargetIP, rule.TargetIP)
+				assert.Equal(t, 8080, rule.TargetPort)
+				assert.True(t, rule.Enabled)
+			}
+
+			// Clean up
+			config.ResetForTest()
+		})
+	}
+}
+
+func TestSetupAutomaticProxy_NoSourceIP(t *testing.T) {
+	manager, _ := setupTestManager(t)
+
+	mockClient := &mockTailscaleClient{}
+
+	// Create request with no source IP information
+	req := httptest.NewRequest("POST", "/add-record", nil)
+	req.RemoteAddr = "" // Explicitly clear RemoteAddr
+
+	// Call SetupAutomaticProxy
+	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
+
+	// Verify no rule was created
+	rules := manager.ListRules()
+	assert.Len(t, rules, 0)
+
+	// Clean up
+	config.ResetForTest()
+}
+
+func TestSetupAutomaticProxy_NilTailscaleClient(t *testing.T) {
+	manager, _ := setupTestManager(t)
+
+	// Create request with source IP
+	req := httptest.NewRequest("POST", "/add-record", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+
+	// Call SetupAutomaticProxy with nil client
+	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, nil)
+
+	// Verify no rule was created
+	rules := manager.ListRules()
+	assert.Len(t, rules, 0)
+
+	// Clean up
+	config.ResetForTest()
+}
+
+func TestSetupAutomaticProxy_DisabledManager(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	manager.enabled = false
+
+	mockClient := &mockTailscaleClient{
+		devices: []tailscale.Device{
+			{
+				Name:      "test-device",
+				Hostname:  "test-device.local",
+				Addresses: []string{"192.168.1.100", "100.64.1.50"},
+				Online:    true,
+			},
+		},
+	}
+
+	// Create request with source IP
+	req := httptest.NewRequest("POST", "/add-record", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+
+	// Call SetupAutomaticProxy
+	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
+
+	// Verify no rule was created (because AddRule returns early when disabled)
+	rules := manager.ListRules()
+	assert.Len(t, rules, 0)
+
+	// Clean up
+	config.ResetForTest()
+}
+
+func TestSetupAutomaticProxy_XForwardedForHeader(t *testing.T) {
+	manager, _ := setupTestManager(t)
+
+	mockClient := &mockTailscaleClient{
+		devices: []tailscale.Device{
+			{
+				Name:      "test-device",
+				Hostname:  "test-device.local",
+				Addresses: []string{"10.0.0.5", "100.64.1.50"},
+				Online:    true,
+			},
+		},
+	}
+
+	// Create request with X-Forwarded-For header
+	req := httptest.NewRequest("POST", "/add-record", nil)
+	req.Header.Set("X-Forwarded-For", "10.0.0.5")
+	req.RemoteAddr = "192.168.1.100:12345" // Should be ignored in favor of X-Forwarded-For
+
+	// Call SetupAutomaticProxy
+	manager.SetupAutomaticProxy(req, "test.example.com", "100.1.1.1", 8080, mockClient)
+
+	// Verify rule was created with correct target IP
+	rules := manager.ListRules()
+	assert.Len(t, rules, 1)
+
+	rule := rules[0]
+	assert.Equal(t, "test.example.com", rule.Hostname)
+	assert.Equal(t, "100.64.1.50", rule.TargetIP) // Should use device's Tailscale IP
+	assert.Equal(t, 8080, rule.TargetPort)
 
 	// Clean up
 	config.ResetForTest()

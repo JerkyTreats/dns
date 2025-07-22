@@ -176,7 +176,7 @@ func main() {
 	}()
 
 	// Initialize handler registry with all handlers including proxy manager
-	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, dnsChecker, syncManager, proxyManager)
+	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, dnsChecker, syncManager, proxyManager, tailscaleClient)
 	if err != nil {
 		logging.Error("Failed to initialize handler registry: %v", err)
 		os.Exit(1)

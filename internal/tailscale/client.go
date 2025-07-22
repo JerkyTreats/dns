@@ -347,3 +347,51 @@ func (c *Client) GetCurrentDeviceIP() (string, error) {
 	return "", fmt.Errorf("current device with hostname '%s' not found in Tailscale network. Available devices: %s",
 		hostname, strings.Join(availableDevices, ", "))
 }
+
+// GetDeviceByIP finds a Tailscale device by its IP address
+func (c *Client) GetDeviceByIP(ip string) (*Device, error) {
+	devices, err := c.ListDevices()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list devices: %w", err)
+	}
+
+	logging.Debug("Looking for device with IP: %s", ip)
+
+	// Search through all devices for matching IP address
+	for _, device := range devices {
+		for _, addr := range device.Addresses {
+			if addr == ip {
+				logging.Debug("Found device '%s' with IP %s", device.Name, ip)
+				return &device, nil
+			}
+		}
+	}
+
+	// Debug: Log all devices and their IPs for troubleshooting
+	logging.Debug("Device IP search failed. Available devices and IPs:")
+	for _, device := range devices {
+		logging.Debug("  - %s (%s): %v", device.Name, device.Hostname, device.Addresses)
+	}
+
+	return nil, fmt.Errorf("no device found with IP address '%s'", ip)
+}
+
+// GetTailscaleIP extracts the Tailscale IP (100.x.y.z) from a device's addresses
+func (c *Client) GetTailscaleIP(device *Device) string {
+	for _, addr := range device.Addresses {
+		if strings.HasPrefix(addr, "100.") {
+			return addr
+		}
+	}
+	return ""
+}
+
+// GetTailscaleIPFromAddresses is a static helper that extracts Tailscale IP from an address list
+func GetTailscaleIPFromAddresses(addresses []string) string {
+	for _, addr := range addresses {
+		if strings.HasPrefix(addr, "100.") {
+			return addr
+		}
+	}
+	return ""
+}

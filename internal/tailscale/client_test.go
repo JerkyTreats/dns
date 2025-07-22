@@ -385,3 +385,199 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+func TestTailscaleClient_GetDeviceByIP(t *testing.T) {
+	setupTestConfig(t)
+	server := setupMockTailscaleAPI(t)
+	defer server.Close()
+
+	// Override the base URL to point to our mock server
+	config.SetForTest(config.TailscaleBaseURLKey, server.URL)
+
+	client, err := NewClient()
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
+
+	tests := []struct {
+		name          string
+		ip            string
+		expectError   bool
+		expectedName  string
+		errorContains string
+	}{
+		{
+			name:         "Find device by Tailscale IP",
+			ip:           "100.65.225.93",
+			expectError:  false,
+			expectedName: "omnitron",
+		},
+		{
+			name:         "Find device by IPv6 address",
+			ip:           "fd7a:115c:a1e0::2",
+			expectError:  false,
+			expectedName: "revenantor",
+		},
+		{
+			name:         "Find offline device by IP",
+			ip:           "100.1.1.1",
+			expectError:  false,
+			expectedName: "offline-device",
+		},
+		{
+			name:          "IP not found",
+			ip:            "100.99.99.99",
+			expectError:   true,
+			errorContains: "no device found with IP address",
+		},
+		{
+			name:          "Invalid IP format",
+			ip:            "invalid-ip",
+			expectError:   true,
+			errorContains: "no device found with IP address",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			device, err := client.GetDeviceByIP(tt.ip)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, got nil")
+					return
+				}
+				if tt.errorContains != "" && !contains(err.Error(), tt.errorContains) {
+					t.Errorf("Expected error to contain '%s', got '%s'", tt.errorContains, err.Error())
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+				return
+			}
+
+			if device.Name != tt.expectedName {
+				t.Errorf("Expected device name '%s', got '%s'", tt.expectedName, device.Name)
+			}
+		})
+	}
+}
+
+func TestTailscaleClient_GetTailscaleIP(t *testing.T) {
+	setupTestConfig(t)
+	server := setupMockTailscaleAPI(t)
+	defer server.Close()
+
+	// Override the base URL to point to our mock server
+	config.SetForTest(config.TailscaleBaseURLKey, server.URL)
+
+	client, err := NewClient()
+	if err != nil {
+		t.Errorf("NewClient() error = %v", err)
+		return
+	}
+
+	tests := []struct {
+		name       string
+		device     *Device
+		expectedIP string
+	}{
+		{
+			name: "Device with Tailscale IP",
+			device: &Device{
+				Name:      "test-device",
+				Addresses: []string{"100.65.225.93", "fd7a:115c:a1e0::1"},
+			},
+			expectedIP: "100.65.225.93",
+		},
+		{
+			name: "Device with multiple IPs, Tailscale first",
+			device: &Device{
+				Name:      "test-device",
+				Addresses: []string{"100.115.251.3", "192.168.1.100", "fd7a:115c:a1e0::2"},
+			},
+			expectedIP: "100.115.251.3",
+		},
+		{
+			name: "Device with no Tailscale IP",
+			device: &Device{
+				Name:      "test-device",
+				Addresses: []string{"192.168.1.100", "fd7a:115c:a1e0::1"},
+			},
+			expectedIP: "",
+		},
+		{
+			name: "Device with no addresses",
+			device: &Device{
+				Name:      "test-device",
+				Addresses: []string{},
+			},
+			expectedIP: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := client.GetTailscaleIP(tt.device)
+			if ip != tt.expectedIP {
+				t.Errorf("Expected IP '%s', got '%s'", tt.expectedIP, ip)
+			}
+		})
+	}
+}
+
+func TestGetTailscaleIPFromAddresses(t *testing.T) {
+	tests := []struct {
+		name       string
+		addresses  []string
+		expectedIP string
+	}{
+		{
+			name:       "Single Tailscale IP",
+			addresses:  []string{"100.65.225.93"},
+			expectedIP: "100.65.225.93",
+		},
+		{
+			name:       "Mixed addresses with Tailscale first",
+			addresses:  []string{"100.115.251.3", "192.168.1.100", "fd7a:115c:a1e0::2"},
+			expectedIP: "100.115.251.3",
+		},
+		{
+			name:       "Mixed addresses with Tailscale not first",
+			addresses:  []string{"192.168.1.100", "100.65.225.93", "fd7a:115c:a1e0::1"},
+			expectedIP: "100.65.225.93",
+		},
+		{
+			name:       "No Tailscale IP",
+			addresses:  []string{"192.168.1.100", "fd7a:115c:a1e0::1"},
+			expectedIP: "",
+		},
+		{
+			name:       "Empty addresses",
+			addresses:  []string{},
+			expectedIP: "",
+		},
+		{
+			name:       "Nil addresses",
+			addresses:  nil,
+			expectedIP: "",
+		},
+		{
+			name:       "Edge case: address starting with 100 but not Tailscale",
+			addresses:  []string{"1001.1.1.1", "100.65.225.93"},
+			expectedIP: "100.65.225.93",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := GetTailscaleIPFromAddresses(tt.addresses)
+			if ip != tt.expectedIP {
+				t.Errorf("Expected IP '%s', got '%s'", tt.expectedIP, ip)
+			}
+		})
+	}
+}
