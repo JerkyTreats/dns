@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/proxy"
@@ -42,7 +43,19 @@ func (h *RecordHandler) getDNSManagerIP() (string, error) {
 		return "", fmt.Errorf("tailscale client not available")
 	}
 
-	ip, err := h.tailscaleClient.GetCurrentDeviceIP()
+	var ip string
+	var err error
+
+	// Check if a specific device name is configured
+	deviceName := config.GetString(tailscale.TailscaleDeviceNameKey)
+	if deviceName != "" {
+		logging.Debug("Using configured Tailscale device name for DNS Manager: %s", deviceName)
+		ip, err = h.tailscaleClient.GetCurrentDeviceIPByName(deviceName)
+	} else {
+		logging.Debug("No device name configured, using hostname-based detection for DNS Manager")
+		ip, err = h.tailscaleClient.GetCurrentDeviceIP()
+	}
+
 	if err != nil {
 		logging.Error("Failed to get DNS Manager IP: %v", err)
 		return "", fmt.Errorf("failed to get DNS Manager IP: %w", err)
