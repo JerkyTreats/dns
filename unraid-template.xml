@@ -176,13 +176,9 @@
             Description="Let's Encrypt ACME directory URL (production endpoint - use staging URL for testing)"
             Type="Variable" Display="advanced" Required="false" Mask="false">https://acme-v02.api.letsencrypt.org/directory</Config>
 
-    <Config Name="DNS Provider" Target="CERTIFICATE_DNS_PROVIDER" Default="coredns"
-            Description="DNS provider for ACME challenges: 'coredns' (internal) or 'cloudflare' (requires API token)"
-            Type="Variable" Display="advanced" Required="false" Mask="false">coredns</Config>
-
     <Config Name="Cloudflare API Token" Target="CLOUDFLARE_API_TOKEN" Default=""
-            Description="Cloudflare API token for DNS-01 challenges (required when DNS Provider is 'cloudflare')"
-            Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+            Description="Cloudflare API token for DNS-01 challenges (required for ACME certificate validation)"
+            Type="Variable" Display="always" Required="true" Mask="true"></Config>
 
     <Config Name="Tailscale Device Name" Target="TAILSCALE_DEVICE_NAME" Default=""
             Description="Your Tailscale device name (e.g., 'anton'). Leave empty to auto-detect, or check 'tailscale status' on your server"

@@ -129,30 +129,6 @@ func main() {
 	}
 	logging.Info("Proxy manager initialized successfully")
 
-	domain := config.GetString(coredns.DNSDomainKey)
-	if domain != "" {
-		if err := dnsManager.AddZone(domain); err != nil {
-			logging.Warn("Failed to ensure zone file exists for domain %s: %v", domain, err)
-		}
-
-		// Add DNS record for the API endpoint (dns.{domain}) - points to this device for proxy
-		if err := dnsManager.AddRecord(domain, "dns", currentDeviceIP); err != nil {
-			logging.Warn("Failed to add API endpoint record dns.%s -> %s: %v", domain, currentDeviceIP, err)
-		} else {
-			logging.Info("Added API endpoint record: dns.%s -> %s", domain, currentDeviceIP)
-		}
-
-		// Add proxy rule for the API endpoint to handle port 80 -> 8080 forwarding
-		if proxyManager.IsEnabled() {
-			apiPort := config.GetInt(ServerPortKey)
-			if err := proxyManager.AddRule(fmt.Sprintf("dns.%s", domain), currentDeviceIP, apiPort); err != nil {
-				logging.Warn("Failed to add proxy rule for DNS API: %v", err)
-			} else {
-				logging.Info("Added proxy rule: dns.%s -> %s:%d", domain, currentDeviceIP, apiPort)
-			}
-		}
-	}
-
 	// DNS server address - configurable for different deployment scenarios
 	dnsServer := os.Getenv("DNS_SERVER")
 	if dnsServer == "" {
@@ -172,6 +148,7 @@ func main() {
 		logging.Error("%v", err)
 		os.Exit(1)
 	}
+	logging.Info("DNS health check passed successfully")
 
 	tlsEnabled := config.GetBool(ServerTLSEnabledKey)
 	var certReadyCh <-chan struct{}

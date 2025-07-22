@@ -165,10 +165,9 @@ if [ -z "$LETSENCRYPT_EMAIL" ]; then
     exit 1
 fi
 
-# Ask whether to use Cloudflare as public DNS provider for ACME
-echo "Do you want to use Cloudflare for ACME DNS challenges (cloudflare DNS-01)? (y/n) [n]:"
-read -p "Use Cloudflare: " USE_CLOUDFLARE
-USE_CLOUDFLARE=${USE_CLOUDFLARE:-n}
+# Cloudflare is now the only DNS provider for ACME challenges
+USE_CLOUDFLARE="y"
+log "Using Cloudflare for ACME DNS challenges (DNS-01)"
 
 # Ask about environment (production vs staging)
 echo "Do you want to use Let's Encrypt production certificates? (y/n) [n]:"
@@ -212,11 +211,9 @@ if command -v python3 &> /dev/null; then
     # Run Python template substitution
     python3 scripts/template_substitute.py configs/config.yaml.template configs/config.yaml "${PYTHON_ARGS[@]}"
 
-    if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
-        python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
-            -s "provider: \"lego\"" "provider: \"lego\"
-  dns_provider: cloudflare"
-    fi
+    # Add Cloudflare API token placeholder (will be filled in later)
+    python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
+        -s "CLOUDFLARE_API_TOKEN_PLACEHOLDER" "CLOUDFLARE_API_TOKEN_PLACEHOLDER"
 
     # Only enable TLS if using production certificates
     if [[ $TLS_ENABLED == "true" ]]; then
@@ -234,9 +231,8 @@ elif command -v perl &> /dev/null; then
     perl -i -pe "s/TAILSCALE_TAILNET_PLACEHOLDER/\Q$TAILSCALE_TAILNET\E/g" configs/config.yaml
     perl -i -pe "s/SERVER_PORT_PLACEHOLDER/\Q${SERVER_PORT:-8080}\E/g" configs/config.yaml
 
-    if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
-        perl -i -pe 's/(provider: "lego")/$1\n  dns_provider: cloudflare/g' configs/config.yaml
-    fi
+    # Add Cloudflare API token placeholder (will be filled in later)
+    perl -i -pe 's/CLOUDFLARE_API_TOKEN_PLACEHOLDER/CLOUDFLARE_API_TOKEN_PLACEHOLDER/g' configs/config.yaml
 
     # Only enable TLS if using production certificates
     if [[ $TLS_ENABLED == "true" ]]; then
@@ -320,33 +316,30 @@ echo "- $COMPOSE_CMD logs -f   # View logs"
 echo "- $COMPOSE_CMD down      # Stop services"
 echo
 
-# Step 6: Handle Cloudflare token in .env if needed
-if [[ $USE_CLOUDFLARE =~ ^[Yy]$ ]]; then
-    echo
-    log "Cloudflare DNS provider selected. A Cloudflare API token is required."
-    echo "Please create a token with DNS:Edit permission for the 'jerkytreats.dev' zone."
-    read -p "Cloudflare API Token: " -s CF_TOKEN
-    echo
+# Step 6: Handle Cloudflare token (required)
+echo
+log "Cloudflare API token is required for ACME DNS challenges."
+echo "Please create a token with DNS:Edit permission for your domain zone."
+read -p "Cloudflare API Token: " -s CF_TOKEN
+echo
 
-    if [ -z "$CF_TOKEN" ]; then
-        error "Cloudflare API token cannot be empty when Cloudflare provider is selected."
-        exit 1
-    fi
-
-    # Insert token into certificate section
-    if command -v python3 &> /dev/null; then
-        python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
-            -s "dns_provider: cloudflare" "dns_provider: cloudflare
-  cloudflare_api_token: \"$CF_TOKEN\""
-    elif command -v perl &> /dev/null; then
-        perl -i -pe "s/(dns_provider: cloudflare)/\$1\n  cloudflare_api_token: \"\Q$CF_TOKEN\E\"/g" configs/config.yaml
-    else
-        error "Neither Python nor Perl found. Cannot add Cloudflare token."
-        exit 1
-    fi
-
-    log "Cloudflare token added to configs/config.yaml (git-ignored)."
+if [ -z "$CF_TOKEN" ]; then
+    error "Cloudflare API token cannot be empty."
+    exit 1
 fi
+
+# Insert token into certificate section
+if command -v python3 &> /dev/null; then
+    python3 scripts/template_substitute.py configs/config.yaml configs/config.yaml \
+        -s "CLOUDFLARE_API_TOKEN_PLACEHOLDER" "$CF_TOKEN"
+elif command -v perl &> /dev/null; then
+    perl -i -pe "s/CLOUDFLARE_API_TOKEN_PLACEHOLDER/\Q$CF_TOKEN\E/g" configs/config.yaml
+else
+    error "Neither Python nor Perl found. Cannot add Cloudflare token."
+    exit 1
+fi
+
+log "Cloudflare token added to configs/config.yaml (git-ignored)."
 
 log "Setup script completed successfully!"
 

@@ -62,6 +62,8 @@ certificate:
   email: "LETSENCRYPT_EMAIL_PLACEHOLDER"
   domain: "INTERNAL_DOMAIN_PLACEHOLDER"    # Should match dns.domain for automatic HTTPS
   ca_dir_url: "LETSENCRYPT_URL_PLACEHOLDER"
+  # Cloudflare API token for DNS-01 challenges (required)
+  cloudflare_api_token: "CLOUDFLARE_API_TOKEN_PLACEHOLDER"
   # DNS resolvers for ACME challenge verification (use public DNS servers instead of Docker's internal resolver)
   dns_resolvers:
     - "8.8.8.8:53"

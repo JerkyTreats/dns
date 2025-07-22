@@ -27,7 +27,6 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/jerkytreats/dns/internal/config"
-	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/logging"
 )
 
@@ -43,7 +42,6 @@ const (
 	CertRenewalCheckIntervalKey = "certificate.renewal.check_interval"
 	CertDNSResolversKey         = "certificate.dns_resolvers"
 	CertDNSTimeoutKey           = "certificate.dns_timeout"
-	CertDNSProviderKey          = "certificate.dns_provider"
 	CertCloudflareTokenKey      = "certificate.cloudflare_api_token"
 )
 
@@ -94,85 +92,65 @@ func NewManager() (*Manager, error) {
 	email := config.GetString(CertEmailKey)
 	certPath := config.GetString(CertCertFileKey)
 	keyPath := config.GetString(CertKeyFileKey)
-	zonesPath := config.GetString("dns.coredns.zones_path")
 
 	// Derive ACME paths from the certificate path
 	acmeDir := filepath.Dir(certPath)
 	acmeUserPath := filepath.Join(acmeDir, "acme_user.json")
 	acmeKeyPath := filepath.Join(acmeDir, "acme_key.pem")
 
-	var (
-		dnsProvider challenge.Provider
-		err         error
-	)
+	// Cloudflare DNS provider for ACME challenges
+	logging.Info("Using Cloudflare DNS provider for ACME challenges")
 
-	providerType := config.GetString(CertDNSProviderKey)
-	if providerType == "" {
-		providerType = "coredns"
+	// Prefer env var for security; fall back to config key
+	cfToken := os.Getenv("CLOUDFLARE_API_TOKEN")
+	if cfToken == "" {
+		cfToken = config.GetString(CertCloudflareTokenKey)
 	}
 
-	switch providerType {
-	case "cloudflare":
-		logging.Info("Using Cloudflare DNS provider for ACME challenges")
+	if cfToken == "" {
+		return nil, fmt.Errorf("cloudflare api token not provided via CLOUDFLARE_API_TOKEN env var or %s config key", CertCloudflareTokenKey)
+	}
 
-		// Prefer env var for security; fall back to config key
-		cfToken := os.Getenv("CLOUDFLARE_API_TOKEN")
-		if cfToken == "" {
-			cfToken = config.GetString(CertCloudflareTokenKey)
-		}
+	cfConfig := cloudflare.NewDefaultConfig()
+	cfConfig.AuthToken = cfToken
 
-		if cfToken == "" {
-			return nil, fmt.Errorf("cloudflare api token not provided via CLOUDFLARE_API_TOKEN env var or %s config key", CertCloudflareTokenKey)
-		}
-
-		cfConfig := cloudflare.NewDefaultConfig()
-		cfConfig.AuthToken = cfToken
-
-		var discoveredZoneID string
-		// Attempt to resolve ZoneID automatically based on certificate domain
-		domainForCert := config.GetString(CertDomainKey)
-		if domainForCert != "" {
-			// Use Cloudflare API to find matching zone ID by walking up labels
-			api, apiErr := cfapi.NewWithAPIToken(cfToken, cfapi.HTTPClient(&http.Client{Timeout: 10 * time.Second}))
-			if apiErr == nil {
-				zoneCandidate := domainForCert
-				for {
-					id, zidErr := api.ZoneIDByName(zoneCandidate)
-					if zidErr == nil {
-						logging.Info("Discovered Cloudflare ZoneID %s for %s", id, zoneCandidate)
-						discoveredZoneID = id
-						break
-					}
-					if !strings.Contains(zoneCandidate, ".") {
-						break // cannot strip further
-					}
-					zoneCandidate = zoneCandidate[strings.Index(zoneCandidate, ".")+1:]
+	var discoveredZoneID string
+	// Attempt to resolve ZoneID automatically based on certificate domain
+	domainForCert := config.GetString(CertDomainKey)
+	if domainForCert != "" {
+		// Use Cloudflare API to find matching zone ID by walking up labels
+		api, apiErr := cfapi.NewWithAPIToken(cfToken, cfapi.HTTPClient(&http.Client{Timeout: 10 * time.Second}))
+		if apiErr == nil {
+			zoneCandidate := domainForCert
+			for {
+				id, zidErr := api.ZoneIDByName(zoneCandidate)
+				if zidErr == nil {
+					logging.Info("Discovered Cloudflare ZoneID %s for %s", id, zoneCandidate)
+					discoveredZoneID = id
+					break
 				}
+				if !strings.Contains(zoneCandidate, ".") {
+					break // cannot strip further
+				}
+				zoneCandidate = zoneCandidate[strings.Index(zoneCandidate, ".")+1:]
 			}
 		}
+	}
 
-		if discoveredZoneID == "" {
-			return nil, fmt.Errorf("could not auto-discover Cloudflare ZoneID for domain %s", domainForCert)
-		}
+	if discoveredZoneID == "" {
+		return nil, fmt.Errorf("could not auto-discover Cloudflare ZoneID for domain %s", domainForCert)
+	}
 
-		dnsProvider, err = cloudflare.NewDNSProviderConfig(cfConfig)
-		if err != nil {
-			return nil, fmt.Errorf("could not create Cloudflare DNS provider: %w", err)
-		}
+	cloudflareProvider, err := cloudflare.NewDNSProviderConfig(cfConfig)
+	if err != nil {
+		return nil, fmt.Errorf("could not create Cloudflare DNS provider: %w", err)
+	}
 
-		// Wrap the provider with our proactive cleanup layer.
-		logging.Info("[SETUP] Wrapping Cloudflare provider with proactive cleanup layer.")
-		dnsProvider, err = NewCleaningDNSProvider(dnsProvider, cfToken, discoveredZoneID)
-		if err != nil {
-			return nil, fmt.Errorf("could not create cleaning DNS provider: %w", err)
-		}
-
-	case "coredns":
-		logging.Info("Using internal CoreDNS provider for ACME challenges")
-		dnsProvider = coredns.NewDNSProvider(zonesPath)
-
-	default:
-		return nil, fmt.Errorf("unsupported certificate.dns_provider value: %s", providerType)
+	// Wrap the provider with our proactive cleanup layer.
+	logging.Info("[SETUP] Wrapping Cloudflare provider with proactive cleanup layer.")
+	dnsProvider, err := NewCleaningDNSProvider(cloudflareProvider, cfToken, discoveredZoneID)
+	if err != nil {
+		return nil, fmt.Errorf("could not create cleaning DNS provider: %w", err)
 	}
 
 	user, err := loadUser(acmeUserPath, acmeKeyPath)

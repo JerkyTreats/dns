@@ -202,12 +202,12 @@ cp /app/templates/config.yaml.template /app/configs/config.yaml
             -s "enabled: false" "enabled: true"
     fi
 
-    # Configure DNS provider if specified
-    if [ "$CERTIFICATE_DNS_PROVIDER" = "cloudflare" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+    # Configure Cloudflare API token (required)
+    if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
         python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
-            -s "provider: \"lego\"" "provider: \"lego\"
-  dns_provider: cloudflare
-  cloudflare_api_token: \"$CLOUDFLARE_API_TOKEN\""
+            -s "CLOUDFLARE_API_TOKEN_PLACEHOLDER" "$CLOUDFLARE_API_TOKEN"
+    else
+        warn "CLOUDFLARE_API_TOKEN not provided - certificate obtainment will fail"
     fi
 
     log "Configuration created successfully"

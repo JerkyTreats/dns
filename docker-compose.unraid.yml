@@ -28,7 +28,6 @@ services:
       # Optional configuration
       - USE_PRODUCTION_CERTS=${USE_PRODUCTION_CERTS:-false}
       - LETSENCRYPT_URL=${LETSENCRYPT_URL:-https://acme-staging-v02.api.letsencrypt.org/directory}
-      - CERTIFICATE_DNS_PROVIDER=${CERTIFICATE_DNS_PROVIDER:-coredns}
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
       - TAILSCALE_DEVICE_NAME=${TAILSCALE_DEVICE_NAME}
       - ENABLE_TLS=${ENABLE_TLS:-false}
