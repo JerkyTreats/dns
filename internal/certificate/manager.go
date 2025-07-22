@@ -260,7 +260,8 @@ func NewManager() (*Manager, error) {
 	dns01Options = append(dns01Options, dns01.DisableCompletePropagationRequirement())
 
 	// Add exponential backoff for pre-check to wait for propagation
-	propagationTimeout := 5 * time.Minute
+	// Use realistic DNS propagation timeouts (5-10 minutes for reliable global propagation)
+	propagationTimeout := 10 * time.Minute
 	logging.Info("Adding exponential backoff for pre-check with a timeout of %v", propagationTimeout)
 	dns01Options = append(dns01Options, exponentialBackoff(propagationTimeout))
 
@@ -573,7 +574,10 @@ func NewCleaningDNSProvider(provider challenge.Provider, token, zoneID string) (
 
 // Present ensures old records are removed before creating the new one.
 func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
-	fqdn, _ := dns01.GetRecord(domain, keyAuth)
+	fqdn, value := dns01.GetRecord(domain, keyAuth)
+
+	logging.Info("Starting ACME challenge presentation for domain: %s", domain)
+	logging.Debug("ACME challenge details - FQDN: %s, Expected value: %s", fqdn, value)
 
 	// Ensure the base subdomain exists in Cloudflare before creating ACME challenge
 	if err := d.ensureSubdomainExists(domain); err != nil {
@@ -581,12 +585,17 @@ func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
 		// Continue anyway in case it was a permission issue but domain actually exists
 	}
 
+	// Clean up any existing TXT records for this FQDN to prevent conflicts
 	if err := d.cleanupRecords(fqdn); err != nil {
 		logging.Error("Failed to cleanup existing records: %v", err)
 	}
 
-	time.Sleep(5 * time.Second)
+	// Additional wait after cleanup to ensure DNS propagation
+	logging.Info("Waiting 30 seconds before creating new ACME challenge record...")
+	time.Sleep(30 * time.Second)
 
+	// Create the new ACME challenge record
+	logging.Info("Creating new ACME challenge TXT record for %s", fqdn)
 	return d.wrappedProvider.Present(domain, token, keyAuth)
 }
 
@@ -649,6 +658,9 @@ func (d *CleaningDNSProvider) cleanupRecords(fqdn string) error {
 		return fmt.Errorf("could not create Cloudflare API client: %w", err)
 	}
 
+	logging.Info("Cleaning up existing TXT records for %s", fqdn)
+
+	// Get all TXT records for this FQDN
 	records, _, err := api.ListDNSRecords(context.Background(), cfapi.ZoneIdentifier(d.cfZoneID), cfapi.ListDNSRecordsParams{
 		Type: "TXT",
 		Name: fqdn,
@@ -657,10 +669,31 @@ func (d *CleaningDNSProvider) cleanupRecords(fqdn string) error {
 		return fmt.Errorf("could not list DNS records: %w", err)
 	}
 
+	if len(records) == 0 {
+		logging.Debug("No existing TXT records found for %s", fqdn)
+		return nil
+	}
+
+	logging.Info("Found %d existing TXT records for %s, deleting all", len(records), fqdn)
+
+	// Delete all existing TXT records for this FQDN to prevent conflicts
+	deletedCount := 0
 	for _, record := range records {
+		logging.Debug("Deleting TXT record ID %s with content: %s", record.ID, record.Content)
 		if err := api.DeleteDNSRecord(context.Background(), cfapi.ZoneIdentifier(d.cfZoneID), record.ID); err != nil {
 			logging.Error("Failed to delete DNS record %s: %v", record.ID, err)
+		} else {
+			deletedCount++
+			logging.Debug("Successfully deleted TXT record ID %s", record.ID)
 		}
+	}
+
+	logging.Info("Cleanup completed: deleted %d/%d TXT records for %s", deletedCount, len(records), fqdn)
+
+	// Wait for DNS cleanup to propagate (realistic timing for global DNS propagation)
+	if deletedCount > 0 {
+		logging.Info("Waiting 60 seconds for DNS cleanup to propagate...")
+		time.Sleep(60 * time.Second)
 	}
 
 	return nil
