@@ -58,6 +58,7 @@ proxy:
   caddy:
     config_path: /etc/caddy/Caddyfile
     template_path: /etc/caddy/Caddyfile.template
+    port: CADDY_PORT_PLACEHOLDER   # Port for Caddy to listen on
 
 logging:
   level: debug

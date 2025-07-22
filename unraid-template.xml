@@ -196,6 +196,10 @@
             Description="Enable reverse proxy functionality for automatic service discovery and routing"
             Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 
+    <Config Name="Caddy Port" Target="CADDY_PORT" Default="80"
+            Description="Port for Caddy reverse proxy to listen on (default: 80)"
+            Type="Variable" Display="advanced" Required="false" Mask="false">80</Config>
+
     <Config Name="DNS Resolvers" Target="DNS_RESOLVERS" Default="8.8.8.8:53,1.1.1.1:53"
             Description="Comma-separated list of DNS resolvers for ACME challenge verification"
             Type="Variable" Display="advanced" Required="false" Mask="false">8.8.8.8:53,1.1.1.1:53</Config>

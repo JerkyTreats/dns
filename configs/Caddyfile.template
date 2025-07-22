@@ -21,29 +21,31 @@
 
 {{/* Dynamic proxy rules will be generated below */}}
 {{- if .ProxyRules}}
-# Reverse proxy rules
+# Reverse proxy rules on port {{.Port}}
+:{{.Port}} {
 {{- range .ProxyRules}}
 {{- if .Enabled}}
 
-# Proxy rule for {{.Hostname}}
-{{.Hostname}} {
-	reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
-		# Headers to pass through
-		header_up Host {host}
-		header_up X-Real-IP {remote_host}
-		header_up X-Forwarded-For {remote_host}
-		header_up X-Forwarded-Proto {scheme}
+	# Proxy rule for {{.Hostname}}
+	{{.Hostname}} {
+		reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
+			# Headers to pass through
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+
+		# Logging for this specific host
+		log {
+			output stdout
+			format console
+		}
 	}
 
-	# Logging for this specific host
-	log {
-		output stdout
-		format console
-	}
+{{- end}}
+{{- end}}
 }
-
-{{- end}}
-{{- end}}
 {{- else}}
 # No proxy rules configured
 {{- end}}

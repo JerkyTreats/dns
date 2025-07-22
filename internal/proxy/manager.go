@@ -69,6 +69,7 @@ type ProxyConfig struct {
 	ProxyRules  []*ProxyRule
 	GeneratedAt string
 	Version     int
+	Port        string
 }
 
 // ProxyManagerInterface defines the interface for proxy management
@@ -88,6 +89,7 @@ type Manager struct {
 	templatePath string
 	enabled      bool
 	reloader     Reloader
+	port         string
 
 	rules         map[string]*ProxyRule
 	configVersion int
@@ -114,6 +116,11 @@ func NewManagerWithReloader(reloader Reloader) (*Manager, error) {
 		templatePath = DefaultProxyTemplatePath
 	}
 
+	port := config.GetString("proxy.caddy.port")
+	if port == "" {
+		port = "80"
+	}
+
 	enabled := config.GetBool("proxy.enabled")
 	if !enabled {
 		logging.Info("Reverse proxy is disabled")
@@ -122,17 +129,19 @@ func NewManagerWithReloader(reloader Reloader) (*Manager, error) {
 			templatePath: templatePath,
 			enabled:      false,
 			reloader:     reloader,
+			port:         port,
 			rules:        make(map[string]*ProxyRule),
 		}, nil
 	}
 
-	logging.Info("Proxy manager initialized with config path: %s", configPath)
+	logging.Info("Proxy manager initialized with config path: %s, port: %s", configPath, port)
 
 	return &Manager{
 		configPath:   configPath,
 		templatePath: templatePath,
 		enabled:      true,
 		reloader:     reloader,
+		port:         port,
 		rules:        make(map[string]*ProxyRule),
 	}, nil
 }
@@ -240,6 +249,7 @@ func (m *Manager) generateConfig() error {
 		ProxyRules:  activeRules,
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		Version:     m.configVersion + 1,
+		Port:        m.port,
 	}
 
 	// Execute template

@@ -222,6 +222,15 @@ cp /app/templates/config.yaml.template /app/configs/config.yaml
         fi
     fi
 
+    # Configure Caddy port
+    if [ -n "$CADDY_PORT" ]; then
+        python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+            -s "CADDY_PORT_PLACEHOLDER" "$CADDY_PORT"
+    else
+        python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+            -s "CADDY_PORT_PLACEHOLDER" "80"
+    fi
+
     log "Configuration created successfully"
 
 # Try to auto-configure Tailscale device name if not set and Python/API are available
