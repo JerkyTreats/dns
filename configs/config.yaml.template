@@ -52,6 +52,13 @@ device:
     path: "data/devices.json"      # Path to device data file
     backup_count: 3                # Number of backup files to keep
 
+# Proxy configuration
+proxy:
+  enabled: true                    # Enable reverse proxy functionality
+  caddy:
+    config_path: /etc/caddy/Caddyfile
+    template_path: /etc/caddy/Caddyfile.template
+
 logging:
   level: debug
   format: json

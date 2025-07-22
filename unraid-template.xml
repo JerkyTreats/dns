@@ -192,6 +192,10 @@
             Description="Enable HTTPS/TLS when certificates are ready"
             Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
 
+    <Config Name="Enable Reverse Proxy" Target="PROXY_ENABLED" Default="true"
+            Description="Enable reverse proxy functionality for automatic service discovery and routing"
+            Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+
     <Config Name="DNS Resolvers" Target="DNS_RESOLVERS" Default="8.8.8.8:53,1.1.1.1:53"
             Description="Comma-separated list of DNS resolvers for ACME challenge verification"
             Type="Variable" Display="advanced" Required="false" Mask="false">8.8.8.8:53,1.1.1.1:53</Config>

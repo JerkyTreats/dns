@@ -210,6 +210,17 @@ cp /app/templates/config.yaml.template /app/configs/config.yaml
         warn "CLOUDFLARE_API_TOKEN not provided - certificate obtainment will fail"
     fi
 
+    # Configure proxy enabled setting
+    if [ -n "$PROXY_ENABLED" ]; then
+        if [ "$PROXY_ENABLED" = "true" ]; then
+            python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+                -s "enabled: true" "enabled: true"
+        else
+            python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+                -s "enabled: true" "enabled: false"
+        fi
+    fi
+
     log "Configuration created successfully"
 
 # Try to auto-configure Tailscale device name if not set and Python/API are available
