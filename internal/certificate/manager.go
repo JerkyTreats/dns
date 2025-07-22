@@ -346,7 +346,14 @@ func (m *Manager) ObtainCertificateWithRetry(domain string) error {
 		}
 
 		backoff := time.Duration(attempt*attempt) * time.Second
-		jitter := time.Duration(mathrand.Intn(int(backoff/4))) * time.Second
+
+		// Fix jitter calculation to handle zero/negative cases
+		jitterMax := int(backoff / 4)
+		var jitter time.Duration
+		if jitterMax > 0 {
+			jitter = time.Duration(mathrand.Intn(jitterMax)) * time.Second
+		}
+
 		sleepTime := backoff + jitter
 
 		logging.Info("Certificate obtainment failed, retrying in %v (attempt %d/%d): %v", sleepTime, attempt, maxRetries, err)
