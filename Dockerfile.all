@@ -54,10 +54,18 @@ RUN wget -q https://github.com/coredns/coredns/releases/download/v1.11.1/coredns
     && rm coredns_1.11.1_linux_amd64.tgz \
     && chmod +x /usr/local/bin/coredns
 
+# Install Caddy for reverse proxy functionality
+RUN wget -q https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_linux_amd64.tar.gz \
+    && tar -xzf caddy_2.7.6_linux_amd64.tar.gz \
+    && mv caddy /usr/local/bin/ \
+    && rm caddy_2.7.6_linux_amd64.tar.gz \
+    && chmod +x /usr/local/bin/caddy
+
 # Copy configuration templates and scripts to internal locations
 RUN mkdir -p /app/templates /app/scripts
 COPY configs/config.yaml.template /app/templates/
 COPY configs/coredns/ /app/templates/coredns/
+COPY configs/Caddyfile.template /app/templates/
 COPY scripts/template_substitute.py /app/scripts/
 COPY scripts/configure_ns.py /app/scripts/
 
@@ -106,6 +114,17 @@ redirect_stderr=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 startsecs=10
+
+[program:caddy]
+command=/usr/local/bin/caddy run --config /app/configs/Caddyfile
+directory=/app
+autostart=true
+autorestart=true
+startretries=3
+redirect_stderr=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+startsecs=5
 EOF
 
 # Create initialization script
@@ -220,6 +239,28 @@ if [ ! -f "/etc/coredns/Corefile.template" ]; then
     exit 1
 fi
 
+# Create initial Caddyfile if it doesn't exist
+if [ ! -f "/app/configs/Caddyfile" ]; then
+    log "Creating initial Caddyfile..."
+    cat > /app/configs/Caddyfile << 'CADDY_EOF'
+# Initial Caddyfile - will be updated by proxy manager
+{
+    admin off
+    auto_https off
+    log {
+        output stdout
+        format console
+        level INFO
+    }
+}
+
+# Health check endpoint
+:2019 {
+    respond /health "OK" 200
+}
+CADDY_EOF
+fi
+
 log "Initialization complete, starting services..."
 EOF
 
@@ -267,7 +308,7 @@ ENV GIN_MODE=release
 ENV COREDNS_HEALTH_PORT=8082
 
 # Expose all required ports
-EXPOSE 8080 8443 53/udp 53/tcp 853 8082
+EXPOSE 8080 8443 53/udp 53/tcp 853 8082 80 2019
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

@@ -54,7 +54,7 @@ func setupTestHandler(t *testing.T) *RecordHandler {
 	err = manager.AddZone("test-service")
 	require.NoError(t, err)
 
-	handler, err := NewRecordHandler(manager)
+	handler, err := NewRecordHandler(manager, nil)
 	require.NoError(t, err)
 
 	return handler
@@ -151,7 +151,7 @@ func TestListRecordsHandler(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create handler with the manager that has records
-	handler, err = NewRecordHandler(manager)
+	handler, err = NewRecordHandler(manager, nil)
 	require.NoError(t, err)
 
 	tests := []struct {

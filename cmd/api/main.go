@@ -19,6 +19,7 @@ import (
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/persistence"
+	"github.com/jerkytreats/dns/internal/proxy"
 	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/jerkytreats/dns/internal/tailscale/sync"
 )
@@ -42,6 +43,7 @@ const (
 var (
 	syncManager     *sync.Manager
 	dnsManager      *coredns.Manager
+	proxyManager    *proxy.Manager
 	dnsChecker      healthcheck.Checker
 	firewallManager *firewall.Manager
 )
@@ -118,17 +120,36 @@ func main() {
 
 	dnsManager = newCoreDNSManager(currentDeviceIP)
 
+	// Initialize proxy manager
+	logging.Info("Initializing proxy manager...")
+	proxyManager, err = proxy.NewManager()
+	if err != nil {
+		logging.Error("Failed to initialize proxy manager: %v", err)
+		os.Exit(1)
+	}
+	logging.Info("Proxy manager initialized successfully")
+
 	domain := config.GetString(coredns.DNSDomainKey)
 	if domain != "" {
 		if err := dnsManager.AddZone(domain); err != nil {
 			logging.Warn("Failed to ensure zone file exists for domain %s: %v", domain, err)
 		}
 
-		// Add DNS record for the API endpoint (dns.{domain})
+		// Add DNS record for the API endpoint (dns.{domain}) - points to this device for proxy
 		if err := dnsManager.AddRecord(domain, "dns", currentDeviceIP); err != nil {
 			logging.Warn("Failed to add API endpoint record dns.%s -> %s: %v", domain, currentDeviceIP, err)
 		} else {
 			logging.Info("Added API endpoint record: dns.%s -> %s", domain, currentDeviceIP)
+		}
+
+		// Add proxy rule for the API endpoint to handle port 80 -> 8080 forwarding
+		if proxyManager.IsEnabled() {
+			apiPort := config.GetInt(ServerPortKey)
+			if err := proxyManager.AddRule(fmt.Sprintf("dns.%s", domain), currentDeviceIP, apiPort); err != nil {
+				logging.Warn("Failed to add proxy rule for DNS API: %v", err)
+			} else {
+				logging.Info("Added proxy rule: dns.%s -> %s:%d", domain, currentDeviceIP, apiPort)
+			}
 		}
 	}
 
@@ -177,8 +198,8 @@ func main() {
 		}
 	}()
 
-	// Initialize handler registry with all handlers
-	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, dnsChecker, syncManager)
+	// Initialize handler registry with all handlers including proxy manager
+	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, dnsChecker, syncManager, proxyManager)
 	if err != nil {
 		logging.Error("Failed to initialize handler registry: %v", err)
 		os.Exit(1)

@@ -6,6 +6,7 @@ import (
 	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/jerkytreats/dns/internal/proxy"
 	devicehandler "github.com/jerkytreats/dns/internal/tailscale/handler"
 	"github.com/jerkytreats/dns/internal/tailscale/sync"
 )
@@ -19,11 +20,11 @@ type HandlerRegistry struct {
 }
 
 // NewHandlerRegistry creates a new handler registry with all handlers initialized
-func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Checker, syncManager *sync.Manager) (*HandlerRegistry, error) {
+func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Checker, syncManager *sync.Manager, proxyManager *proxy.Manager) (*HandlerRegistry, error) {
 	logging.Info("Initializing handler registry with all application handlers")
 
 	// Initialize handlers from their respective domains
-	recordHandler, err := NewRecordHandler(dnsManager)
+	recordHandler, err := NewRecordHandler(dnsManager, proxyManager)
 	if err != nil {
 		return nil, err
 	}

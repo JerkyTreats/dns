@@ -1,0 +1,54 @@
+# Caddyfile Template for DNS Manager Reverse Proxy
+# This file is dynamically generated - do not edit manually
+# Generated at: {{.GeneratedAt}}
+# Configuration version: {{.Version}}
+
+# Global options
+{
+	# Disable admin API on standard port to avoid conflicts
+	admin off
+
+	# Enable automatic HTTPS for internal domains
+	auto_https off
+
+	# Log configuration
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}
+
+{{/* Dynamic proxy rules will be generated below */}}
+{{- if .ProxyRules}}
+# Reverse proxy rules
+{{- range .ProxyRules}}
+{{- if .Enabled}}
+
+# Proxy rule for {{.Hostname}}
+{{.Hostname}} {
+	reverse_proxy {{.TargetIP}}:{{.TargetPort}}
+
+	# Logging for this specific host
+	log {
+		output stdout
+		format console
+	}
+
+	# Headers to pass through
+	header_up Host {host}
+	header_up X-Real-IP {remote_host}
+	header_up X-Forwarded-For {remote_host}
+	header_up X-Forwarded-Proto {scheme}
+}
+
+{{- end}}
+{{- end}}
+{{- else}}
+# No proxy rules configured
+{{- end}}
+
+# Health check endpoint for Caddy itself
+:2019 {
+	respond /health "OK" 200
+}
