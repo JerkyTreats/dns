@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -210,6 +212,12 @@ func main() {
 	<-serverStarted
 	logging.Info("HTTP server started successfully")
 
+	// Register the DNS API service itself using the simplified add-record endpoint
+	go func() {
+		time.Sleep(1 * time.Second) // Brief delay to ensure server is ready
+		registerDNSAPIService()
+	}()
+
 	if tlsEnabled && certReadyCh != nil {
 		logging.Info("TLS is enabled, setting up dual HTTP/HTTPS servers...")
 		go func() {
@@ -314,4 +322,49 @@ func maybeSync(dnsMgr *coredns.Manager, tailscaleClient *tailscale.Client) *sync
 
 	logging.Info("Dynamic zone sync completed successfully")
 	return sm
+}
+
+// registerDNSAPIService registers the DNS API service itself using the simplified add-record endpoint
+func registerDNSAPIService() {
+	baseDomain := config.GetString(coredns.DNSDomainKey)
+	if baseDomain == "" {
+		logging.Warn("No dns.domain configured, skipping DNS API self-registration")
+		return
+	}
+
+	// Create the DNS record name (e.g., "dns.internal.jerkytreats.dev")
+	serviceName := fmt.Sprintf("dns.%s", baseDomain)
+	serverPort := config.GetInt(ServerPortKey)
+
+	logging.Info("Registering DNS API service: %s -> port %d with automatic proxy", serviceName, serverPort)
+
+	// Prepare the simplified add-record request
+	requestBody := map[string]interface{}{
+		"service_name": "dns-api",
+		"name":         serviceName,
+		"port":         serverPort, // Use configured server port for automatic proxy setup
+	}
+
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		logging.Error("Failed to marshal DNS API registration request: %v", err)
+		return
+	}
+
+	// Make HTTP request to local add-record endpoint
+	serverHost := config.GetString(ServerHostKey)
+	url := fmt.Sprintf("http://%s:%d/add-record", serverHost, serverPort)
+
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		logging.Error("Failed to register DNS API service: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusCreated {
+		logging.Info("Successfully registered DNS API service at %s", serviceName)
+	} else {
+		logging.Warn("DNS API self-registration returned status %d", resp.StatusCode)
+	}
 }
