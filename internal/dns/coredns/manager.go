@@ -329,6 +329,20 @@ func (m *Manager) AddRecord(serviceName, name, ip string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	originalName := name
+	name = sanitizeDNSName(name)
+
+	// Handle case where sanitization results in empty DNS name
+	if name == "" {
+		logging.Warn("Skipping record creation for %s - DNS name sanitization resulted in empty name", originalName)
+		return fmt.Errorf("name '%s' cannot be sanitized to valid DNS name", originalName)
+	}
+
+	// Log sanitization if name was changed
+	if name != originalName {
+		logging.Info("Sanitized DNS name for compliance: %s -> %s", originalName, name)
+	}
+
 	logging.Debug("Adding record %s -> %s for service %s", name, ip, serviceName)
 
 	// Note: serviceName helps identify the logical zone, but m.domain defines the file
