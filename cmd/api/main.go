@@ -332,11 +332,11 @@ func registerDNSAPIService() {
 		return
 	}
 
-	// Create the DNS record name (e.g., "dns.internal.jerkytreats.dev")
-	serviceName := fmt.Sprintf("dns.%s", baseDomain)
+	// Create the DNS record name (just "dns", domain will be appended automatically)
+	serviceName := "dns"
 	serverPort := config.GetInt(ServerPortKey)
 
-	logging.Info("Registering DNS API service: %s -> port %d with automatic proxy", serviceName, serverPort)
+	logging.Info("Registering DNS API service: %s.%s -> port %d with automatic proxy", serviceName, baseDomain, serverPort)
 
 	// Prepare the simplified add-record request
 	requestBody := map[string]interface{}{
@@ -363,7 +363,7 @@ func registerDNSAPIService() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusCreated {
-		logging.Info("Successfully registered DNS API service at %s", serviceName)
+		logging.Info("Successfully registered DNS API service at %s.%s", serviceName, baseDomain)
 	} else {
 		logging.Warn("DNS API self-registration returned status %d", resp.StatusCode)
 	}
