@@ -329,6 +329,25 @@ func (m *Manager) ObtainCertificate(domain string) error {
 	return nil
 }
 
+// calculateBackoffWithJitter calculates exponential backoff with jitter for retry attempts
+// Returns duration for backoff: attempt^2 seconds + random jitter (0-25% of backoff)
+func calculateBackoffWithJitter(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+
+	backoff := time.Duration(attempt*attempt) * time.Second
+
+	// Fix jitter calculation to handle zero/negative cases
+	jitterMax := int(backoff / 4) // 25% of backoff time in nanoseconds
+	var jitter time.Duration
+	if jitterMax > 0 {
+		jitter = time.Duration(mathrand.Intn(jitterMax))
+	}
+
+	return backoff + jitter
+}
+
 // ObtainCertificateWithRetry obtains a certificate with exponential backoff retry logic.
 // This method will keep retrying until successful or max retries is reached.
 // Returns an error if max retries is reached and certificate obtainment fails.
@@ -345,16 +364,7 @@ func (m *Manager) ObtainCertificateWithRetry(domain string) error {
 			return fmt.Errorf("failed to obtain certificate after %d attempts: %w", maxRetries, err)
 		}
 
-		backoff := time.Duration(attempt*attempt) * time.Second
-
-		// Fix jitter calculation to handle zero/negative cases
-		jitterMax := int(backoff / 4)
-		var jitter time.Duration
-		if jitterMax > 0 {
-			jitter = time.Duration(mathrand.Intn(jitterMax)) * time.Second
-		}
-
-		sleepTime := backoff + jitter
+		sleepTime := calculateBackoffWithJitter(attempt)
 
 		logging.Info("Certificate obtainment failed, retrying in %v (attempt %d/%d): %v", sleepTime, attempt, maxRetries, err)
 		time.Sleep(sleepTime)
@@ -565,6 +575,12 @@ func NewCleaningDNSProvider(provider challenge.Provider, token, zoneID string) (
 func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
 	fqdn, _ := dns01.GetRecord(domain, keyAuth)
 
+	// Ensure the base subdomain exists in Cloudflare before creating ACME challenge
+	if err := d.ensureSubdomainExists(domain); err != nil {
+		logging.Error("Failed to ensure subdomain exists: %v", err)
+		// Continue anyway in case it was a permission issue but domain actually exists
+	}
+
 	if err := d.cleanupRecords(fqdn); err != nil {
 		logging.Error("Failed to cleanup existing records: %v", err)
 	}
@@ -572,6 +588,54 @@ func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
 	time.Sleep(5 * time.Second)
 
 	return d.wrappedProvider.Present(domain, token, keyAuth)
+}
+
+// ensureSubdomainExists creates the base subdomain in Cloudflare if it doesn't exist
+func (d *CleaningDNSProvider) ensureSubdomainExists(domain string) error {
+	api, err := cfapi.NewWithAPIToken(d.cfAPIToken)
+	if err != nil {
+		return fmt.Errorf("could not create Cloudflare API client: %w", err)
+	}
+
+	// Check if subdomain already exists
+	records, _, err := api.ListDNSRecords(context.Background(), cfapi.ZoneIdentifier(d.cfZoneID), cfapi.ListDNSRecordsParams{
+		Name: domain,
+	})
+	if err != nil {
+		return fmt.Errorf("could not list DNS records for %s: %w", domain, err)
+	}
+
+	// If any record exists for this subdomain, we're good
+	if len(records) > 0 {
+		logging.Debug("Subdomain %s already exists in Cloudflare with %d records", domain, len(records))
+		return nil
+	}
+
+	// Create a dummy A record for the subdomain to make it resolvable
+	logging.Info("Creating subdomain %s in Cloudflare for ACME validation", domain)
+
+	record := cfapi.DNSRecord{
+		Type:    "A",
+		Name:    domain,
+		Content: "127.0.0.1", // Dummy IP - Tailscale will override this for internal routing
+		TTL:     300,         // 5 minutes
+		Comment: "Auto-created for Let's Encrypt ACME validation",
+	}
+
+	_, err = api.CreateDNSRecord(context.Background(), cfapi.ZoneIdentifier(d.cfZoneID), cfapi.CreateDNSRecordParams{
+		Type:    record.Type,
+		Name:    record.Name,
+		Content: record.Content,
+		TTL:     record.TTL,
+		Comment: record.Comment,
+	})
+
+	if err != nil {
+		return fmt.Errorf("could not create subdomain record for %s: %w", domain, err)
+	}
+
+	logging.Info("Successfully created subdomain %s in Cloudflare", domain)
+	return nil
 }
 
 // CleanUp delegates to the wrapped provider.
