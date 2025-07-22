@@ -378,7 +378,7 @@ func TestAddRecordHandler(t *testing.T) {
 							assert.NotNil(t, response.ProxyRule, "proxy_rule should be present when port is specified")
 							if response.ProxyRule != nil {
 								assert.Greater(t, response.ProxyRule.TargetPort, 0, "proxy rule should have valid target port")
-								assert.Equal(t, "test-record-with-port", response.ProxyRule.Hostname)
+								assert.Equal(t, "test-record-with-port.test.local", response.ProxyRule.Hostname)
 								assert.Equal(t, 3000, response.ProxyRule.TargetPort)
 								assert.Equal(t, "100.64.1.1", response.ProxyRule.TargetIP)
 							}

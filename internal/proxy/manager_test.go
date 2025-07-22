@@ -824,3 +824,189 @@ func TestAddRuleWithProxyRule_Disabled(t *testing.T) {
 	// Clean up
 	config.ResetForTest()
 }
+
+func TestAddRule_FQDNValidation(t *testing.T) {
+	manager, _ := setupTestManager(t)
+
+	tests := []struct {
+		name        string
+		hostname    string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Valid FQDN",
+			hostname:    "test.example.com",
+			expectError: false,
+		},
+		{
+			name:        "Valid FQDN with subdomain",
+			hostname:    "api.test.example.com",
+			expectError: false,
+		},
+		{
+			name:        "Valid FQDN with hyphens",
+			hostname:    "my-app.example.com",
+			expectError: false,
+		},
+		{
+			name:        "Valid FQDN with numbers",
+			hostname:    "app1.example.com",
+			expectError: false,
+		},
+		{
+			name:        "Empty hostname",
+			hostname:    "",
+			expectError: true,
+			errorMsg:    "hostname cannot be empty",
+		},
+		{
+			name:        "Missing domain separator",
+			hostname:    "dns",
+			expectError: true,
+			errorMsg:    "must contain at least one domain separator",
+		},
+		{
+			name:        "Starts with dot",
+			hostname:    ".example.com",
+			expectError: true,
+			errorMsg:    "cannot start or end with a dot",
+		},
+		{
+			name:        "Ends with dot",
+			hostname:    "test.example.com.",
+			expectError: true,
+			errorMsg:    "cannot start or end with a dot",
+		},
+		{
+			name:        "Empty domain part",
+			hostname:    "test..com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+		{
+			name:        "Invalid characters",
+			hostname:    "test@example.com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+		{
+			name:        "Starts with hyphen",
+			hostname:    "-test.example.com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+		{
+			name:        "Ends with hyphen",
+			hostname:    "test-.example.com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+		{
+			name:        "Domain part starts with hyphen",
+			hostname:    "test.-example.com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+		{
+			name:        "Domain part ends with hyphen",
+			hostname:    "test.example-.com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+		{
+			name:        "Underscore not allowed",
+			hostname:    "test_example.com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+		{
+			name:        "Space not allowed",
+			hostname:    "test example.com",
+			expectError: true,
+			errorMsg:    "contains invalid characters or format",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxyRule := &ProxyRule{
+				Hostname:   tt.hostname,
+				TargetIP:   "192.168.1.100",
+				TargetPort: 8080,
+				Protocol:   "http",
+				Enabled:    true,
+				CreatedAt:  time.Now(),
+			}
+
+			err := manager.AddRule(proxyRule)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+				// Verify no rule was added
+				rules := manager.ListRules()
+				assert.Len(t, rules, 0)
+			} else {
+				assert.NoError(t, err)
+				// Verify rule was added
+				rules := manager.ListRules()
+				assert.Len(t, rules, 1)
+				assert.Equal(t, tt.hostname, rules[0].Hostname)
+			}
+
+			// Clean up for next test
+			if !tt.expectError {
+				manager.RemoveRule(tt.hostname)
+			}
+		})
+	}
+
+	// Clean up
+	config.ResetForTest()
+}
+
+func TestRemoveRule_FQDNValidation(t *testing.T) {
+	manager, _ := setupTestManager(t)
+
+	tests := []struct {
+		name        string
+		hostname    string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "Valid FQDN",
+			hostname:    "test.example.com",
+			expectError: false,
+		},
+		{
+			name:        "Invalid hostname",
+			hostname:    "dns",
+			expectError: true,
+			errorMsg:    "must contain at least one domain separator",
+		},
+		{
+			name:        "Empty hostname",
+			hostname:    "",
+			expectError: true,
+			errorMsg:    "hostname cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := manager.RemoveRule(tt.hostname)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+
+	// Clean up
+	config.ResetForTest()
+}

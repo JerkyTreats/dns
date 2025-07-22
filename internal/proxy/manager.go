@@ -72,6 +72,45 @@ type ProxyRule struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// Validate checks if the ProxyRule is valid
+func (p *ProxyRule) Validate() error {
+	if err := validateFQDN(p.Hostname); err != nil {
+		return fmt.Errorf("invalid hostname: %w", err)
+	}
+
+	if p.TargetIP == "" {
+		return fmt.Errorf("target IP cannot be empty")
+	}
+
+	if p.TargetPort <= 0 || p.TargetPort > 65535 {
+		return fmt.Errorf("target port must be between 1 and 65535, got %d", p.TargetPort)
+	}
+
+	if p.Protocol != "http" && p.Protocol != "https" {
+		return fmt.Errorf("protocol must be 'http' or 'https', got '%s'", p.Protocol)
+	}
+
+	return nil
+}
+
+// NewProxyRule creates a new ProxyRule with validation
+func NewProxyRule(hostname, targetIP string, targetPort int, protocol string) (*ProxyRule, error) {
+	rule := &ProxyRule{
+		Hostname:   hostname,
+		TargetIP:   targetIP,
+		TargetPort: targetPort,
+		Protocol:   protocol,
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+
+	if err := rule.Validate(); err != nil {
+		return nil, fmt.Errorf("failed to create proxy rule: %w", err)
+	}
+
+	return rule, nil
+}
+
 // ProxyConfig represents the template data for Caddyfile generation
 type ProxyConfig struct {
 	ProxyRules  []*ProxyRule
@@ -155,10 +194,91 @@ func NewManagerWithReloader(reloader Reloader) (*Manager, error) {
 }
 
 // AddRule adds or updates a reverse proxy rule from ProxyRule
+// validateFQDN checks if a hostname is a valid FQDN
+func validateFQDN(hostname string) error {
+	if hostname == "" {
+		return fmt.Errorf("hostname cannot be empty")
+	}
+
+	// Check if it contains at least one dot (domain separator)
+	if !strings.Contains(hostname, ".") {
+		return fmt.Errorf("hostname '%s' is not a valid FQDN - must contain at least one domain separator (.)", hostname)
+	}
+
+	// Check if it starts or ends with a dot
+	if strings.HasPrefix(hostname, ".") || strings.HasSuffix(hostname, ".") {
+		return fmt.Errorf("hostname '%s' is not a valid FQDN - cannot start or end with a dot", hostname)
+	}
+
+	// Check for valid characters (letters, digits, hyphens, dots)
+	// Must start and end with alphanumeric
+	if !isValidFQDN(hostname) {
+		return fmt.Errorf("hostname '%s' is not a valid FQDN - contains invalid characters or format", hostname)
+	}
+
+	return nil
+}
+
+// isValidFQDN checks if a string is a valid FQDN format
+func isValidFQDN(hostname string) bool {
+	// Must not be empty
+	if hostname == "" {
+		return false
+	}
+
+	// Must contain at least one dot
+	if !strings.Contains(hostname, ".") {
+		return false
+	}
+
+	// Must not start or end with dot
+	if strings.HasPrefix(hostname, ".") || strings.HasSuffix(hostname, ".") {
+		return false
+	}
+
+	// Split by dots and validate each part
+	parts := strings.Split(hostname, ".")
+	for _, part := range parts {
+		// Each part must not be empty
+		if part == "" {
+			return false
+		}
+
+		// Each part must start and end with alphanumeric
+		if len(part) == 0 || !isAlphanumeric(part[0]) || !isAlphanumeric(part[len(part)-1]) {
+			return false
+		}
+
+		// Each part must only contain alphanumeric and hyphens
+		for _, char := range part {
+			if !isAlphanumericOrHyphen(char) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// isAlphanumeric checks if a byte is alphanumeric
+func isAlphanumeric(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// isAlphanumericOrHyphen checks if a rune is alphanumeric or hyphen
+func isAlphanumericOrHyphen(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-'
+}
+
 func (m *Manager) AddRule(proxyRule *ProxyRule) error {
 	if !m.enabled {
 		logging.Debug("Proxy disabled, skipping rule addition for %s", proxyRule.Hostname)
 		return nil
+	}
+
+	// Validate the entire ProxyRule struct
+	if err := proxyRule.Validate(); err != nil {
+		return fmt.Errorf("invalid proxy rule: %w", err)
 	}
 
 	m.mu.Lock()
@@ -185,6 +305,11 @@ func (m *Manager) RemoveRule(hostname string) error {
 	if !m.enabled {
 		logging.Debug("Proxy disabled, skipping rule removal for %s", hostname)
 		return nil
+	}
+
+	// Validate FQDN before proceeding
+	if err := validateFQDN(hostname); err != nil {
+		return fmt.Errorf("invalid proxy rule hostname: %w", err)
 	}
 
 	m.mu.Lock()

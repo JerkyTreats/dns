@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
@@ -186,25 +185,18 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			fqdn := fmt.Sprintf("%s.%s", req.Name, config.GetString(coredns.DNSDomainKey))
 			// Create ProxyRule directly
-			proxyRule := &proxy.ProxyRule{
-				Hostname:   req.Name,
-				TargetIP:   targetIP,
-				TargetPort: *req.Port,
-				Protocol:   "http",
-				Enabled:    true,
-				CreatedAt:  time.Now(),
-			}
-
-			// Create proxy rule using ProxyRule
-			if err := h.proxyManager.AddRule(proxyRule); err != nil {
-				logging.Error("Failed to add proxy rule: %v", err)
+			proxyRule, err := proxy.NewProxyRule(fqdn, targetIP, *req.Port, "http")
+			if err != nil {
+				logging.Error("Failed to create proxy rule: %v", err)
 				logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
 			} else {
 				logging.Info("Successfully added proxy rule: %s -> %s:%d", req.Name, targetIP, *req.Port)
 				// Use the same ProxyRule directly in response
 				record.ProxyRule = proxyRule
 			}
+
 		} else {
 			logging.Warn("Unable to determine source IP - skipping proxy setup")
 		}
