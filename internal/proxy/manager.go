@@ -50,7 +50,7 @@ const (
 // Default values for optional configuration keys
 const (
 	DefaultProxyConfigPath   = "/app/configs/Caddyfile"
-	DefaultProxyTemplatePath = "/app/templates/Caddyfile.template"
+	DefaultProxyTemplatePath = "/etc/caddy/Caddyfile.template"
 	DefaultProxyEnabled      = true
 )
 
@@ -106,12 +106,12 @@ func NewManager() (*Manager, error) {
 func NewManagerWithReloader(reloader Reloader) (*Manager, error) {
 	configPath := config.GetString("proxy.caddy.config_path")
 	if configPath == "" {
-		configPath = "/etc/caddy/Caddyfile"
+		configPath = DefaultProxyConfigPath
 	}
 
 	templatePath := config.GetString("proxy.caddy.template_path")
 	if templatePath == "" {
-		templatePath = "/etc/caddy/Caddyfile.template"
+		templatePath = DefaultProxyTemplatePath
 	}
 
 	enabled := config.GetBool("proxy.enabled")
