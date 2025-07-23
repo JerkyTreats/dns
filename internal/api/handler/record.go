@@ -160,57 +160,16 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// If port is specified, create proxy rule with device detection
-	if req.Port != nil && h.proxyManager != nil && h.tailscaleClient != nil {
-		// Extract source IP from request
-		sourceIP := proxy.GetSourceIP(r)
-		if sourceIP != "" {
-			logging.Info("Detected source IP: %s", sourceIP)
+	proxyRule, err := h.getProxyRule(r, &req)
+	if err != nil {
+		logging.Error("Failed to get proxy rule: %v", err)
+	}
 
-			// Find corresponding Tailscale device
-			device, err := h.tailscaleClient.GetDeviceByIP(sourceIP)
-			var targetIP string
-
-			if err != nil {
-				logging.Warn("Failed to find device for IP %s: %v - using DNS Manager as fallback", sourceIP, err)
-				targetIP = dnsManagerIP
-			} else {
-				// Use device's Tailscale IP
-				targetIP = h.tailscaleClient.GetTailscaleIP(device)
-				if targetIP == "" {
-					logging.Warn("No Tailscale IP found for device %s - using DNS Manager as fallback", device.Name)
-					targetIP = dnsManagerIP
-				} else {
-					logging.Info("Found source device: %s (%s) -> %s", device.Name, device.Hostname, targetIP)
-				}
-			}
-
-			fqdn := fmt.Sprintf("%s.%s", req.Name, config.GetString(coredns.DNSDomainKey))
-			// Create ProxyRule directly
-			proxyRule, err := proxy.NewProxyRule(fqdn, targetIP, *req.Port, "http")
-			if err != nil {
-				logging.Error("Failed to create proxy rule: %v", err)
-				logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
-			} else {
-				if err := h.proxyManager.AddRule(proxyRule); err != nil {
-					logging.Error("Failed to add proxy rule: %v", err)
-					logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
-				} else {
-					logging.Info("Successfully added proxy rule: %s -> %s:%d", req.Name, targetIP, *req.Port)
-					// Use the same ProxyRule directly in response
-					record.ProxyRule = proxyRule
-				}
-			}
-
-		} else {
-			logging.Warn("Unable to determine source IP - skipping proxy setup")
-		}
-	} else if req.Port != nil {
-		if h.proxyManager == nil {
-			logging.Warn("Proxy manager not available - skipping proxy setup")
-		}
-		if h.tailscaleClient == nil {
-			logging.Warn("Tailscale client not available - skipping proxy setup")
+	if proxyRule != nil {
+		record.ProxyRule = proxyRule
+		err = h.proxyManager.AddRule(proxyRule)
+		if err != nil {
+			logging.Error("Failed to add proxy rule: %v", err)
 		}
 	}
 
@@ -270,4 +229,49 @@ func (h *RecordHandler) ListRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.Info("Successfully returned %d records", len(records))
+}
+
+func (h *RecordHandler) getProxyRule(r *http.Request, req *AddRecordRequest) (*proxy.ProxyRule, error) {
+
+	if req.Port == nil {
+		return nil, fmt.Errorf("port is required")
+	}
+
+	if h.proxyManager == nil {
+		return nil, fmt.Errorf("proxy manager not available")
+	}
+
+	if h.tailscaleClient == nil {
+		return nil, fmt.Errorf("tailscale client not available")
+	}
+
+	// 195.x.x.x
+	sourceIP := proxy.GetSourceIP(r)
+	if sourceIP == "" {
+		return nil, fmt.Errorf("source IP not found")
+	}
+
+	// 100.x.x.x
+	deviceIP, err := h.tailscaleClient.GetTailscaleIPFromSourceIP(sourceIP)
+	if err != nil || deviceIP == "" {
+		return nil, fmt.Errorf("failed to get device by IP: %w", err)
+	}
+
+	logging.Info("Detected source IP: %s", deviceIP)
+
+	fqdn := fmt.Sprintf("%s.%s", req.Name, config.GetString(coredns.DNSDomainKey))
+
+	proxyRule, err := proxy.NewProxyRule(fqdn, deviceIP, *req.Port, "http")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create proxy rule: %w", err)
+	}
+
+	if err := h.proxyManager.AddRule(proxyRule); err != nil {
+		return nil, fmt.Errorf("failed to add proxy rule: %w", err)
+	}
+
+	logging.Info("Successfully created proxy rule: %s -> %s:%d", req.Name, deviceIP, *req.Port)
+
+	return proxyRule, nil
+
 }

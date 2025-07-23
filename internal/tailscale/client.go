@@ -39,6 +39,7 @@ type TailscaleClientInterface interface {
 	GetCurrentDeviceIP() (string, error)
 	GetDeviceByIP(ip string) (*Device, error)
 	GetTailscaleIP(device *Device) string
+	GetTailscaleIPFromSourceIP(sourceIP string) (string, error)
 }
 
 // Client represents a Tailscale API client
@@ -410,4 +411,13 @@ func GetTailscaleIPFromAddresses(addresses []string) string {
 		}
 	}
 	return ""
+}
+
+// GetTailscaleIPFromSourceIP finds a Tailscale IP (100.x.x.x) by its source IP address (195.x.x.x)
+func (c *Client) GetTailscaleIPFromSourceIP(sourceIP string) (string, error) {
+	device, err := c.GetDeviceByIP(sourceIP)
+	if err != nil {
+		return "", fmt.Errorf("failed to get device by IP: %w", err)
+	}
+	return c.GetTailscaleIP(device), nil
 }

@@ -97,6 +97,14 @@ func (m *mockTailscaleClient) GetTailscaleIP(device *tailscale.Device) string {
 	return ""
 }
 
+func (m *mockTailscaleClient) GetTailscaleIPFromSourceIP(sourceIP string) (string, error) {
+	device, err := m.GetDeviceByIP(sourceIP)
+	if err != nil {
+		return "", err
+	}
+	return m.GetTailscaleIP(device), nil
+}
+
 func (m *mockTailscaleClient) ListDevices() ([]tailscale.Device, error) {
 	return m.devices, nil
 }
