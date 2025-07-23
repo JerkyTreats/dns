@@ -192,9 +192,14 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 				logging.Error("Failed to create proxy rule: %v", err)
 				logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
 			} else {
-				logging.Info("Successfully added proxy rule: %s -> %s:%d", req.Name, targetIP, *req.Port)
-				// Use the same ProxyRule directly in response
-				record.ProxyRule = proxyRule
+				if err := h.proxyManager.AddRule(proxyRule); err != nil {
+					logging.Error("Failed to add proxy rule: %v", err)
+					logging.Warn("DNS record created but proxy rule failed - service accessible via DNS only")
+				} else {
+					logging.Info("Successfully added proxy rule: %s -> %s:%d", req.Name, targetIP, *req.Port)
+					// Use the same ProxyRule directly in response
+					record.ProxyRule = proxyRule
+				}
 			}
 
 		} else {
