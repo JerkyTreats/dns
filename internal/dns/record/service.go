@@ -192,19 +192,29 @@ func (s *Service) createProxyRuleFromRequest(req CreateRecordRequest, r *http.Re
 		return nil, fmt.Errorf("tailscale client not available")
 	}
 
-	// Get source IP from request
-	sourceIP := proxy.GetSourceIP(r)
-	if sourceIP == "" {
-		return nil, fmt.Errorf("source IP not found in request")
+	// Get device name from config or use the one from the request header if available
+	deviceName := config.GetString("tailscale.device_name")
+	
+	// Try to get device IP directly using the device name
+	var deviceIP string
+	var err error
+	
+	if deviceName != "" {
+		logging.Debug("Using configured device name for proxy target: %s", deviceName)
+		deviceIP, err = s.tailscaleClient.GetCurrentDeviceIPByName(deviceName)
+		if err != nil || deviceIP == "" {
+			return nil, fmt.Errorf("failed to get Tailscale IP for device '%s': %w", deviceName, err)
+		}
+	} else {
+		// Fallback to hostname-based detection
+		logging.Debug("No device name configured, using hostname-based detection for proxy target")
+		deviceIP, err = s.tailscaleClient.GetCurrentDeviceIP()
+		if err != nil || deviceIP == "" {
+			return nil, fmt.Errorf("failed to get current device Tailscale IP: %w", err)
+		}
 	}
 
-	// Resolve Tailscale device IP from source IP
-	deviceIP, err := s.tailscaleClient.GetTailscaleIPFromSourceIP(sourceIP)
-	if err != nil || deviceIP == "" {
-		return nil, fmt.Errorf("failed to get device IP from source IP %s: %w", sourceIP, err)
-	}
-
-	logging.Info("Detected source IP: %s -> device IP: %s", sourceIP, deviceIP)
+	logging.Info("Using Tailscale device IP for proxy rule: %s", deviceIP)
 
 	// Build FQDN
 	domain := config.GetString(coredns.DNSDomainKey)
