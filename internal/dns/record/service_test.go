@@ -227,8 +227,8 @@ func TestCreateRecord(t *testing.T) {
 	})
 }
 
-// Test for CreateRecordWithSourceIP
-func TestCreateRecordWithSourceIP(t *testing.T) {
+// Test for CreateRecord with device detection
+func TestCreateRecordWithDeviceDetection(t *testing.T) {
 	// Setup test config for DNS domain
 	setupTestConfig()
 	t.Run("successful creation with source IP", func(t *testing.T) {
@@ -253,13 +253,13 @@ func TestCreateRecordWithSourceIP(t *testing.T) {
 		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
 		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(nil)
 		mockProxyManager.On("IsEnabled").Return(true)
-		mockTailscaleClient.On("GetTailscaleIPFromSourceIP", "192.168.1.10").Return("100.64.0.2", nil)
+		// With the new implementation, we use device detection instead of source IP
 		mockProxyManager.On("AddRule", mock.MatchedBy(func(rule *proxy.ProxyRule) bool {
-			return rule != nil && rule.Hostname == "testrecord.internal"
+			return rule != nil && rule.Hostname == "testrecord.internal" && rule.TargetIP == "100.64.0.1"
 		})).Return(nil)
 
 		// Act
-		record, err := service.CreateRecordWithSourceIP(req, httpReq)
+		record, err := service.CreateRecord(req, httpReq)
 
 		// Assert
 		assert.NoError(t, err)
@@ -274,7 +274,7 @@ func TestCreateRecordWithSourceIP(t *testing.T) {
 		mockProxyManager.AssertExpectations(t)
 	})
 
-	t.Run("source IP resolution error", func(t *testing.T) {
+	t.Run("device detection success", func(t *testing.T) {
 		// Arrange
 		mockDNSManager := new(MockDNSManager)
 		mockProxyManager := new(MockProxyManager)
@@ -296,18 +296,21 @@ func TestCreateRecordWithSourceIP(t *testing.T) {
 		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
 		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(nil)
 		mockProxyManager.On("IsEnabled").Return(true)
-		mockTailscaleClient.On("GetTailscaleIPFromSourceIP", "192.168.1.10").Return("", errors.New("source IP resolution error"))
+		// With the new implementation, we use device detection instead of source IP
+		mockProxyManager.On("AddRule", mock.MatchedBy(func(rule *proxy.ProxyRule) bool {
+			return rule != nil && rule.Hostname == "testrecord.internal" && rule.TargetIP == "100.64.0.1"
+		})).Return(nil)
 
 		// Act
-		record, err := service.CreateRecordWithSourceIP(req, httpReq)
+		record, err := service.CreateRecord(req, httpReq)
 
 		// Assert
-		assert.NoError(t, err) // Operation should still succeed even if proxy creation fails
+		assert.NoError(t, err)
 		assert.NotNil(t, record)
 		assert.Equal(t, req.Name, record.Name)
 		assert.Equal(t, "A", record.Type)
 		assert.Equal(t, "100.64.0.1", record.IP)
-		assert.Nil(t, record.ProxyRule) // Proxy rule should not be set due to error
+		assert.NotNil(t, record.ProxyRule) // Changed from assert.Nil to assert.NotNil
 
 		mockTailscaleClient.AssertExpectations(t)
 		mockDNSManager.AssertExpectations(t)

@@ -35,8 +35,8 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create record using service layer with source IP detection
-	recordResult, err := h.recordService.CreateRecordWithSourceIP(req, r)
+	// Create record using service layer with device detection
+	recordResult, err := h.recordService.CreateRecord(req, r)
 	if err != nil {
 		logging.Error("Failed to create record: %v", err)
 		http.Error(w, "Failed to create record", http.StatusInternalServerError)

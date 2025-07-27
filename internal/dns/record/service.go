@@ -38,8 +38,16 @@ func NewService(
 }
 
 // CreateRecord creates a new record with DNS and optional proxy rule
-func (s *Service) CreateRecord(req CreateRecordRequest) (*Record, error) {
-	logging.Info("Creating record: %s.%s", req.Name, req.ServiceName)
+// If httpRequest is provided, it will attempt to create a proxy rule with automatic device detection
+// Otherwise, it will use the DNS Manager IP for the proxy rule target
+func (s *Service) CreateRecord(req CreateRecordRequest, httpRequest ...*http.Request) (*Record, error) {
+	// Determine if we're using automatic device detection based on HTTP request
+	usingDeviceDetection := len(httpRequest) > 0 && httpRequest[0] != nil
+	if usingDeviceDetection {
+		logging.Info("Creating record with device detection: %s.%s", req.Name, req.ServiceName)
+	} else {
+		logging.Info("Creating record: %s.%s", req.Name, req.ServiceName)
+	}
 
 	// 1. Validate input
 	if err := s.validator.ValidateCreateRequest(req); err != nil {
@@ -64,54 +72,23 @@ func (s *Service) CreateRecord(req CreateRecordRequest) (*Record, error) {
 
 	// 5. Create proxy rule if port is specified and proxy manager is available
 	if req.Port != nil && s.proxyManager != nil && s.proxyManager.IsEnabled() {
-		proxyRule, err := s.createProxyRule(req, dnsManagerIP)
-		if err != nil {
-			logging.Error("Failed to create proxy rule: %v", err)
-			// Don't fail the entire operation, just log the error
+		var proxyRule *proxy.ProxyRule
+		var err error
+
+		if usingDeviceDetection {
+			// Use device detection for proxy target
+			proxyRule, err = s.createProxyRuleWithDeviceDetection(req)
 		} else {
-			record.ProxyRule = FromProxyRule(proxyRule)
-			logging.Info("Successfully created proxy rule: %s -> %s:%d", 
-				req.Name, proxyRule.TargetIP, proxyRule.TargetPort)
+			// Use DNS Manager IP for proxy target
+			proxyRule, err = s.createProxyRule(req, dnsManagerIP)
 		}
-	}
 
-	return record, nil
-}
-
-// CreateRecordWithSourceIP creates a record with automatic device detection from source IP
-func (s *Service) CreateRecordWithSourceIP(req CreateRecordRequest, r *http.Request) (*Record, error) {
-	logging.Info("Creating record with source IP detection: %s.%s", req.Name, req.ServiceName)
-
-	// 1. Validate input
-	if err := s.validator.ValidateCreateRequest(req); err != nil {
-		return nil, fmt.Errorf("validation failed: %w", err)
-	}
-
-	// 2. Resolve DNS Manager IP for DNS record
-	dnsManagerIP, err := s.getDNSManagerIP()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get DNS Manager IP: %w", err)
-	}
-
-	// 3. Create DNS record pointing to DNS Manager
-	if err := s.dnsManager.AddRecord(req.ServiceName, req.Name, dnsManagerIP); err != nil {
-		return nil, fmt.Errorf("failed to add DNS record: %w", err)
-	}
-
-	logging.Info("Successfully added DNS record: %s -> %s", req.Name, dnsManagerIP)
-
-	// 4. Create unified record response
-	record := NewRecord(req.Name, "A", dnsManagerIP)
-
-	// 5. Create proxy rule if port is specified and proxy manager is available
-	if req.Port != nil && s.proxyManager != nil && s.proxyManager.IsEnabled() {
-		proxyRule, err := s.createProxyRuleFromRequest(req, r)
 		if err != nil {
 			logging.Error("Failed to create proxy rule: %v", err)
 			// Don't fail the entire operation, just log the error
 		} else {
 			record.ProxyRule = FromProxyRule(proxyRule)
-			logging.Info("Successfully created proxy rule: %s -> %s:%d", 
+			logging.Info("Successfully created proxy rule: %s -> %s:%d",
 				req.Name, proxyRule.TargetIP, proxyRule.TargetPort)
 		}
 	}
@@ -129,7 +106,7 @@ func (s *Service) ListRecords() ([]Record, error) {
 func (s *Service) getDNSManagerIP() (string, error) {
 	if s.tailscaleClient == nil {
 		logging.Warn("Tailscale client not available - using fallback IP for DNS records")
-		return "127.0.0.1", nil // Test fallback
+		return "", fmt.Errorf("tailscale client not available")
 	}
 
 	var ip string
@@ -182,8 +159,8 @@ func (s *Service) createProxyRule(req CreateRecordRequest, dnsManagerIP string) 
 	return proxyRule, nil
 }
 
-// createProxyRuleFromRequest creates a proxy rule with automatic device detection from HTTP request
-func (s *Service) createProxyRuleFromRequest(req CreateRecordRequest, r *http.Request) (*proxy.ProxyRule, error) {
+// createProxyRuleWithDeviceDetection creates a proxy rule with automatic device detection
+func (s *Service) createProxyRuleWithDeviceDetection(req CreateRecordRequest) (*proxy.ProxyRule, error) {
 	if req.Port == nil {
 		return nil, fmt.Errorf("port is required for proxy rule creation")
 	}
@@ -194,11 +171,11 @@ func (s *Service) createProxyRuleFromRequest(req CreateRecordRequest, r *http.Re
 
 	// Get device name from config or use the one from the request header if available
 	deviceName := config.GetString("tailscale.device_name")
-	
+
 	// Try to get device IP directly using the device name
 	var deviceIP string
 	var err error
-	
+
 	if deviceName != "" {
 		logging.Debug("Using configured device name for proxy target: %s", deviceName)
 		deviceIP, err = s.tailscaleClient.GetCurrentDeviceIPByName(deviceName)
