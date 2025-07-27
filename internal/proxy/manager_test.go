@@ -46,7 +46,7 @@ func setupTestManager(t *testing.T) (*Manager, string) {
 	config.SetForTest("proxy.enabled", "true")
 
 	// Create manager with mock reloader for testing
-	manager, err := NewManagerWithReloader(&MockReloader{})
+	manager, err := NewManager(&MockReloader{})
 	require.NoError(t, err)
 
 	return manager, tempDir
@@ -67,7 +67,7 @@ func TestNewManager(t *testing.T) {
 	config.SetForTest("proxy.caddy.template_path", templatePath)
 	config.SetForTest("proxy.enabled", "true")
 
-	manager, err := NewManager()
+	manager, err := NewManager(nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, manager)
 	assert.True(t, manager.enabled)
@@ -82,7 +82,7 @@ func TestNewManager(t *testing.T) {
 func TestNewManager_Disabled(t *testing.T) {
 	config.SetForTest("proxy.enabled", "false")
 
-	manager, err := NewManager()
+	manager, err := NewManager(nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, manager)
 	assert.False(t, manager.enabled)
@@ -113,7 +113,7 @@ func TestNewManager_DefaultValues(t *testing.T) {
 	config.SetForTest("proxy.caddy.template_path", testTemplatePath)
 	// Don't set proxy.enabled to test default
 
-	manager, err := NewManager()
+	manager, err := NewManager(nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, manager)
 	assert.False(t, manager.enabled) // Should be false when not explicitly enabled

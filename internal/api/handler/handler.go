@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/dns/record"
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
 	"github.com/jerkytreats/dns/internal/proxy"
@@ -24,8 +25,11 @@ type HandlerRegistry struct {
 func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Checker, syncManager *sync.Manager, proxyManager *proxy.Manager, tailscaleClient *tailscale.Client) (*HandlerRegistry, error) {
 	logging.Info("Initializing handler registry with all application handlers")
 
+	// Create record service with all dependencies
+	recordService := record.NewService(dnsManager, proxyManager, tailscaleClient)
+
 	// Initialize handlers from their respective domains
-	recordHandler, err := NewRecordHandler(dnsManager, proxyManager, tailscaleClient)
+	recordHandler, err := NewRecordHandler(recordService)
 	if err != nil {
 		return nil, err
 	}

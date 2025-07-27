@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -127,6 +128,7 @@ type ProxyManagerInterface interface {
 	ListRules() []*ProxyRule
 	IsEnabled() bool
 	GetStats() map[string]interface{}
+	RestoreFromStorage() error
 }
 
 // Manager manages reverse proxy rules and configuration
@@ -148,12 +150,12 @@ type Manager struct {
 var _ ProxyManagerInterface = (*Manager)(nil)
 
 // NewManager creates a new proxy manager
-func NewManager() (*Manager, error) {
-	return NewManagerWithReloader(&CaddyReloader{})
-}
+// If reloader is nil, a default CaddyReloader will be used
+func NewManager(reloader Reloader) (*Manager, error) {
+	if reloader == nil {
+		reloader = &CaddyReloader{}
+	}
 
-// NewManagerWithReloader creates a new proxy manager with a custom reloader
-func NewManagerWithReloader(reloader Reloader) (*Manager, error) {
 	configPath := config.GetString("proxy.caddy.config_path")
 	if configPath == "" {
 		configPath = DefaultProxyConfigPath
@@ -184,14 +186,25 @@ func NewManagerWithReloader(reloader Reloader) (*Manager, error) {
 
 	logging.Info("Proxy manager initialized with config path: %s, port: %s", configPath, port)
 
-	return &Manager{
+	manager := &Manager{
 		configPath:   configPath,
 		templatePath: templatePath,
 		enabled:      true,
 		reloader:     reloader,
 		port:         port,
 		rules:        make(map[string]*ProxyRule),
-	}, nil
+	}
+
+	// Restore proxy rules from storage (Caddyfile) during initialization
+	logging.Info("Restoring proxy rules from storage...")
+	if err := manager.RestoreFromStorage(); err != nil {
+		logging.Warn("Failed to restore proxy rules from storage: %v", err)
+		logging.Warn("Continuing with empty proxy rules...")
+	} else {
+		logging.Info("Proxy rules restored successfully from storage")
+	}
+
+	return manager, nil
 }
 
 // AddRule adds or updates a reverse proxy rule from ProxyRule
@@ -390,4 +403,141 @@ func GetSourceIP(r *http.Request) string {
 
 	logging.Warn("Unable to determine source IP from request")
 	return ""
+}
+
+// RestoreFromStorage restores proxy rules from the persisted Caddyfile
+// This method reads the existing Caddyfile and extracts proxy rules to populate the in-memory rules map
+func (m *Manager) RestoreFromStorage() error {
+	if !m.enabled {
+		logging.Debug("Proxy disabled, skipping storage restoration")
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logging.Info("Restoring proxy rules from Caddyfile: %s", m.configPath)
+
+	// Check if Caddyfile exists
+	if _, err := os.Stat(m.configPath); os.IsNotExist(err) {
+		logging.Debug("Caddyfile does not exist, no rules to restore")
+		return nil
+	}
+
+	// Read existing Caddyfile
+	content, err := os.ReadFile(m.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read Caddyfile: %w", err)
+	}
+
+	// Parse proxy rules from Caddyfile content
+	rules, err := m.parseRulesFromCaddyfile(string(content))
+	if err != nil {
+		return fmt.Errorf("failed to parse rules from Caddyfile: %w", err)
+	}
+
+	// Clear existing rules and populate with restored rules
+	m.rules = make(map[string]*ProxyRule)
+	for _, rule := range rules {
+		m.rules[rule.Hostname] = rule
+	}
+
+	logging.Info("Successfully restored %d proxy rules from Caddyfile", len(rules))
+	return nil
+}
+
+// parseRulesFromCaddyfile extracts proxy rules from Caddyfile content
+// This is a simplified parser that looks for reverse_proxy directives
+func (m *Manager) parseRulesFromCaddyfile(content string) ([]*ProxyRule, error) {
+	var rules []*ProxyRule
+
+	// Split content into lines for parsing
+	lines := strings.Split(content, "\n")
+	currentHostname := ""
+
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Look for hostname blocks (lines ending with {)
+		if strings.HasSuffix(line, " {") {
+			currentHostname = strings.TrimSuffix(line, " {")
+			continue
+		}
+
+		// Look for reverse_proxy directives
+		if strings.HasPrefix(line, "reverse_proxy") && currentHostname != "" {
+			// Parse reverse_proxy line: "reverse_proxy http://100.64.1.10:8080"
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				target := parts[1]
+
+				// Parse target URL to extract IP and port
+				targetIP, targetPort, protocol, err := m.parseTargetURL(target)
+				if err != nil {
+					logging.Warn("Failed to parse target URL %s on line %d: %v", target, i+1, err)
+					continue
+				}
+
+				rule := &ProxyRule{
+					Hostname:   currentHostname,
+					TargetIP:   targetIP,
+					TargetPort: targetPort,
+					Protocol:   protocol,
+					Enabled:    true,
+					CreatedAt:  time.Now(), // We don't have original creation time
+				}
+
+				rules = append(rules, rule)
+				logging.Debug("Parsed proxy rule: %s -> %s:%d", currentHostname, targetIP, targetPort)
+			}
+		}
+
+		// Reset hostname when block ends
+		if line == "}" {
+			currentHostname = ""
+		}
+	}
+
+	return rules, nil
+}
+
+// parseTargetURL parses a target URL and extracts IP, port, and protocol
+// Supports formats like: http://100.64.1.10:8080, https://100.64.1.10:443
+func (m *Manager) parseTargetURL(target string) (string, int, string, error) {
+	// Default values
+	protocol := "http"
+	port := 80
+
+	// Remove protocol prefix
+	if strings.HasPrefix(target, "https://") {
+		protocol = "https"
+		port = 443
+		target = strings.TrimPrefix(target, "https://")
+	} else if strings.HasPrefix(target, "http://") {
+		protocol = "http"
+		port = 80
+		target = strings.TrimPrefix(target, "http://")
+	}
+
+	// Split IP and port
+	parts := strings.Split(target, ":")
+	if len(parts) < 1 {
+		return "", 0, "", fmt.Errorf("invalid target format: %s", target)
+	}
+
+	ip := parts[0]
+	if len(parts) >= 2 {
+		var err error
+		port, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return "", 0, "", fmt.Errorf("invalid port in target: %s", parts[1])
+		}
+	}
+
+	return ip, port, protocol, nil
 }

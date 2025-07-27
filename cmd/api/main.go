@@ -124,7 +124,7 @@ func main() {
 
 	// Initialize proxy manager
 	logging.Info("Initializing proxy manager...")
-	proxyManager, err = proxy.NewManager()
+	proxyManager, err = proxy.NewManager(nil)
 	if err != nil {
 		logging.Error("Failed to initialize proxy manager: %v", err)
 		os.Exit(1)

@@ -565,7 +565,6 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 | **Proxy Enhancement** | ⏳ TODO | Add Caddyfile persistence + initialization | None | **HIGH** |
 | **API Refactoring** | ⏳ TODO | Thin handlers using service | Record Service | **MEDIUM** |
 | **Configuration** | ⏳ TODO | Add generation config keys | None | **LOW** |
-| **Integration Tests** | ⏳ TODO | End-to-end testing | All components | **HIGH** |
 
 ### Phase 2: Proxy Manager Enhancement
 

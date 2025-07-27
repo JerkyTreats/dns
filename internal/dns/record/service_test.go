@@ -1,0 +1,372 @@
+package record
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/proxy"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+func setupTestConfig() {
+	// Mock the config package for DNS domain
+	config.SetForTest(coredns.DNSDomainKey, "internal")
+}
+
+// Test for NewService
+func TestNewService(t *testing.T) {
+	// Arrange
+	mockDNSManager := new(MockDNSManager)
+	mockProxyManager := new(MockProxyManager)
+	mockTailscaleClient := new(MockTailscaleClient)
+
+	// Act
+	service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+	// Assert
+	assert.NotNil(t, service)
+	assert.Same(t, mockDNSManager, service.dnsManager)
+	assert.Same(t, mockProxyManager, service.proxyManager)
+	assert.Same(t, mockTailscaleClient, service.tailscaleClient)
+	assert.NotNil(t, service.generator)
+	assert.NotNil(t, service.validator)
+}
+
+// Test for CreateRecord
+func TestCreateRecord(t *testing.T) {
+	// Setup test config for DNS domain
+	setupTestConfig()
+	t.Run("successful creation without proxy", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := CreateRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
+		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(nil)
+
+		// Act
+		record, err := service.CreateRecord(req)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, record)
+		assert.Equal(t, req.Name, record.Name)
+		assert.Equal(t, "A", record.Type)
+		assert.Equal(t, "100.64.0.1", record.IP)
+		assert.Nil(t, record.ProxyRule)
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertNotCalled(t, "AddRule")
+	})
+
+	t.Run("successful creation with proxy", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		port := 8080
+		req := CreateRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+			Port:        &port,
+		}
+
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
+		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+		mockProxyManager.On("AddRule", mock.MatchedBy(func(rule *proxy.ProxyRule) bool {
+			return rule != nil && rule.Hostname == "testrecord.internal"
+		})).Return(nil)
+
+		// Act
+		record, err := service.CreateRecord(req)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, record)
+		assert.Equal(t, req.Name, record.Name)
+		assert.Equal(t, "A", record.Type)
+		assert.Equal(t, "100.64.0.1", record.IP)
+		assert.NotNil(t, record.ProxyRule)
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+
+	t.Run("validation error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := CreateRecordRequest{
+			// Missing required fields
+		}
+
+		// Act
+		record, err := service.CreateRecord(req)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		assert.Contains(t, err.Error(), "validation failed")
+
+		mockTailscaleClient.AssertNotCalled(t, "GetCurrentDeviceIP")
+		mockDNSManager.AssertNotCalled(t, "AddRecord")
+	})
+
+	t.Run("tailscale error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := CreateRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("", errors.New("tailscale error"))
+
+		// Act
+		record, err := service.CreateRecord(req)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		assert.Contains(t, err.Error(), "failed to get DNS Manager IP")
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertNotCalled(t, "AddRecord")
+	})
+
+	t.Run("dns manager error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := CreateRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
+		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(errors.New("dns error"))
+
+		// Act
+		record, err := service.CreateRecord(req)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Nil(t, record)
+		assert.Contains(t, err.Error(), "failed to add DNS record")
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+	})
+
+	t.Run("proxy manager error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		port := 8080
+		req := CreateRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+			Port:        &port,
+		}
+
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
+		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+		mockProxyManager.On("AddRule", mock.AnythingOfType("*proxy.ProxyRule")).Return(errors.New("proxy error"))
+
+		// Act
+		record, err := service.CreateRecord(req)
+
+		// Assert
+		assert.NoError(t, err) // Operation should still succeed even if proxy creation fails
+		assert.NotNil(t, record)
+		assert.Equal(t, req.Name, record.Name)
+		assert.Equal(t, "A", record.Type)
+		assert.Equal(t, "100.64.0.1", record.IP)
+		assert.Nil(t, record.ProxyRule) // Proxy rule should not be set due to error
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+}
+
+// Test for CreateRecordWithSourceIP
+func TestCreateRecordWithSourceIP(t *testing.T) {
+	// Setup test config for DNS domain
+	setupTestConfig()
+	t.Run("successful creation with source IP", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		port := 8080
+		req := CreateRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+			Port:        &port,
+		}
+
+		// Create test HTTP request with source IP
+		httpReq := httptest.NewRequest(http.MethodPost, "/records", nil)
+		httpReq.RemoteAddr = "192.168.1.10:45678"
+
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
+		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+		mockTailscaleClient.On("GetTailscaleIPFromSourceIP", "192.168.1.10").Return("100.64.0.2", nil)
+		mockProxyManager.On("AddRule", mock.MatchedBy(func(rule *proxy.ProxyRule) bool {
+			return rule != nil && rule.Hostname == "testrecord.internal"
+		})).Return(nil)
+
+		// Act
+		record, err := service.CreateRecordWithSourceIP(req, httpReq)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, record)
+		assert.Equal(t, req.Name, record.Name)
+		assert.Equal(t, "A", record.Type)
+		assert.Equal(t, "100.64.0.1", record.IP)
+		assert.NotNil(t, record.ProxyRule)
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+
+	t.Run("source IP resolution error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		port := 8080
+		req := CreateRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+			Port:        &port,
+		}
+
+		// Create test HTTP request with source IP
+		httpReq := httptest.NewRequest(http.MethodPost, "/records", nil)
+		httpReq.RemoteAddr = "192.168.1.10:45678"
+
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.64.0.1", nil)
+		mockDNSManager.On("AddRecord", req.ServiceName, req.Name, "100.64.0.1").Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+		mockTailscaleClient.On("GetTailscaleIPFromSourceIP", "192.168.1.10").Return("", errors.New("source IP resolution error"))
+
+		// Act
+		record, err := service.CreateRecordWithSourceIP(req, httpReq)
+
+		// Assert
+		assert.NoError(t, err) // Operation should still succeed even if proxy creation fails
+		assert.NotNil(t, record)
+		assert.Equal(t, req.Name, record.Name)
+		assert.Equal(t, "A", record.Type)
+		assert.Equal(t, "100.64.0.1", record.IP)
+		assert.Nil(t, record.ProxyRule) // Proxy rule should not be set due to error
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+}
+
+// Test for ListRecords
+func TestListRecords(t *testing.T) {
+	t.Run("successful listing", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		// Create a mock generator that will be injected into the service
+		mockGenerator := new(MockGenerator)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+		// Replace the generator with our mock
+		service.generator = mockGenerator
+
+		expectedRecords := []Record{
+			{Name: "record1", Type: "A", IP: "100.64.0.1"},
+			{Name: "record2", Type: "A", IP: "100.64.0.2"},
+		}
+
+		mockGenerator.On("GenerateRecords").Return(expectedRecords, nil)
+
+		// Act
+		records, err := service.ListRecords()
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, expectedRecords, records)
+		mockGenerator.AssertExpectations(t)
+	})
+
+	t.Run("generator error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		// Create a mock generator that will be injected into the service
+		mockGenerator := new(MockGenerator)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+		// Replace the generator with our mock
+		service.generator = mockGenerator
+
+		mockGenerator.On("GenerateRecords").Return([]Record{}, errors.New("generator error"))
+
+		// Act
+		records, err := service.ListRecords()
+
+		// Assert
+		assert.Error(t, err)
+		assert.Empty(t, records)
+		mockGenerator.AssertExpectations(t)
+	})
+}
