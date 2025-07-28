@@ -28,6 +28,7 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/miekg/dns"
 )
 
 const (
@@ -43,6 +44,9 @@ const (
 	CertDNSResolversKey         = "certificate.dns_resolvers"
 	CertDNSTimeoutKey           = "certificate.dns_timeout"
 	CertCloudflareTokenKey      = "certificate.cloudflare_api_token"
+	CertDNSCleanupWaitKey       = "certificate.dns_cleanup_wait"
+	CertDNSCreationWaitKey      = "certificate.dns_creation_wait"
+	CertUseProdCertsKey         = "certificate.use_production_certs"
 )
 
 func init() {
@@ -57,6 +61,9 @@ func init() {
 	config.RegisterRequiredKey(CertDNSResolversKey)
 	config.RegisterRequiredKey(CertDNSTimeoutKey)
 	config.RegisterRequiredKey(CertCloudflareTokenKey)
+	config.RegisterRequiredKey(CertDNSCleanupWaitKey)
+	config.RegisterRequiredKey(CertDNSCreationWaitKey)
+	config.RegisterRequiredKey(CertUseProdCertsKey)
 }
 
 // User implements acme.User
@@ -327,11 +334,70 @@ func calculateBackoffWithJitter(attempt int) time.Duration {
 	return backoff + jitter
 }
 
-// ObtainCertificateWithRetry obtains a certificate with exponential backoff retry logic.
-// This method will keep retrying until successful or max retries is reached.
-// Returns an error if max retries is reached and certificate obtainment fails.
+// calculateRateLimitAwareBackoff calculates backoff that respects Let's Encrypt rate limits
+// Let's Encrypt allows 5 authorization failures per hour (refills 1 every 12 minutes)
+// This ensures we don't exceed these limits with reasonable spacing
+func calculateRateLimitAwareBackoff(attempt int, isProduction bool) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	
+	if !isProduction {
+		// Staging environment is more generous (200 failures/hour)
+		// Use faster exponential backoff: 2^attempt minutes with jitter
+		backoff := time.Duration(1<<uint(attempt-1)) * time.Minute
+		if backoff > 30*time.Minute {
+			backoff = 30 * time.Minute
+		}
+		
+		// Add 20% jitter
+		jitterMax := int(backoff / 5)
+		var jitter time.Duration
+		if jitterMax > 0 {
+			jitter = time.Duration(mathrand.Intn(jitterMax))
+		}
+		
+		return backoff + jitter
+	}
+	
+	// Production environment: respect 5 failures/hour limit (12 minutes between failures)
+	switch attempt {
+	case 1:
+		return 2 * time.Minute  // First retry: short delay for transient issues
+	case 2:
+		return 12 * time.Minute // Second retry: minimum refill interval
+	case 3:
+		return 15 * time.Minute // Third retry: slightly longer
+	case 4:
+		return 20 * time.Minute // Fourth retry: more spacing
+	default:
+		// After 4 attempts, wait longer to avoid hitting weekly certificate limits
+		return 30 * time.Minute
+	}
+}
+
+// isRateLimitError checks if an error indicates Let's Encrypt rate limiting
+func isRateLimitError(err error) bool {
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "rate limit") || 
+		   strings.Contains(errStr, "too many certificates") ||
+		   strings.Contains(errStr, "rate limited") ||
+		   strings.Contains(errStr, "ratelimited")
+}
+
+// ObtainCertificateWithRetry obtains a certificate with rate-limit-aware backoff retry logic.
+// This method uses intelligent backoff that respects Let's Encrypt rate limits to prevent
+// hitting authorization failure limits (5/hour in production, 200/hour in staging).
 func (m *Manager) ObtainCertificateWithRetry(domain string) error {
-	maxRetries := 10
+	isProduction := config.GetBool(CertUseProdCertsKey)
+	
+	// Reduce max retries to avoid hitting rate limits
+	// Production: 5 attempts max (respects 5 failures/hour limit)
+	// Staging: 8 attempts max (generous but reasonable)
+	maxRetries := 5
+	if !isProduction {
+		maxRetries = 8
+	}
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		err := m.ObtainCertificate(domain)
@@ -339,17 +405,36 @@ func (m *Manager) ObtainCertificateWithRetry(domain string) error {
 			return nil
 		}
 
+		// Check if this is a rate limit error - if so, we've already hit limits
+		if isRateLimitError(err) {
+			if isProduction {
+				logging.Error("Production rate limit already exceeded. This indicates previous failures. Waiting 1 hour.")
+				time.Sleep(1 * time.Hour)
+			} else {
+				logging.Error("Staging rate limit exceeded. Waiting 10 minutes.")
+				time.Sleep(10 * time.Minute)
+			}
+			continue
+		}
+
 		if attempt == maxRetries {
 			return fmt.Errorf("failed to obtain certificate after %d attempts: %w", maxRetries, err)
 		}
 
-		sleepTime := calculateBackoffWithJitter(attempt)
+		// Use rate-limit-aware backoff instead of simple exponential backoff
+		sleepTime := calculateRateLimitAwareBackoff(attempt, isProduction)
 
-		logging.Info("Certificate obtainment failed, retrying in %v (attempt %d/%d): %v", sleepTime, attempt, maxRetries, err)
+		envType := "production"
+		if !isProduction {
+			envType = "staging"
+		}
+		
+		logging.Info("Certificate obtainment failed (%s), using rate-limit-aware backoff: %v (attempt %d/%d): %v", 
+			envType, sleepTime, attempt, maxRetries, err)
 		time.Sleep(sleepTime)
 	}
 
-	return fmt.Errorf("failed to obtain certificate after %d attempts", maxRetries)
+	return fmt.Errorf("failed to obtain certificate after %d attempts (respecting rate limits)", maxRetries)
 }
 
 // StartRenewalLoop starts a ticker to periodically check and renew the certificate.
@@ -494,6 +579,84 @@ func GetCertificateInfo(certPath string) (*x509.Certificate, error) {
 	return cert, nil
 }
 
+// getCleanupWait returns the DNS cleanup propagation wait time
+func getCleanupWait() time.Duration {
+	if wait := config.GetDuration(CertDNSCleanupWaitKey); wait > 0 {
+		return wait
+	}
+	
+	// Use existing USE_PRODUCTION_CERTS setting for intelligent defaults
+	isProduction := config.GetBool(CertUseProdCertsKey)
+	if isProduction {
+		return 120 * time.Second  // Production needs more time for global propagation
+	}
+	return 90 * time.Second       // Staging can be more aggressive but still needs time
+}
+
+// getCreationWait returns the DNS record creation wait time
+func getCreationWait() time.Duration {
+	if wait := config.GetDuration(CertDNSCreationWaitKey); wait > 0 {
+		return wait
+	}
+	
+	isProduction := config.GetBool(CertUseProdCertsKey)
+	if isProduction {
+		return 90 * time.Second   // Production needs more time
+	}
+	return 60 * time.Second       // Staging can be faster
+}
+
+// verifyDNSPropagation checks if a DNS record has propagated to configured resolvers
+func (d *CleaningDNSProvider) verifyDNSPropagation(fqdn, expectedValue string) error {
+	// Use existing DNS resolvers configuration
+	resolvers := config.GetStringSlice(CertDNSResolversKey)
+	if len(resolvers) == 0 {
+		resolvers = []string{"8.8.8.8:53", "1.1.1.1:53"} // Fallback to defaults
+	}
+	
+	for _, resolver := range resolvers {
+		logging.Debug("Checking DNS propagation on %s for %s", resolver, fqdn)
+		if !checkDNSRecord(resolver, fqdn, expectedValue) {
+			return fmt.Errorf("DNS record not propagated to %s", resolver)
+		}
+	}
+	
+	logging.Info("DNS propagation verified across configured resolvers")
+	return nil
+}
+
+// checkDNSRecord queries a specific DNS resolver for a TXT record
+func checkDNSRecord(resolver, fqdn, expectedValue string) bool {
+	c := dns.Client{Timeout: 10 * time.Second}
+	m := dns.Msg{}
+	m.SetQuestion(dns.Fqdn(fqdn), dns.TypeTXT)
+	
+	r, _, err := c.Exchange(&m, resolver)
+	if err != nil {
+		logging.Debug("DNS query failed for %s on %s: %v", fqdn, resolver, err)
+		return false
+	}
+	
+	if r.Rcode != dns.RcodeSuccess {
+		logging.Debug("DNS query returned error code %d for %s on %s", r.Rcode, fqdn, resolver)
+		return false
+	}
+	
+	for _, ans := range r.Answer {
+		if txt, ok := ans.(*dns.TXT); ok {
+			for _, value := range txt.Txt {
+				if value == expectedValue {
+					logging.Debug("Found expected TXT record on %s: %s", resolver, value)
+					return true
+				}
+			}
+		}
+	}
+	
+	logging.Debug("Expected TXT record not found on %s", resolver)
+	return false
+}
+
 // exponentialBackoff returns a dns01.ChallengeOption that wraps lego's default
 // pre-check with an exponential back-off wait loop. The first re-try happens
 // after 2 s and the delay doubles every probe up to 32 s. The overall timeout
@@ -569,12 +732,32 @@ func (d *CleaningDNSProvider) Present(domain, token, keyAuth string) error {
 	}
 
 	// Additional wait after cleanup to ensure DNS propagation
-	logging.Info("Waiting 30 seconds before creating new ACME challenge record...")
-	time.Sleep(30 * time.Second)
+	creationWait := getCreationWait()
+	logging.Info("Waiting %v before creating new ACME challenge record...", creationWait)
+	time.Sleep(creationWait)
 
 	// Create the new ACME challenge record
 	logging.Info("Creating new ACME challenge TXT record for %s", fqdn)
-	return d.wrappedProvider.Present(domain, token, keyAuth)
+	if err := d.wrappedProvider.Present(domain, token, keyAuth); err != nil {
+		return err
+	}
+	
+	// Verify DNS propagation with timeout
+	logging.Info("Verifying DNS propagation before ACME challenge...")
+	deadline := time.Now().Add(5 * time.Minute)
+	
+	for time.Now().Before(deadline) {
+		if err := d.verifyDNSPropagation(fqdn, value); err == nil {
+			logging.Info("DNS propagation verified successfully")
+			return nil
+		}
+		
+		logging.Debug("DNS not fully propagated yet, waiting 30s...")
+		time.Sleep(30 * time.Second)
+	}
+	
+	logging.Warn("DNS propagation verification timed out, proceeding with ACME challenge")
+	return nil
 }
 
 // ensureSubdomainExists creates the base subdomain in Cloudflare if it doesn't exist
@@ -670,8 +853,9 @@ func (d *CleaningDNSProvider) cleanupRecords(fqdn string) error {
 
 	// Wait for DNS cleanup to propagate (realistic timing for global DNS propagation)
 	if deletedCount > 0 {
-		logging.Info("Waiting 60 seconds for DNS cleanup to propagate...")
-		time.Sleep(60 * time.Second)
+		cleanupWait := getCleanupWait()
+		logging.Info("Waiting %v for DNS cleanup to propagate...", cleanupWait)
+		time.Sleep(cleanupWait)
 	}
 
 	return nil

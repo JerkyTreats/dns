@@ -64,6 +64,20 @@ cp /app/templates/config.yaml.template /app/configs/config.yaml
     python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
         -s "LETSENCRYPT_URL_PLACEHOLDER" "$LETSENCRYPT_URL"
 
+    # Configure USE_PRODUCTION_CERTS setting
+    USE_PRODUCTION_CERTS="${USE_PRODUCTION_CERTS:-true}"
+    python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+        -s "USE_PRODUCTION_CERTS_PLACEHOLDER" "$USE_PRODUCTION_CERTS"
+
+    # Configure DNS timing if provided (optional - will use staging/production-aware defaults if empty)
+    DNS_CLEANUP_WAIT="${DNS_CLEANUP_WAIT:-}"
+    python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+        -s "DNS_CLEANUP_WAIT_PLACEHOLDER" "$DNS_CLEANUP_WAIT"
+
+    DNS_CREATION_WAIT="${DNS_CREATION_WAIT:-}"
+    python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \
+        -s "DNS_CREATION_WAIT_PLACEHOLDER" "$DNS_CREATION_WAIT"
+
     # Set server port based on environment
     SERVER_PORT="${SERVER_PORT:-8080}"
     python3 /app/scripts/template_substitute.py /app/configs/config.yaml /app/configs/config.yaml \

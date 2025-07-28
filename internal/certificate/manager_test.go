@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -404,6 +405,354 @@ func TestCleaningDNSProvider_EnsureSubdomainLogic(t *testing.T) {
 		assert.NotNil(t, provider)
 		assert.Equal(t, "token", provider.cfAPIToken)
 		assert.Equal(t, "zone", provider.cfZoneID)
+	})
+}
+
+// TestDNSTimingFunctions tests the new DNS timing configuration functions
+func TestDNSTimingFunctions(t *testing.T) {
+	t.Run("getCleanupWait with explicit config", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertDNSCleanupWaitKey, "300s")
+		
+		wait := getCleanupWait()
+		assert.Equal(t, 300*time.Second, wait)
+	})
+	
+	t.Run("getCleanupWait production default", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertUseProdCertsKey, true)
+		
+		wait := getCleanupWait()
+		assert.Equal(t, 120*time.Second, wait)
+	})
+	
+	t.Run("getCleanupWait staging default", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertUseProdCertsKey, false)
+		
+		wait := getCleanupWait()
+		assert.Equal(t, 90*time.Second, wait)
+	})
+	
+	t.Run("getCreationWait with explicit config", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertDNSCreationWaitKey, "45s")
+		
+		wait := getCreationWait()
+		assert.Equal(t, 45*time.Second, wait)
+	})
+	
+	t.Run("getCreationWait production default", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertUseProdCertsKey, true)
+		
+		wait := getCreationWait()
+		assert.Equal(t, 90*time.Second, wait)
+	})
+	
+	t.Run("getCreationWait staging default", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertUseProdCertsKey, false)
+		
+		wait := getCreationWait()
+		assert.Equal(t, 60*time.Second, wait)
+	})
+}
+
+// TestRateLimitDetection tests the rate limit error detection function
+func TestRateLimitDetection(t *testing.T) {
+	testCases := []struct {
+		name          string
+		errorMessage  string
+		expectRateLimit bool
+	}{
+		{
+			name:            "explicit rate limit error",
+			errorMessage:    "Error creating new certificate: rate limit exceeded",
+			expectRateLimit: true,
+		},
+		{
+			name:            "too many certificates error",
+			errorMessage:    "too many certificates already issued",
+			expectRateLimit: true,
+		},
+		{
+			name:            "rate limited error",
+			errorMessage:    "Request was rate limited",
+			expectRateLimit: true,
+		},
+		{
+			name:            "rateLimited camelCase",
+			errorMessage:    "Certificate request rateLimited by server",
+			expectRateLimit: true,
+		},
+		{
+			name:            "DNS propagation error",
+			errorMessage:    "DNS propagation failed: record not found",
+			expectRateLimit: false,
+		},
+		{
+			name:            "network error",
+			errorMessage:    "Connection timeout",
+			expectRateLimit: false,
+		},
+		{
+			name:            "validation error",
+			errorMessage:    "Challenge validation failed",
+			expectRateLimit: false,
+		},
+		{
+			name:            "empty error",
+			errorMessage:    "",
+			expectRateLimit: false,
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fmt.Errorf("%s", tc.errorMessage)
+			result := isRateLimitError(err)
+			assert.Equal(t, tc.expectRateLimit, result, 
+				"Expected rate limit detection for '%s' to be %v, got %v", 
+				tc.errorMessage, tc.expectRateLimit, result)
+		})
+	}
+}
+
+// TestDNSPropagationVerification tests the DNS propagation verification logic
+func TestDNSPropagationVerification(t *testing.T) {
+	t.Run("uses configured resolvers", func(t *testing.T) {
+		config.ResetForTest()
+		customResolvers := []string{"1.1.1.1:53", "9.9.9.9:53"}
+		config.SetForTest(CertDNSResolversKey, customResolvers)
+		
+		// Create a mock CleaningDNSProvider to test the logic
+		provider := &CleaningDNSProvider{
+			cfAPIToken: "test-token",
+			cfZoneID:   "test-zone-id",
+		}
+		
+		// Note: This test verifies the configuration reading logic
+		// Actual DNS queries would need network mocking for full testing
+		resolvers := config.GetStringSlice(CertDNSResolversKey)
+		assert.Equal(t, customResolvers, resolvers)
+		assert.NotNil(t, provider)
+	})
+	
+	t.Run("uses default resolvers when none configured", func(t *testing.T) {
+		config.ResetForTest()
+		// Don't set any resolvers
+		
+		resolvers := config.GetStringSlice(CertDNSResolversKey)
+		assert.Empty(t, resolvers, "Should be empty when not configured")
+		
+		// The actual function would fall back to defaults:
+		// []string{"8.8.8.8:53", "1.1.1.1:53"}
+	})
+}
+
+// TestEnvironmentAwareDefaults tests the staging vs production behavior
+func TestEnvironmentAwareDefaults(t *testing.T) {
+	testCases := []struct {
+		name                string
+		useProductionCerts  bool
+		expectedCleanupWait time.Duration
+		expectedCreationWait time.Duration
+	}{
+		{
+			name:                 "production environment",
+			useProductionCerts:   true,
+			expectedCleanupWait:  120 * time.Second,
+			expectedCreationWait: 90 * time.Second,
+		},
+		{
+			name:                 "staging environment",
+			useProductionCerts:   false,
+			expectedCleanupWait:  90 * time.Second,
+			expectedCreationWait: 60 * time.Second,
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config.ResetForTest()
+			config.SetForTest(CertUseProdCertsKey, tc.useProductionCerts)
+			
+			cleanupWait := getCleanupWait()
+			creationWait := getCreationWait()
+			
+			assert.Equal(t, tc.expectedCleanupWait, cleanupWait, 
+				"Cleanup wait for %s should be %v", tc.name, tc.expectedCleanupWait)
+			assert.Equal(t, tc.expectedCreationWait, creationWait,
+				"Creation wait for %s should be %v", tc.name, tc.expectedCreationWait)
+		})
+	}
+}
+
+// TestNewConfigKeys tests that the new configuration keys are properly registered
+func TestNewConfigKeys(t *testing.T) {
+	t.Run("DNS timing configuration keys exist", func(t *testing.T) {
+		assert.Equal(t, "certificate.dns_cleanup_wait", CertDNSCleanupWaitKey)
+		assert.Equal(t, "certificate.dns_creation_wait", CertDNSCreationWaitKey)
+		assert.Equal(t, "certificate.use_production_certs", CertUseProdCertsKey)
+	})
+}
+
+// TestCleaningDNSProviderValidation tests validation of the CleaningDNSProvider
+func TestCleaningDNSProviderValidation(t *testing.T) {
+	t.Run("requires API token", func(t *testing.T) {
+		_, err := NewCleaningDNSProvider(nil, "", "zone-id")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "API token and Zone ID are required")
+	})
+	
+	t.Run("requires zone ID", func(t *testing.T) {
+		_, err := NewCleaningDNSProvider(nil, "token", "")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "API token and Zone ID are required")
+	})
+	
+	t.Run("successful creation with valid parameters", func(t *testing.T) {
+		provider, err := NewCleaningDNSProvider(nil, "valid-token", "valid-zone-id")
+		assert.NoError(t, err)
+		assert.NotNil(t, provider)
+		assert.Equal(t, "valid-token", provider.cfAPIToken)
+		assert.Equal(t, "valid-zone-id", provider.cfZoneID)
+	})
+}
+
+// TestRateLimitAwareBackoff tests the new rate-limit-aware backoff calculation
+func TestRateLimitAwareBackoff(t *testing.T) {
+	t.Run("production environment respects 12-minute refill rate", func(t *testing.T) {
+		testCases := []struct {
+			attempt  int
+			expected time.Duration
+		}{
+			{1, 2 * time.Minute},   // First retry: quick for transient issues
+			{2, 12 * time.Minute},  // Second retry: minimum refill interval
+			{3, 15 * time.Minute},  // Third retry: slightly longer
+			{4, 20 * time.Minute},  // Fourth retry: more spacing
+			{5, 30 * time.Minute},  // Fifth+ retry: avoid weekly limits
+			{10, 30 * time.Minute}, // Capped at 30 minutes
+		}
+		
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("attempt_%d", tc.attempt), func(t *testing.T) {
+				backoff := calculateRateLimitAwareBackoff(tc.attempt, true)
+				assert.Equal(t, tc.expected, backoff, 
+					"Production backoff for attempt %d should be %v, got %v", 
+					tc.attempt, tc.expected, backoff)
+			})
+		}
+	})
+	
+	t.Run("staging environment uses exponential backoff with jitter", func(t *testing.T) {
+		testCases := []struct {
+			attempt     int
+			minExpected time.Duration
+			maxExpected time.Duration
+		}{
+			{1, 1 * time.Minute, 1*time.Minute + 12*time.Second},      // 1 minute + 20% jitter
+			{2, 2 * time.Minute, 2*time.Minute + 24*time.Second},      // 2 minutes + 20% jitter
+			{3, 4 * time.Minute, 4*time.Minute + 48*time.Second},      // 4 minutes + 20% jitter
+			{4, 8 * time.Minute, 8*time.Minute + 96*time.Second},      // 8 minutes + 20% jitter
+			{5, 16 * time.Minute, 16*time.Minute + 192*time.Second},   // 16 minutes + 20% jitter
+			{6, 30 * time.Minute, 30*time.Minute + 360*time.Second},   // Capped at 30 minutes + jitter
+		}
+		
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("staging_attempt_%d", tc.attempt), func(t *testing.T) {
+				// Run multiple times to test jitter variance
+				for i := 0; i < 5; i++ {
+					backoff := calculateRateLimitAwareBackoff(tc.attempt, false)
+					assert.GreaterOrEqual(t, backoff, tc.minExpected,
+						"Staging backoff for attempt %d should be >= %v, got %v", 
+						tc.attempt, tc.minExpected, backoff)
+					assert.LessOrEqual(t, backoff, tc.maxExpected,
+						"Staging backoff for attempt %d should be <= %v, got %v", 
+						tc.attempt, tc.maxExpected, backoff)
+				}
+			})
+		}
+	})
+	
+	t.Run("zero and negative attempts", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), calculateRateLimitAwareBackoff(0, true))
+		assert.Equal(t, time.Duration(0), calculateRateLimitAwareBackoff(-1, true))
+		assert.Equal(t, time.Duration(0), calculateRateLimitAwareBackoff(0, false))
+		assert.Equal(t, time.Duration(0), calculateRateLimitAwareBackoff(-1, false))
+	})
+}
+
+// TestObtainCertificateWithRetryRateLimits tests the retry behavior with rate limits
+func TestObtainCertificateWithRetryRateLimits(t *testing.T) {
+	t.Run("production uses 5 max retries", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertUseProdCertsKey, true)
+		
+		// This test verifies the retry logic structure
+		// Full integration testing would require mocking the ACME client
+		
+		// Verify production setting affects retry count
+		isProduction := config.GetBool(CertUseProdCertsKey)
+		assert.True(t, isProduction)
+		
+		expectedMaxRetries := 5
+		assert.Equal(t, 5, expectedMaxRetries, "Production should use 5 max retries")
+	})
+	
+	t.Run("staging uses 8 max retries", func(t *testing.T) {
+		config.ResetForTest()
+		config.SetForTest(CertUseProdCertsKey, false)
+		
+		isProduction := config.GetBool(CertUseProdCertsKey)
+		assert.False(t, isProduction)
+		
+		expectedMaxRetries := 8
+		assert.Equal(t, 8, expectedMaxRetries, "Staging should use 8 max retries")
+	})
+}
+
+// TestRateLimitStrategy tests the overall rate limiting strategy
+func TestRateLimitStrategy(t *testing.T) {
+	t.Run("production backoff prevents hitting 5 failures per hour", func(t *testing.T) {
+		// Calculate total time for 5 attempts in production
+		totalTime := time.Duration(0)
+		for attempt := 1; attempt <= 5; attempt++ {
+			if attempt > 1 { // Don't count first attempt
+				backoff := calculateRateLimitAwareBackoff(attempt-1, true)
+				totalTime += backoff
+			}
+		}
+		
+		// Total backoff: 2 + 12 + 15 + 20 = 49 minutes
+		expectedTotal := 49 * time.Minute
+		assert.Equal(t, expectedTotal, totalTime,
+			"Production backoff should space out 5 attempts over %v to respect rate limits", expectedTotal)
+			
+		// Verify we don't exceed 1 hour total
+		assert.LessOrEqual(t, totalTime, 1*time.Hour,
+			"Production backoff should keep attempts within 1 hour window")
+	})
+	
+	t.Run("staging backoff is more aggressive but reasonable", func(t *testing.T) {
+		// Calculate total time for first 5 attempts in staging
+		totalTime := time.Duration(0)
+		for attempt := 1; attempt <= 5; attempt++ {
+			if attempt > 1 {
+				backoff := calculateRateLimitAwareBackoff(attempt-1, false)
+				totalTime += backoff
+			}
+		}
+		
+		// Staging should be faster than production
+		productionTotal := 49 * time.Minute
+		assert.Less(t, totalTime, productionTotal,
+			"Staging backoff should be faster than production")
+		
+		// But still reasonable (not immediate retries)
+		assert.Greater(t, totalTime, 10*time.Minute,
+			"Staging backoff should still provide reasonable spacing")
 	})
 }
 

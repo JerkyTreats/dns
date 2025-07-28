@@ -182,6 +182,14 @@
             Description="Use Let's Encrypt production (true) or staging (false) certificates. Use staging for testing!"
             Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 
+    <Config Name="DNS Cleanup Wait" Target="DNS_CLEANUP_WAIT" Default=""
+            Description="Override DNS cleanup propagation wait (e.g., 60s, 2m). Leave empty for auto-detection based on prod/staging."
+            Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+    <Config Name="DNS Creation Wait" Target="DNS_CREATION_WAIT" Default=""
+            Description="Override pre-creation wait time (e.g., 30s, 90s). Leave empty for auto-detection based on prod/staging."
+            Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
 
     <Config Name="Cloudflare API Token" Target="CLOUDFLARE_API_TOKEN" Default=""
             Description="Cloudflare API token for DNS-01 challenges (required for ACME certificate validation)"

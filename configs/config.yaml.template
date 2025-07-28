@@ -77,6 +77,11 @@ certificate:
     - "8.8.8.8:53"
     - "1.1.1.1:53"
   dns_timeout: "10s"
+  # DNS propagation timing (empty values use staging/production-aware defaults)
+  dns_cleanup_wait: "DNS_CLEANUP_WAIT_PLACEHOLDER"     # Time to wait for DNS cleanup propagation
+  dns_creation_wait: "DNS_CREATION_WAIT_PLACEHOLDER"   # Time to wait before creating ACME challenge
+  # Production vs staging certificates (true = production, false = staging)
+  use_production_certs: USE_PRODUCTION_CERTS_PLACEHOLDER
   # Set to true to skip SSL verification for test environments
   insecure_skip_verify: false
   renewal:
