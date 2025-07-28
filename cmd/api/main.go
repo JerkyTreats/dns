@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -197,24 +198,33 @@ func main() {
 		Handler:      mux,
 	}
 
-	serverStarted := make(chan bool, 1)
+	serverReady := make(chan struct{})
 	go func() {
 		logging.Info("Starting HTTP server on port %d", config.GetInt(ServerPortKey))
-		serverStarted <- true
-		err := server.ListenAndServe()
-
+		
+		// Create listener to ensure port is bound
+		listener, err := net.Listen("tcp", server.Addr)
+		if err != nil {
+			logging.Error("Failed to bind to port: %v", err)
+			os.Exit(1)
+		}
+		
+		// Signal that server is ready to accept connections
+		close(serverReady)
+		
+		// Start serving requests
+		err = server.Serve(listener)
 		if err != nil && err != http.ErrServerClosed {
-			logging.Error("Failed to start server: %v", err)
+			logging.Error("Failed to serve: %v", err)
 			os.Exit(1)
 		}
 	}()
 
-	<-serverStarted
+	<-serverReady
 	logging.Info("HTTP server started successfully")
 
 	// Register the DNS API service itself using the simplified add-record endpoint
 	go func() {
-		time.Sleep(1 * time.Second) // Brief delay to ensure server is ready
 		registerDNSAPIService()
 	}()
 

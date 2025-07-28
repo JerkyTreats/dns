@@ -10,6 +10,7 @@ import (
 
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/jerkytreats/dns/internal/persistence"
 	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,14 +29,24 @@ func setupTestManager(t *testing.T) (*Manager, string) {
 	tempDir, err := os.MkdirTemp("", "proxy-test-*")
 	require.NoError(t, err)
 
-	// Create template file
+	// Create template file with updated format
 	templatePath := filepath.Join(tempDir, "Caddyfile.template")
 	templateContent := `# Generated proxy configuration
-{{range .ProxyRules}}
-{{.Hostname}} {
-    reverse_proxy {{.TargetIP}}:{{.TargetPort}}
+{{- if .ProxyRules}}
+:{{.Port}} {
+{{- range .ProxyRules}}
+{{- if .Enabled}}
+    @{{.Hostname}} host {{.Hostname}}
+    handle @{{.Hostname}} {
+        reverse_proxy {{.TargetIP}}:{{.TargetPort}}
+    }
+{{- end}}
+{{- end}}
+    handle {
+        respond "No route configured" 404
+    }
 }
-{{end}}
+{{- end}}
 `
 	err = os.WriteFile(templatePath, []byte(templateContent), 0644)
 	require.NoError(t, err)
@@ -43,7 +54,12 @@ func setupTestManager(t *testing.T) (*Manager, string) {
 	// Set up test configuration
 	config.SetForTest("proxy.caddy.config_path", filepath.Join(tempDir, "Caddyfile"))
 	config.SetForTest("proxy.caddy.template_path", templatePath)
+	config.SetForTest("proxy.caddy.port", "80")
 	config.SetForTest("proxy.enabled", "true")
+	
+	// Set up storage configuration
+	config.SetForTest("proxy.storage.path", filepath.Join(tempDir, "proxy_rules.json"))
+	config.SetForTest("proxy.storage.backup_count", "3")
 
 	// Create manager with mock reloader for testing
 	manager, err := NewManager(&MockReloader{})
@@ -1009,4 +1025,235 @@ func TestRemoveRule_FQDNValidation(t *testing.T) {
 
 	// Clean up
 	config.ResetForTest()
+}
+
+func TestProxyRuleStorage_Persistence(t *testing.T) {
+	tempDir := t.TempDir()
+	storagePath := filepath.Join(tempDir, "proxy_rules.json")
+	
+	// Create storage instance
+	storage := NewProxyRuleStorage()
+	storage.storage = persistence.NewFileStorageWithPath(storagePath, 3)
+	
+	// Test initial load (empty)
+	rules, err := storage.LoadRules()
+	assert.NoError(t, err)
+	assert.Len(t, rules, 0)
+	
+	// Create test rules
+	testRules := map[string]*ProxyRule{
+		"app1.example.com": {
+			Hostname:   "app1.example.com",
+			TargetIP:   "192.168.1.100",
+			TargetPort: 8080,
+			Protocol:   "http",
+			Enabled:    true,
+			CreatedAt:  time.Now(),
+		},
+		"app2.example.com": {
+			Hostname:   "app2.example.com",
+			TargetIP:   "192.168.1.200",
+			TargetPort: 9090,
+			Protocol:   "https",
+			Enabled:    true,
+			CreatedAt:  time.Now(),
+		},
+	}
+	
+	// Save rules
+	err = storage.SaveRules(testRules)
+	assert.NoError(t, err)
+	
+	// Verify file exists
+	assert.True(t, storage.Exists())
+	
+	// Load rules back
+	loadedRules, err := storage.LoadRules()
+	assert.NoError(t, err)
+	assert.Len(t, loadedRules, 2)
+	
+	// Verify rule contents
+	for hostname, expectedRule := range testRules {
+		loadedRule, exists := loadedRules[hostname]
+		assert.True(t, exists, "Rule for %s should exist", hostname)
+		assert.Equal(t, expectedRule.Hostname, loadedRule.Hostname)
+		assert.Equal(t, expectedRule.TargetIP, loadedRule.TargetIP)
+		assert.Equal(t, expectedRule.TargetPort, loadedRule.TargetPort)
+		assert.Equal(t, expectedRule.Protocol, loadedRule.Protocol)
+		assert.Equal(t, expectedRule.Enabled, loadedRule.Enabled)
+	}
+}
+
+func TestManagerPersistence_Restart(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// Setup shared configuration
+	configPath := filepath.Join(tempDir, "Caddyfile")
+	templatePath := filepath.Join(tempDir, "Caddyfile.template")
+	storagePath := filepath.Join(tempDir, "proxy_rules.json")
+	
+	// Create template
+	templateContent := `# Test template
+{{- if .ProxyRules}}
+:{{.Port}} {
+{{- range .ProxyRules}}
+{{- if .Enabled}}
+    @{{.Hostname}} host {{.Hostname}}
+    handle @{{.Hostname}} {
+        reverse_proxy {{.TargetIP}}:{{.TargetPort}}
+    }
+{{- end}}
+{{- end}}
+}
+{{- end}}`
+	err := os.WriteFile(templatePath, []byte(templateContent), 0644)
+	require.NoError(t, err)
+	
+	// Set up configuration
+	config.SetForTest("proxy.caddy.config_path", configPath)
+	config.SetForTest("proxy.caddy.template_path", templatePath)
+	config.SetForTest("proxy.caddy.port", "80")
+	config.SetForTest("proxy.enabled", "true")
+	config.SetForTest("proxy.storage.path", storagePath)
+	config.SetForTest("proxy.storage.backup_count", "3")
+	
+	// First manager instance - add rules
+	manager1, err := NewManager(&MockReloader{})
+	require.NoError(t, err)
+	
+	rule1 := &ProxyRule{
+		Hostname:   "app1.example.com",
+		TargetIP:   "192.168.1.100",
+		TargetPort: 8080,
+		Protocol:   "http",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	
+	rule2 := &ProxyRule{
+		Hostname:   "app2.example.com",
+		TargetIP:   "192.168.1.200",
+		TargetPort: 9090,
+		Protocol:   "https",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	
+	err = manager1.AddRule(rule1)
+	assert.NoError(t, err)
+	err = manager1.AddRule(rule2)
+	assert.NoError(t, err)
+	
+	// Verify rules were added
+	rules := manager1.ListRules()
+	assert.Len(t, rules, 2)
+	
+	// Verify Caddyfile was generated
+	configContent, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(configContent), "app1.example.com")
+	assert.Contains(t, string(configContent), "app2.example.com")
+	
+	// Create second manager instance (simulating restart)
+	manager2, err := NewManager(&MockReloader{})
+	require.NoError(t, err)
+	
+	// Verify rules were restored
+	restoredRules := manager2.ListRules()
+	assert.Len(t, restoredRules, 2)
+	
+	// Verify rule contents
+	ruleMap := make(map[string]*ProxyRule)
+	for _, rule := range restoredRules {
+		ruleMap[rule.Hostname] = rule
+	}
+	
+	assert.Contains(t, ruleMap, "app1.example.com")
+	assert.Contains(t, ruleMap, "app2.example.com")
+	
+	rule1Restored := ruleMap["app1.example.com"]
+	assert.Equal(t, "192.168.1.100", rule1Restored.TargetIP)
+	assert.Equal(t, 8080, rule1Restored.TargetPort)
+	assert.Equal(t, "http", rule1Restored.Protocol)
+	
+	rule2Restored := ruleMap["app2.example.com"]
+	assert.Equal(t, "192.168.1.200", rule2Restored.TargetIP)
+	assert.Equal(t, 9090, rule2Restored.TargetPort)
+	assert.Equal(t, "https", rule2Restored.Protocol)
+	
+	// Verify Caddyfile was regenerated on startup
+	configContent2, err := os.ReadFile(configPath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(configContent2), "app1.example.com")
+	assert.Contains(t, string(configContent2), "app2.example.com")
+	
+	// Clean up
+	config.ResetForTest()
+}
+
+func TestStorageValidation_InvalidRules(t *testing.T) {
+	tempDir := t.TempDir()
+	storagePath := filepath.Join(tempDir, "proxy_rules.json")
+	
+	storage := NewProxyRuleStorage()
+	storage.storage = persistence.NewFileStorageWithPath(storagePath, 3)
+	
+	// Try to save invalid rules
+	invalidRules := map[string]*ProxyRule{
+		"invalid.example.com": {
+			Hostname:   "invalid.example.com",
+			TargetIP:   "", // Invalid: empty IP
+			TargetPort: 8080,
+			Protocol:   "http",
+			Enabled:    true,
+			CreatedAt:  time.Now(),
+		},
+	}
+	
+	err := storage.SaveRules(invalidRules)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "target IP cannot be empty")
+	
+	// Verify file was not created
+	assert.False(t, storage.Exists())
+}
+
+func TestStorageValidation_LoadInvalidRules(t *testing.T) {
+	tempDir := t.TempDir()
+	storagePath := filepath.Join(tempDir, "proxy_rules.json")
+	
+	// Create storage file with invalid data
+	invalidJSON := `{
+		"valid.example.com": {
+			"hostname": "valid.example.com",
+			"target_ip": "192.168.1.100",
+			"target_port": 8080,
+			"protocol": "http",
+			"enabled": true,
+			"created_at": "2024-01-01T00:00:00Z"
+		},
+		"invalid.example.com": {
+			"hostname": "invalid.example.com",
+			"target_ip": "",
+			"target_port": 8080,
+			"protocol": "http",
+			"enabled": true,
+			"created_at": "2024-01-01T00:00:00Z"
+		}
+	}`
+	
+	err := os.WriteFile(storagePath, []byte(invalidJSON), 0644)
+	require.NoError(t, err)
+	
+	storage := NewProxyRuleStorage()
+	storage.storage = persistence.NewFileStorageWithPath(storagePath, 3)
+	
+	// Load rules - should skip invalid ones
+	rules, err := storage.LoadRules()
+	assert.NoError(t, err)
+	assert.Len(t, rules, 1) // Only valid rule should be loaded
+	
+	validRule, exists := rules["valid.example.com"]
+	assert.True(t, exists)
+	assert.Equal(t, "192.168.1.100", validRule.TargetIP)
 }

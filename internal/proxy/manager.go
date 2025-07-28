@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -140,6 +139,7 @@ type Manager struct {
 	enabled      bool
 	reloader     Reloader
 	port         string
+	storage      *ProxyRuleStorage
 
 	rules         map[string]*ProxyRule
 	configVersion int
@@ -192,16 +192,25 @@ func NewManager(reloader Reloader) (*Manager, error) {
 		enabled:      true,
 		reloader:     reloader,
 		port:         port,
+		storage:      NewProxyRuleStorage(),
 		rules:        make(map[string]*ProxyRule),
 	}
 
-	// Restore proxy rules from storage (Caddyfile) during initialization
-	logging.Info("Restoring proxy rules from storage...")
+	// Restore proxy rules from persistent storage
+	logging.Info("Loading proxy rules from persistent storage...")
 	if err := manager.RestoreFromStorage(); err != nil {
-		logging.Warn("Failed to restore proxy rules from storage: %v", err)
+		logging.Warn("Failed to load proxy rules from storage: %v", err)
 		logging.Warn("Continuing with empty proxy rules...")
 	} else {
-		logging.Info("Proxy rules restored successfully from storage")
+		logging.Info("Proxy rules loaded successfully from storage")
+	}
+
+	// Generate Caddyfile from loaded rules
+	if len(manager.rules) > 0 {
+		logging.Info("Generating Caddyfile from loaded proxy rules...")
+		if err := manager.generateConfig(); err != nil {
+			logging.Warn("Failed to generate initial Caddyfile: %v", err)
+		}
 	}
 
 	return manager, nil
@@ -226,8 +235,13 @@ func (m *Manager) AddRule(proxyRule *ProxyRule) error {
 
 	m.rules[proxyRule.Hostname] = proxyRule
 
-	if err := m.generateConfig(); err != nil {
+	// Persist rules to storage
+	if err := m.storage.SaveRules(m.rules); err != nil {
 		delete(m.rules, proxyRule.Hostname)
+		return fmt.Errorf("failed to persist proxy rules: %w", err)
+	}
+
+	if err := m.generateConfig(); err != nil {
 		return fmt.Errorf("failed to generate proxy config: %w", err)
 	}
 
@@ -261,6 +275,11 @@ func (m *Manager) RemoveRule(hostname string) error {
 	}
 
 	delete(m.rules, hostname)
+
+	// Persist rules to storage
+	if err := m.storage.SaveRules(m.rules); err != nil {
+		return fmt.Errorf("failed to persist proxy rules: %w", err)
+	}
 
 	if err := m.generateConfig(); err != nil {
 		return fmt.Errorf("failed to generate proxy config: %w", err)
@@ -405,8 +424,7 @@ func GetSourceIP(r *http.Request) string {
 	return ""
 }
 
-// RestoreFromStorage restores proxy rules from the persisted Caddyfile
-// This method reads the existing Caddyfile and extracts proxy rules to populate the in-memory rules map
+// RestoreFromStorage restores proxy rules from persistent storage
 func (m *Manager) RestoreFromStorage() error {
 	if !m.enabled {
 		logging.Debug("Proxy disabled, skipping storage restoration")
@@ -416,128 +434,13 @@ func (m *Manager) RestoreFromStorage() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logging.Info("Restoring proxy rules from Caddyfile: %s", m.configPath)
-
-	// Check if Caddyfile exists
-	if _, err := os.Stat(m.configPath); os.IsNotExist(err) {
-		logging.Debug("Caddyfile does not exist, no rules to restore")
-		return nil
-	}
-
-	// Read existing Caddyfile
-	content, err := os.ReadFile(m.configPath)
+	rules, err := m.storage.LoadRules()
 	if err != nil {
-		return fmt.Errorf("failed to read Caddyfile: %w", err)
+		return fmt.Errorf("failed to load proxy rules from storage: %w", err)
 	}
 
-	// Parse proxy rules from Caddyfile content
-	rules, err := m.parseRulesFromCaddyfile(string(content))
-	if err != nil {
-		return fmt.Errorf("failed to parse rules from Caddyfile: %w", err)
-	}
-
-	// Clear existing rules and populate with restored rules
-	m.rules = make(map[string]*ProxyRule)
-	for _, rule := range rules {
-		m.rules[rule.Hostname] = rule
-	}
-
-	logging.Info("Successfully restored %d proxy rules from Caddyfile", len(rules))
+	m.rules = rules
+	logging.Info("Successfully loaded %d proxy rules from storage", len(rules))
 	return nil
 }
 
-// parseRulesFromCaddyfile extracts proxy rules from Caddyfile content
-// This is a simplified parser that looks for reverse_proxy directives
-func (m *Manager) parseRulesFromCaddyfile(content string) ([]*ProxyRule, error) {
-	var rules []*ProxyRule
-
-	// Split content into lines for parsing
-	lines := strings.Split(content, "\n")
-	currentHostname := ""
-
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		// Look for hostname blocks (lines ending with {)
-		if strings.HasSuffix(line, " {") {
-			currentHostname = strings.TrimSuffix(line, " {")
-			continue
-		}
-
-		// Look for reverse_proxy directives
-		if strings.HasPrefix(line, "reverse_proxy") && currentHostname != "" {
-			// Parse reverse_proxy line: "reverse_proxy http://100.64.1.10:8080"
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				target := parts[1]
-
-				// Parse target URL to extract IP and port
-				targetIP, targetPort, protocol, err := m.parseTargetURL(target)
-				if err != nil {
-					logging.Warn("Failed to parse target URL %s on line %d: %v", target, i+1, err)
-					continue
-				}
-
-				rule := &ProxyRule{
-					Hostname:   currentHostname,
-					TargetIP:   targetIP,
-					TargetPort: targetPort,
-					Protocol:   protocol,
-					Enabled:    true,
-					CreatedAt:  time.Now(), // We don't have original creation time
-				}
-
-				rules = append(rules, rule)
-				logging.Debug("Parsed proxy rule: %s -> %s:%d", currentHostname, targetIP, targetPort)
-			}
-		}
-
-		// Reset hostname when block ends
-		if line == "}" {
-			currentHostname = ""
-		}
-	}
-
-	return rules, nil
-}
-
-// parseTargetURL parses a target URL and extracts IP, port, and protocol
-// Supports formats like: http://100.64.1.10:8080, https://100.64.1.10:443
-func (m *Manager) parseTargetURL(target string) (string, int, string, error) {
-	// Default values
-	protocol := "http"
-	port := 80
-
-	// Remove protocol prefix
-	if strings.HasPrefix(target, "https://") {
-		protocol = "https"
-		port = 443
-		target = strings.TrimPrefix(target, "https://")
-	} else if strings.HasPrefix(target, "http://") {
-		protocol = "http"
-		port = 80
-		target = strings.TrimPrefix(target, "http://")
-	}
-
-	// Split IP and port
-	parts := strings.Split(target, ":")
-	if len(parts) < 1 {
-		return "", 0, "", fmt.Errorf("invalid target format: %s", target)
-	}
-
-	ip := parts[0]
-	if len(parts) >= 2 {
-		var err error
-		port, err = strconv.Atoi(parts[1])
-		if err != nil {
-			return "", 0, "", fmt.Errorf("invalid port in target: %s", parts[1])
-		}
-	}
-
-	return ip, port, protocol, nil
-}
