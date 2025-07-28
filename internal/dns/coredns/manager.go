@@ -545,8 +545,8 @@ func (m *Manager) parseRecordsFromZone(content string) []Record {
 	records := make([]Record, 0)
 	lines := strings.Split(content, "\n")
 
-	// Regex to match A records: name IN A ip
-	recordRegex := regexp.MustCompile(`^([^\s]+)\s+IN\s+A\s+([^\s]+)`)
+	// Regex to match A records: name [spaces/tabs]IN[spaces/tabs]A[spaces/tabs]ip
+	recordRegex := regexp.MustCompile(`^([^\s]+)[\s\t]+IN[\s\t]+A[\s\t]+([^\s]+)`)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -556,10 +556,18 @@ func (m *Manager) parseRecordsFromZone(content string) []Record {
 
 		matches := recordRegex.FindStringSubmatch(line)
 		if len(matches) >= 3 {
+			name := matches[1]
+			ip := matches[2]
+			
+			// Skip SOA and other non-host records
+			if name == "@" || name == "SOA" {
+				continue
+			}
+			
 			records = append(records, Record{
-				Name: matches[1],
+				Name: name,
 				Type: "A",
-				IP:   matches[2],
+				IP:   ip,
 			})
 		}
 	}

@@ -126,8 +126,8 @@ func TestManager(t *testing.T) {
 		records, err := managerList.ListRecords("test-service-list")
 		require.NoError(t, err)
 
-		// Verify correct number of records (3 added + 1 NS record)
-		assert.Len(t, records, 4)
+		// Verify correct number of records (only the 3 added A records)
+		assert.Len(t, records, 3)
 
 		// Verify record content
 		recordMap := make(map[string]string)
@@ -139,7 +139,6 @@ func TestManager(t *testing.T) {
 		assert.Equal(t, "100.64.1.1", recordMap["device1"])
 		assert.Equal(t, "100.64.1.2", recordMap["device2"])
 		assert.Equal(t, "192.168.1.100", recordMap["server"])
-		assert.Equal(t, "127.0.0.1", recordMap["ns"]) // NS record automatically created
 	})
 
 	t.Run("ListRecords_EmptyZone", func(t *testing.T) {
@@ -172,13 +171,13 @@ func TestManager(t *testing.T) {
 		err = managerEmpty.AddZone("empty-service")
 		require.NoError(t, err)
 
-		// Test listing records from empty zone (should have 1 NS record)
+		// Test listing records from the zone
+		// After AddZone, the zone file should contain NS and root A records
 		records, err := managerEmpty.ListRecords("empty-service")
 		require.NoError(t, err)
-		assert.Len(t, records, 1)
-		assert.Equal(t, "ns", records[0].Name)
-		assert.Equal(t, "A", records[0].Type)
-		assert.Equal(t, "127.0.0.1", records[0].IP)
+		
+		// Empty zone should return no records (only infrastructure records exist)
+		assert.Equal(t, 0, len(records), "Empty zone should contain no host A records")
 	})
 
 	t.Run("ListRecords_NonExistentZone", func(t *testing.T) {
