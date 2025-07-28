@@ -283,19 +283,22 @@ func (m *Manager) AddZone(serviceName string) error {
 
 	// Create a proper zone file with correct formatting and NS record structure
 	zoneContent := fmt.Sprintf(`$ORIGIN %s
-@	3600 IN	SOA %s %s (
-	%s ; serial
-	7200       ; refresh
-	3600       ; retry
-	1209600    ; expire
-	3600       ; minimum
+@\t3600 IN\tSOA %s %s (
+\t%s ; serial
+\t7200       ; refresh
+\t3600       ; retry
+\t1209600    ; expire
+\t3600       ; minimum
 )
-@	3600 IN	NS %s
+@\t3600 IN\tNS %s
 
 ; NS record definition - points to this DNS server
-ns	IN A	%s
+ns\tIN A\t%s
 
-`, zoneDomain, ns, admin, serial, ns, m.nsIP)
+; Root domain A record
+@\tIN A\t%s
+
+`, zoneDomain, ns, admin, serial, ns, m.nsIP, m.nsIP)
 
 	if err := os.MkdirAll(m.zonesPath, 0755); err != nil {
 		return fmt.Errorf("failed to create zones directory: %w", err)
