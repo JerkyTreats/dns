@@ -5,50 +5,57 @@
 
 # Global options
 {
-	# Disable admin API on standard port to avoid conflicts
-	admin off
+    # Disable admin API on standard port to avoid conflicts
+    admin off
 
-	# Enable automatic HTTPS for internal domains
-	auto_https off
+    # Enable automatic HTTPS for internal domains
+    auto_https off
 
-	# Log configuration
-	log {
-		output stdout
-		format console
-		level INFO
-	}
+    # Log configuration
+    log {
+        output stdout
+        format console
+        level INFO
+    }
 }
 
 {{/* Dynamic proxy rules will be generated below */}}
 {{- if .ProxyRules}}
 # Reverse proxy rules on port {{.Port}}
+:{{.Port}} {
 {{- range .ProxyRules}}
 {{- if .Enabled}}
-
-# Proxy rule for {{.Hostname}}
-{{.Hostname}}:{{$.Port}} {
-    reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
-        # Headers to pass through
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+    # Route for {{.Hostname}}
+    @{{.Hostname | replace "." "_"}} host {{.Hostname}}
+    handle @{{.Hostname | replace "." "_"}} {
+        reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
+            # Headers to pass through
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
     }
 
-    # Logging for this specific host
+{{- end}}
+{{- end}}
+
+    # Default response for unmatched hosts
+    handle {
+        respond "No route configured for this host" 404
+    }
+
+    # Logging for this port
     log {
         output stdout
         format console
     }
 }
-
-{{- end}}
-{{- end}}
 {{- else}}
 # No proxy rules configured
 {{- end}}
 
 # Health check endpoint for Caddy itself
 :2019 {
-	respond /health "OK" 200
+    respond /health "OK" 200
 }
