@@ -22,14 +22,17 @@ type HandlerRegistry struct {
 }
 
 // NewHandlerRegistry creates a new handler registry with all handlers initialized
-func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Checker, syncManager *sync.Manager, proxyManager *proxy.Manager, tailscaleClient *tailscale.Client) (*HandlerRegistry, error) {
+func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Checker, syncManager *sync.Manager, proxyManager *proxy.Manager, tailscaleClient *tailscale.Client, certificateManager interface {
+	AddDomainToSAN(domain string) error
+	RemoveDomainFromSAN(domain string) error
+}) (*HandlerRegistry, error) {
 	logging.Info("Initializing handler registry with all application handlers")
 
 	// Create record service with all dependencies
 	recordService := record.NewService(dnsManager, proxyManager, tailscaleClient)
 
 	// Initialize handlers from their respective domains
-	recordHandler, err := NewRecordHandler(recordService)
+	recordHandler, err := NewRecordHandler(recordService, certificateManager)
 	if err != nil {
 		return nil, err
 	}

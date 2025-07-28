@@ -2,21 +2,32 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
+	"github.com/jerkytreats/dns/internal/config"
+	"github.com/jerkytreats/dns/internal/dns/coredns"
 	"github.com/jerkytreats/dns/internal/dns/record"
 	"github.com/jerkytreats/dns/internal/logging"
 )
 
 // RecordHandler handles DNS record operations using the record service layer
 type RecordHandler struct {
-	recordService *record.Service
+	recordService     *record.Service
+	certificateManager interface {
+		AddDomainToSAN(domain string) error
+		RemoveDomainFromSAN(domain string) error
+	}
 }
 
 // NewRecordHandler creates a new record handler with the record service
-func NewRecordHandler(recordService *record.Service) (*RecordHandler, error) {
+func NewRecordHandler(recordService *record.Service, certificateManager interface {
+	AddDomainToSAN(domain string) error
+	RemoveDomainFromSAN(domain string) error
+}) (*RecordHandler, error) {
 	return &RecordHandler{
-		recordService: recordService,
+		recordService:     recordService,
+		certificateManager: certificateManager,
 	}, nil
 }
 
@@ -41,6 +52,20 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 		logging.Error("Failed to create record: %v", err)
 		http.Error(w, "Failed to create record", http.StatusInternalServerError)
 		return
+	}
+
+	// Add domain to certificate SAN list if certificate manager is available
+	if h.certificateManager != nil && req.Name != "" {
+		dnsDomain := config.GetString(coredns.DNSDomainKey)
+		if dnsDomain != "" {
+			domain := fmt.Sprintf("%s.%s", req.Name, dnsDomain)
+			if err := h.certificateManager.AddDomainToSAN(domain); err != nil {
+				logging.Warn("Failed to add domain to certificate SAN: %v", err)
+				// Don't fail the record creation - certificate management is secondary
+			} else {
+				logging.Info("Added domain to certificate SAN: %s", domain)
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusCreated)

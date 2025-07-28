@@ -86,6 +86,9 @@ type Manager struct {
 	acmeUserPath string
 	acmeKeyPath  string
 
+	// Domain storage for SAN management
+	domainStorage *CertificateDomainStorage
+
 	// CoreDNS integration for TLS enablement
 	corednsConfigManager interface {
 		EnableTLS(domain, certPath, keyPath string) error
@@ -256,14 +259,35 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("could not set DNS01 provider: %w", err)
 	}
 
-	return &Manager{
-		legoClient:   client,
-		user:         user,
-		certPath:     certPath,
-		keyPath:      keyPath,
-		acmeUserPath: acmeUserPath,
-		acmeKeyPath:  acmeKeyPath,
-	}, nil
+	// Initialize domain storage
+	domainStorage := NewCertificateDomainStorage()
+	
+	manager := &Manager{
+		legoClient:    client,
+		user:          user,
+		certPath:      certPath,
+		keyPath:       keyPath,
+		acmeUserPath:  acmeUserPath,
+		acmeKeyPath:   acmeKeyPath,
+		domainStorage: domainStorage,
+	}
+
+	// Initialize with base domain if no domains stored
+	if !domainStorage.Exists() {
+		baseDomain := config.GetString(CertDomainKey)
+		initialDomains := &CertificateDomains{
+			BaseDomain: baseDomain,
+			SANDomains: []string{},
+			UpdatedAt:  time.Now(),
+		}
+		if err := domainStorage.SaveDomains(initialDomains); err != nil {
+			logging.Warn("Failed to initialize certificate domains: %v", err)
+		} else {
+			logging.Info("Initialized certificate domains with base domain: %s", baseDomain)
+		}
+	}
+
+	return manager, nil
 }
 
 // SetCoreDNSManager integrates the certificate manager with CoreDNS ConfigManager for TLS enablement
@@ -291,8 +315,15 @@ func (m *Manager) ObtainCertificate(domain string) error {
 		}
 	}
 
+	// Get all domains (base + SAN) for certificate
+	domains, err := m.GetDomainsForCertificate()
+	if err != nil {
+		logging.Warn("Failed to get domains from storage, using single domain: %v", err)
+		domains = []string{domain}
+	}
+
 	request := certificate.ObtainRequest{
-		Domains: []string{domain},
+		Domains: domains,
 		Bundle:  true,
 	}
 
@@ -312,6 +343,127 @@ func (m *Manager) ObtainCertificate(domain string) error {
 	}
 
 	logging.Info("Certificate obtained and saved successfully")
+	return nil
+}
+
+// GetDomainsForCertificate returns all domains that should be included in the certificate
+func (m *Manager) GetDomainsForCertificate() ([]string, error) {
+	if m.domainStorage == nil {
+		// Fallback to single domain if storage not initialized
+		domain := config.GetString(CertDomainKey)
+		return []string{domain}, nil
+	}
+
+	certDomains, err := m.domainStorage.LoadDomains()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load certificate domains: %w", err)
+	}
+
+	allDomains := []string{certDomains.BaseDomain}
+	allDomains = append(allDomains, certDomains.SANDomains...)
+	return allDomains, nil
+}
+
+// AddDomainToSAN adds a new domain to the certificate SAN list and triggers renewal
+func (m *Manager) AddDomainToSAN(domain string) error {
+	if m.domainStorage == nil {
+		return fmt.Errorf("domain storage not initialized")
+	}
+
+	if err := m.domainStorage.AddDomain(domain); err != nil {
+		return fmt.Errorf("failed to add domain to storage: %w", err)
+	}
+
+	// Trigger certificate renewal with new domains
+	domains, err := m.GetDomainsForCertificate()
+	if err != nil {
+		return fmt.Errorf("failed to get domains for certificate: %w", err)
+	}
+
+	logging.Info("Triggering certificate renewal for domains: %v", domains)
+	return m.ObtainCertificateWithRetry(domains)
+}
+
+// RemoveDomainFromSAN removes a domain from SAN list and triggers renewal
+func (m *Manager) RemoveDomainFromSAN(domain string) error {
+	if m.domainStorage == nil {
+		return fmt.Errorf("domain storage not initialized")
+	}
+
+	if err := m.domainStorage.RemoveDomain(domain); err != nil {
+		return fmt.Errorf("failed to remove domain from storage: %w", err)
+	}
+
+	domains, err := m.GetDomainsForCertificate()
+	if err != nil {
+		return fmt.Errorf("failed to get domains for certificate: %w", err)
+	}
+
+	logging.Info("Triggering certificate renewal after domain removal: %v", domains)
+	return m.ObtainCertificateWithRetry(domains)
+}
+
+// ObtainCertificateWithRetry obtains certificate for the specified domains with retry logic
+func (m *Manager) ObtainCertificateWithRetry(domains []string) error {
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := m.obtainCertificateForDomains(domains); err != nil {
+			if attempt == maxRetries {
+				return fmt.Errorf("failed to obtain certificate after %d attempts: %w", maxRetries, err)
+			}
+			
+			backoff := calculateBackoffWithJitter(attempt)
+			logging.Warn("Certificate obtain attempt %d failed, retrying in %v: %v", attempt, backoff, err)
+			time.Sleep(backoff)
+			continue
+		}
+		
+		logging.Info("Certificate obtained successfully on attempt %d", attempt)
+		return nil
+	}
+	
+	return fmt.Errorf("unexpected error in certificate retry logic")
+}
+
+// obtainCertificateForDomains is a helper method to obtain certificate for specific domains
+func (m *Manager) obtainCertificateForDomains(domains []string) error {
+	logging.Info("Obtaining certificate for domains: %v", domains)
+
+	// Register user if not already registered
+	if m.user.Registration == nil {
+		logging.Info("Registering user with ACME server")
+		reg, err := m.legoClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return fmt.Errorf("could not register user: %w", err)
+		}
+		m.user.Registration = reg
+
+		if err := saveUser(m.user, m.acmeUserPath, m.acmeKeyPath); err != nil {
+			logging.Error("Failed to save user registration: %v", err)
+		}
+	}
+
+	request := certificate.ObtainRequest{
+		Domains: domains,
+		Bundle:  true,
+	}
+
+	certs, err := m.legoClient.Certificate.Obtain(request)
+	if err != nil {
+		return fmt.Errorf("could not obtain certificate: %w", err)
+	}
+
+	if err := m.saveCertificate(certs); err != nil {
+		return fmt.Errorf("could not save certificate: %w", err)
+	}
+
+	if m.corednsConfigManager != nil {
+		// Use the first domain (base domain) for CoreDNS TLS configuration
+		if err := m.corednsConfigManager.EnableTLS(domains[0], m.certPath, m.keyPath); err != nil {
+			logging.Error("Failed to enable TLS in CoreDNS: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -385,10 +537,10 @@ func isRateLimitError(err error) bool {
 		   strings.Contains(errStr, "ratelimited")
 }
 
-// ObtainCertificateWithRetry obtains a certificate with rate-limit-aware backoff retry logic.
+// ObtainCertificateWithRetryRateLimit obtains a certificate with rate-limit-aware backoff retry logic.
 // This method uses intelligent backoff that respects Let's Encrypt rate limits to prevent
 // hitting authorization failure limits (5/hour in production, 200/hour in staging).
-func (m *Manager) ObtainCertificateWithRetry(domain string) error {
+func (m *Manager) ObtainCertificateWithRetryRateLimit(domain string) error {
 	isProduction := config.GetBool(CertUseProdCertsKey)
 	
 	// Reduce max retries to avoid hitting rate limits
@@ -474,7 +626,7 @@ func (m *Manager) checkAndRenew(domain string, renewalInterval time.Duration) {
 
 	logging.Info("Certificate expires in %v, initiating renewal", timeUntilExpiry)
 
-	if err := m.ObtainCertificateWithRetry(domain); err != nil {
+	if err := m.ObtainCertificateWithRetryRateLimit(domain); err != nil {
 		logging.Error("Certificate renewal failed: %v", err)
 	} else {
 		logging.Info("Certificate renewed successfully")
@@ -995,7 +1147,7 @@ func (pm *ProcessManager) runProcess() error {
 		logging.Info("Attempting to obtain new certificate...")
 
 		// Obtain new certificate with retry logic
-		if err := pm.manager.ObtainCertificateWithRetry(pm.domain); err != nil {
+		if err := pm.manager.ObtainCertificateWithRetryRateLimit(pm.domain); err != nil {
 			return fmt.Errorf("failed to obtain certificate: %w", err)
 		}
 	} else {

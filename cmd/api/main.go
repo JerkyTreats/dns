@@ -155,6 +155,7 @@ func main() {
 
 	tlsEnabled := config.GetBool(ServerTLSEnabledKey)
 	var certReadyCh <-chan struct{}
+	var certificateManager *certificate.Manager
 
 	if tlsEnabled && config.GetBool(certificate.CertRenewalEnabledKey) {
 		logging.Info("Starting certificate process in background...")
@@ -165,6 +166,7 @@ func main() {
 			os.Exit(1)
 		}
 
+		certificateManager = certProcess.GetManager()
 		certReadyCh = certProcess.StartWithRetry(30 * time.Second)
 	}
 
@@ -179,7 +181,7 @@ func main() {
 	}()
 
 	// Initialize handler registry with all handlers including proxy manager
-	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, dnsChecker, syncManager, proxyManager, tailscaleClient)
+	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, dnsChecker, syncManager, proxyManager, tailscaleClient, certificateManager)
 	if err != nil {
 		logging.Error("Failed to initialize handler registry: %v", err)
 		os.Exit(1)
