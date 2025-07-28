@@ -21,13 +21,13 @@
 
 {{/* Dynamic proxy rules will be generated below */}}
 {{- if .ProxyRules}}
-# Reverse proxy rules on port {{.Port}}
+# Reverse proxy rules on port {{.Port}} - listening on all interfaces
 :{{.Port}} {
 {{- range .ProxyRules}}
 {{- if .Enabled}}
     # Route for {{.Hostname}}
-    @{{.Hostname | replace "." "_"}} host {{.Hostname}}
-    handle @{{.Hostname | replace "." "_"}} {
+    @{{.Hostname}} host {{.Hostname}}
+    handle @{{.Hostname}} {
         reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
             # Headers to pass through
             header_up Host {host}
