@@ -5,6 +5,7 @@
 
 # Default configuration for all queries not handled by specific domains
 . {
+    bind 0.0.0.0
     errors
     log
     forward . /etc/resolv.conf
@@ -29,6 +30,7 @@
 
 # Configuration for {{.Domain}}
 {{.Domain}}:{{.Port}} {
+    bind 0.0.0.0
     file {{.ZoneFile}} {{.Domain}}.
     errors
     log
@@ -37,6 +39,7 @@
 {{- if .TLSConfig}}
 # TLS configuration for {{.Domain}}
 {{.Domain}}:{{.TLSConfig.Port}} {
+    bind 0.0.0.0
     tls {{.TLSConfig.CertFile}} {{.TLSConfig.KeyFile}}
     file {{.ZoneFile}} {{.Domain}}.
     errors
