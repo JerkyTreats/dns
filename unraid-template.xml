@@ -182,9 +182,6 @@
             Description="Use Let's Encrypt production (true) or staging (false) certificates. Use staging for testing!"
             Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 
-    <Config Name="Let's Encrypt ACME URL" Target="LETSENCRYPT_URL" Default="https://acme-v02.api.letsencrypt.org/directory"
-            Description="Let's Encrypt ACME directory URL (production endpoint - use staging URL for testing)"
-            Type="Variable" Display="advanced" Required="false" Mask="false">https://acme-v02.api.letsencrypt.org/directory</Config>
 
     <Config Name="Cloudflare API Token" Target="CLOUDFLARE_API_TOKEN" Default=""
             Description="Cloudflare API token for DNS-01 challenges (required for ACME certificate validation)"
