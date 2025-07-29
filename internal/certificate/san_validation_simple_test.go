@@ -56,7 +56,7 @@ func TestManager_ValidateAndUpdateSANDomains_LogicOnly(t *testing.T) {
 
 	// Verify the correct domain was identified for addition
 	expectedAddedDomains := []string{"dns.internal.example.com"}
-	assert.ElementsMatch(t, expectedAddedDomains, manager.addedDomains)
+	assert.ElementsMatch(t, expectedAddedDomains, manager.GetAddedDomains())
 
 	mockProvider.AssertExpectations(t)
 }

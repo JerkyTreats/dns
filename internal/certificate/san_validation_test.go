@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,9 +23,13 @@ type MockManagerForSANValidation struct {
 	dnsRecordProvider *MockDNSRecordProvider
 	addedDomains      []string
 	addCallCount      int
+	mu                sync.Mutex
 }
 
 func (m *MockManagerForSANValidation) AddDomainToSAN(domain string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
 	m.addedDomains = append(m.addedDomains, domain)
 	m.addCallCount++
 	
@@ -33,6 +38,22 @@ func (m *MockManagerForSANValidation) AddDomainToSAN(domain string) error {
 		return m.domainStorage.AddDomain(domain)
 	}
 	return nil
+}
+
+func (m *MockManagerForSANValidation) GetAddedDomains() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	// Return a copy to prevent race conditions
+	result := make([]string, len(m.addedDomains))
+	copy(result, m.addedDomains)
+	return result
+}
+
+func (m *MockManagerForSANValidation) GetAddCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.addCallCount
 }
 
 func (m *MockManagerForSANValidation) ValidateAndUpdateSANDomains() error {
@@ -195,8 +216,8 @@ func TestManager_ValidateAndUpdateSANDomains_Success(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.ElementsMatch(t, tt.expectedAddedDomains, manager.addedDomains)
-			assert.Equal(t, len(tt.expectedAddedDomains), manager.addCallCount)
+			assert.ElementsMatch(t, tt.expectedAddedDomains, manager.GetAddedDomains())
+			assert.Equal(t, len(tt.expectedAddedDomains), manager.GetAddCallCount())
 			mockProvider.AssertExpectations(t)
 		})
 	}

@@ -381,7 +381,7 @@ func TestManager_ValidateAndUpdateSANDomains_Integration(t *testing.T) {
 		"dns.internal.example.com",
 		"web.internal.example.com",
 	}
-	assert.ElementsMatch(t, expectedAddedDomains, manager.addedDomains)
+	assert.ElementsMatch(t, expectedAddedDomains, manager.GetAddedDomains())
 
 	mockProvider.AssertExpectations(t)
 }
