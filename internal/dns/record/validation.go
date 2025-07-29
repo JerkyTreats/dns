@@ -46,6 +46,30 @@ func (v *RecordValidator) ValidateCreateRequest(req CreateRecordRequest) error {
 	return nil
 }
 
+// ValidateRemoveRequest validates a RemoveRecordRequest
+func (v *RecordValidator) ValidateRemoveRequest(req RemoveRecordRequest) error {
+	// Validate required fields
+	if req.ServiceName == "" {
+		return fmt.Errorf("service_name is required")
+	}
+
+	if req.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+
+	// Validate service name format
+	if err := v.validateServiceName(req.ServiceName); err != nil {
+		return fmt.Errorf("invalid service_name: %w", err)
+	}
+
+	// Validate record name format
+	if err := v.validateRecordName(req.Name); err != nil {
+		return fmt.Errorf("invalid name: %w", err)
+	}
+
+	return nil
+}
+
 // validateServiceName validates the service name format
 func (v *RecordValidator) validateServiceName(serviceName string) error {
 	if serviceName == "" {

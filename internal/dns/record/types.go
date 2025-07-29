@@ -15,6 +15,12 @@ type CreateRecordRequest struct {
 	Port        *int   `json:"port,omitempty"` // Optional: triggers automatic proxy setup
 }
 
+// RemoveRecordRequest represents the request to remove a record
+type RemoveRecordRequest struct {
+	ServiceName string `json:"service_name"`
+	Name        string `json:"name"`
+}
+
 // Record represents a unified DNS record with optional proxy information
 type Record struct {
 	// DNS Information
@@ -66,6 +72,7 @@ type TailscaleClientInterface interface {
 // Validator defines the interface for record validation
 type Validator interface {
 	ValidateCreateRequest(req CreateRecordRequest) error
+	ValidateRemoveRequest(req RemoveRecordRequest) error
 }
 
 // Generator defines the interface for runtime record generation

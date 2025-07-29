@@ -29,4 +29,15 @@ func init() {
 		Module:       "dns",
 		Summary:      "List all DNS records with proxy information",
 	})
+
+	// Register RemoveRecord endpoint
+	types.RegisterRoute(types.RouteInfo{
+		Method:       "DELETE",
+		Path:         "/remove-record",
+		Handler:      nil, // Will be set during handler initialization
+		RequestType:  reflect.TypeOf(record.RemoveRecordRequest{}),
+		ResponseType: reflect.TypeOf(map[string]string{}),
+		Module:       "dns",
+		Summary:      "Remove a DNS record and associated proxy rule",
+	})
 }

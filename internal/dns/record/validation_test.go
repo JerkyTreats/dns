@@ -300,6 +300,102 @@ func TestIsValidIP(t *testing.T) {
 	}
 }
 
+func TestValidateRemoveRequest(t *testing.T) {
+	validator := NewValidator()
+
+	testCases := []struct {
+		name        string
+		request     RemoveRecordRequest
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "valid request",
+			request: RemoveRecordRequest{
+				ServiceName: "internal",
+				Name:        "testrecord",
+			},
+			expectError: false,
+		},
+		{
+			name: "missing service name",
+			request: RemoveRecordRequest{
+				Name: "testrecord",
+			},
+			expectError: true,
+			errorMsg:    "service_name is required",
+		},
+		{
+			name: "missing record name",
+			request: RemoveRecordRequest{
+				ServiceName: "internal",
+			},
+			expectError: true,
+			errorMsg:    "name is required",
+		},
+		{
+			name: "invalid service name with uppercase",
+			request: RemoveRecordRequest{
+				ServiceName: "INTERNAL",
+				Name:        "testrecord",
+			},
+			expectError: true,
+			errorMsg:    "invalid service_name",
+		},
+		{
+			name: "invalid service name with special chars",
+			request: RemoveRecordRequest{
+				ServiceName: "internal@test",
+				Name:        "testrecord",
+			},
+			expectError: true,
+			errorMsg:    "invalid service_name",
+		},
+		{
+			name: "invalid record name with special chars",
+			request: RemoveRecordRequest{
+				ServiceName: "internal",
+				Name:        "test@record",
+			},
+			expectError: true,
+			errorMsg:    "invalid name",
+		},
+		{
+			name: "empty service name",
+			request: RemoveRecordRequest{
+				ServiceName: "",
+				Name:        "testrecord",
+			},
+			expectError: true,
+			errorMsg:    "service_name is required",
+		},
+		{
+			name: "empty record name",
+			request: RemoveRecordRequest{
+				ServiceName: "internal",
+				Name:        "",
+			},
+			expectError: true,
+			errorMsg:    "name is required",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validator.ValidateRemoveRequest(tc.request)
+
+			if tc.expectError {
+				assert.Error(t, err)
+				if tc.errorMsg != "" {
+					assert.Contains(t, err.Error(), tc.errorMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 // Helper function to create int pointer
 func intPtr(i int) *int {
 	return &i

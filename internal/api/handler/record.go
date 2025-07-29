@@ -102,3 +102,48 @@ func (h *RecordHandler) ListRecords(w http.ResponseWriter, r *http.Request) {
 
 	logging.Info("Successfully returned %d records", len(records))
 }
+
+// RemoveRecord handles removing a DNS record and associated proxy rule
+func (h *RecordHandler) RemoveRecord(w http.ResponseWriter, r *http.Request) {
+	logging.Info("Processing remove record request")
+
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req record.RemoveRecordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Remove record using service layer
+	err := h.recordService.RemoveRecord(req)
+	if err != nil {
+		logging.Error("Failed to remove record: %v", err)
+		http.Error(w, "Failed to remove record", http.StatusInternalServerError)
+		return
+	}
+
+	// Remove domain from certificate SAN list asynchronously
+	if h.certificateManager != nil && req.Name != "" {
+		dnsDomain := config.GetString(coredns.DNSDomainKey)
+		if dnsDomain != "" {
+			domain := fmt.Sprintf("%s.%s", req.Name, dnsDomain)
+			go func(domainToRemove string) {
+				logging.Info("Starting asynchronous certificate update for domain removal: %s", domainToRemove)
+				if err := h.certificateManager.RemoveDomainFromSAN(domainToRemove); err != nil {
+					logging.Warn("Failed to remove domain from certificate SAN: %v", err)
+				} else {
+					logging.Info("Successfully removed domain from certificate SAN: %s", domainToRemove)
+				}
+			}(domain)
+			logging.Info("Initiated asynchronous certificate update for domain removal: %s", domain)
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Record removed successfully"})
+}

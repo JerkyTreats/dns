@@ -373,3 +373,187 @@ func TestListRecords(t *testing.T) {
 		mockGenerator.AssertExpectations(t)
 	})
 }
+
+// Test for RemoveRecord
+func TestRemoveRecord(t *testing.T) {
+	t.Run("successful removal without proxy", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := RemoveRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		mockDNSManager.On("RemoveRecord", req.ServiceName, req.Name).Return(nil)
+		mockProxyManager.On("IsEnabled").Return(false)
+
+		// Act
+		err := service.RemoveRecord(req)
+
+		// Assert
+		assert.NoError(t, err)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+
+	t.Run("successful removal with proxy", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		// Set up config for DNS domain
+		config.SetForTest("dns.domain", "internal")
+		defer config.SetForTest("dns.domain", "") // Reset after test
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := RemoveRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		mockDNSManager.On("RemoveRecord", req.ServiceName, req.Name).Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+		mockProxyManager.On("RemoveRule", "testrecord.internal").Return(nil)
+
+		// Act
+		err := service.RemoveRecord(req)
+
+		// Assert
+		assert.NoError(t, err)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+
+	t.Run("validation error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := RemoveRecordRequest{
+			ServiceName: "", // Invalid - empty service name
+			Name:        "testrecord",
+		}
+
+		// Act
+		err := service.RemoveRecord(req)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "validation failed")
+		assert.Contains(t, err.Error(), "service_name is required")
+	})
+
+	t.Run("dns manager error", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := RemoveRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		mockDNSManager.On("RemoveRecord", req.ServiceName, req.Name).Return(errors.New("dns error"))
+
+		// Act
+		err := service.RemoveRecord(req)
+
+		// Assert
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to remove DNS record")
+		mockDNSManager.AssertExpectations(t)
+	})
+
+	t.Run("proxy manager error - should not fail removal", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		// Set up config for DNS domain
+		config.SetForTest("dns.domain", "internal")
+		defer config.SetForTest("dns.domain", "") // Reset after test
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := RemoveRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		// DNS removal succeeds, but proxy removal fails
+		mockDNSManager.On("RemoveRecord", req.ServiceName, req.Name).Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+		mockProxyManager.On("RemoveRule", "testrecord.internal").Return(errors.New("proxy error"))
+
+		// Act - should still succeed despite proxy error (logged as warning)
+		err := service.RemoveRecord(req)
+
+		// Assert
+		assert.NoError(t, err) // Should not fail despite proxy error
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+
+	t.Run("nil proxy manager", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, nil, mockTailscaleClient)
+
+		req := RemoveRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		mockDNSManager.On("RemoveRecord", req.ServiceName, req.Name).Return(nil)
+
+		// Act
+		err := service.RemoveRecord(req)
+
+		// Assert
+		assert.NoError(t, err)
+		mockDNSManager.AssertExpectations(t)
+	})
+
+	t.Run("empty dns domain - proxy removal skipped", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		req := RemoveRecordRequest{
+			ServiceName: "internal",
+			Name:        "testrecord",
+		}
+
+		// Set empty DNS domain in config (this would need config mocking in real scenario)
+		mockDNSManager.On("RemoveRecord", req.ServiceName, req.Name).Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+		// No RemoveRule call expected because domain is empty
+
+		// Act
+		err := service.RemoveRecord(req)
+
+		// Assert
+		assert.NoError(t, err)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+}

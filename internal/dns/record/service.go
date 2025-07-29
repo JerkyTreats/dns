@@ -102,6 +102,37 @@ func (s *Service) ListRecords() ([]Record, error) {
 	return s.generator.GenerateRecords()
 }
 
+// RemoveRecord removes a DNS record and associated proxy rule if exists
+func (s *Service) RemoveRecord(req RemoveRecordRequest) error {
+	logging.Info("Removing record: %s.%s", req.Name, req.ServiceName)
+
+	// Validate the request
+	if err := s.validator.ValidateRemoveRequest(req); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Remove DNS record
+	if err := s.dnsManager.RemoveRecord(req.ServiceName, req.Name); err != nil {
+		return fmt.Errorf("failed to remove DNS record: %w", err)
+	}
+
+	// Remove proxy rule if proxy manager is available
+	if s.proxyManager != nil && s.proxyManager.IsEnabled() {
+		domain := config.GetString(coredns.DNSDomainKey)
+		if domain != "" {
+			fqdn := fmt.Sprintf("%s.%s", req.Name, domain)
+			if err := s.proxyManager.RemoveRule(fqdn); err != nil {
+				logging.Warn("Failed to remove proxy rule for %s: %v", fqdn, err)
+			} else {
+				logging.Info("Removed proxy rule for %s", fqdn)
+			}
+		}
+	}
+
+	logging.Info("Successfully removed record: %s.%s", req.Name, req.ServiceName)
+	return nil
+}
+
 // getDNSManagerIP returns the Tailscale IP of the current DNS Manager device
 func (s *Service) getDNSManagerIP() (string, error) {
 	if s.tailscaleClient == nil {

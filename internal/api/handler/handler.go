@@ -132,6 +132,10 @@ func (hr *HandlerRegistry) updateRouteHandlers() {
 			if hr.recordHandler != nil {
 				routes[i].Handler = hr.recordHandler.ListRecords
 			}
+		case "/remove-record":
+			if hr.recordHandler != nil {
+				routes[i].Handler = hr.recordHandler.RemoveRecord
+			}
 		case "/list-devices":
 			if hr.deviceHandler != nil {
 				routes[i].Handler = hr.deviceHandler.ListDevices
