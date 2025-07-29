@@ -1,154 +1,422 @@
+# Auto-generated OpenAPI specification
+# Generated at: 2025-07-29T09:08:48-07:00
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+
 openapi: 3.0.3
 info:
-  title: DNS Manager API
-  description: API for managing internal DNS records
-  version: 1.0.0
+    title: DNS Manager API
+    description: Auto-generated API documentation for DNS Manager service with zero-maintenance updates
+    version: 1.0.0
 servers:
-  - url: https://dns.internal.jerkytreats.dev
-    description: Production server
+    - url: https://dns.internal.jerkytreats.dev
+      description: Production server
+    - url: http://localhost:8080
+      description: Development server
 paths:
-  /health:
-    get:
-      summary: Health check endpoint
-      description: Returns the health status of the API and its dependencies
-      operationId: healthCheck
-      responses:
-        '200':
-          description: Service is healthy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthResponse'
-        '503':
-          description: Service is unhealthy
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthResponse'
-  /add-record:
-    post:
-      summary: Add a new internal DNS record
-      description: Creates a new DNS record for a service in the internal domain
-      operationId: addRecord
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/AddRecordRequest'
-      responses:
-        '200':
-          description: Record added successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AddRecordResponse'
-        '400':
-          description: Invalid request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+    /add-record:
+        post:
+            tags:
+                - dns
+            summary: Create a new DNS record with optional reverse proxy configuration
+            operationId: createaddRecord
+            requestBody:
+                description: Request body for Create a new DNS record with optional reverse proxy configuration
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/CreateRecordRequest'
+            responses:
+                "200":
+                    description: Success
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Record'
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "422":
+                    description: Unprocessable Entity
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /annotate-device:
+        post:
+            tags:
+                - tailscale
+            summary: Update annotatable device properties
+            operationId: postannotateDevice
+            requestBody:
+                description: Request body for Update annotatable device properties
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/AnnotationRequest'
+            responses:
+                "200":
+                    description: Success
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/map[string]interface {}'
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "422":
+                    description: Unprocessable Entity
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /device-storage-info:
+        get:
+            tags:
+                - tailscale
+            summary: Get device storage information for debugging
+            operationId: getdeviceStorageInfo
+            responses:
+                "200":
+                    description: Success
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/map[string]interface {}'
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /docs:
+        get:
+            tags:
+                - docs
+            summary: Documentation static files
+            operationId: getdocs
+            responses:
+                "200":
+                    description: Success
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /docs/openapi.yaml:
+        get:
+            tags:
+                - docs
+            summary: OpenAPI specification file
+            operationId: getdocsOpenapi.Yaml
+            responses:
+                "200":
+                    description: Success
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /health:
+        get:
+            tags:
+                - healthcheck
+            summary: Check the health status of the API and its dependencies
+            operationId: gethealth
+            responses:
+                "200":
+                    description: Success
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/HealthResponse'
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /list-devices:
+        get:
+            tags:
+                - tailscale
+            summary: List all Tailscale devices with their metadata
+            operationId: listlistDevices
+            responses:
+                "200":
+                    description: Success
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/PersistedDeviceArray'
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /list-records:
+        get:
+            tags:
+                - dns
+            summary: List all DNS records with proxy information
+            operationId: listlistRecords
+            responses:
+                "200":
+                    description: Success
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/RecordArray'
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /swagger:
+        get:
+            tags:
+                - docs
+            summary: Swagger UI for API documentation
+            operationId: getswagger
+            responses:
+                "200":
+                    description: Success
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
 components:
-  schemas:
-    HealthResponse:
-      type: object
-      required:
-        - status
-        - version
-        - components
-      properties:
-        status:
-          type: string
-          enum: [healthy, unhealthy]
-          description: Overall health status
-        version:
-          type: string
-          description: API version
-        components:
-          type: object
-          properties:
-            api:
-              type: object
-              properties:
-                status:
-                  type: string
-                  enum: [healthy, unhealthy]
+    schemas:
+        AnnotationRequest:
+            properties:
+                name:
+                    type: string
+                property:
+                    type: string
+                value:
+                    type: string
+            required:
+                - name
+                - property
+                - value
+            type: object
+        CreateRecordRequest:
+            properties:
+                name:
+                    type: string
+                port:
+                    type: integer
+                service_name:
+                    type: string
+            required:
+                - service_name
+                - name
+            type: object
+        ErrorResponse:
+            properties:
+                error:
+                    description: Indicates this is an error response
+                    type: boolean
                 message:
-                  type: string
-            coredns:
-              type: object
-              properties:
+                    description: Human-readable error message
+                    type: string
                 status:
-                  type: string
-                  enum: [healthy, unhealthy]
-                message:
-                  type: string
-            certificate:
-              type: object
-              properties:
-                subject:
-                  type: string
-                issuer:
-                  type: string
-                not_before:
-                  type: string
-                  format: date-time
-                not_after:
-                  type: string
-                  format: date-time
-                expires_in:
-                  type: string
-    AddRecordRequest:
-      type: object
-      required:
-        - service_name
-      properties:
-        service_name:
-          type: string
-          pattern: '^[a-z0-9-]+$'
-          minLength: 1
-          maxLength: 63
-          description: Name of the service to add
-          example: "new-service"
-    AddRecordResponse:
-      type: object
-      required:
-        - status
-        - message
-        - data
-      properties:
-        status:
-          type: string
-          enum: [success, error]
-        message:
-          type: string
-          description: Operation result message
-        data:
-          type: object
-          properties:
-            hostname:
-              type: string
-              format: hostname
-              example: "new-service.internal.jerkytreats.dev"
-    ErrorResponse:
-      type: object
-      required:
-        - status
-        - message
-      properties:
-        status:
-          type: string
-          enum: [error]
-        message:
-          type: string
-          description: Error message
-        error_code:
-          type: string
-          description: Machine-readable error code
+                    description: HTTP status code
+                    type: integer
+            required:
+                - error
+                - message
+                - status
+            type: object
+        HealthResponse:
+            properties:
+                certificate:
+                    additionalProperties: true
+                    type: object
+                components:
+                    additionalProperties: true
+                    type: object
+                status:
+                    type: string
+                version:
+                    type: string
+            required:
+                - status
+                - version
+                - components
+            type: object
+        PersistedDeviceArray:
+            items:
+                properties:
+                    description:
+                        type: string
+                    name:
+                        type: string
+                    tailscale_ip:
+                        type: string
+                required:
+                    - name
+                    - tailscale_ip
+                    - description
+                type: object
+            type: array
+        Record:
+            properties:
+                created_at:
+                    description: Circular reference to time.Time
+                    type: object
+                ip:
+                    type: string
+                name:
+                    type: string
+                proxy_rule:
+                    properties:
+                        created_at:
+                            format: date-time
+                            type: string
+                        enabled:
+                            type: boolean
+                        hostname:
+                            type: string
+                        protocol:
+                            type: string
+                        target_ip:
+                            type: string
+                        target_port:
+                            type: integer
+                    required:
+                        - enabled
+                        - target_ip
+                        - target_port
+                        - protocol
+                        - hostname
+                        - created_at
+                    type: object
+                type:
+                    type: string
+                updated_at:
+                    description: Circular reference to time.Time
+                    type: object
+            required:
+                - name
+                - type
+                - ip
+                - created_at
+                - updated_at
+            type: object
+        RecordArray:
+            items:
+                properties:
+                    created_at:
+                        description: Circular reference to time.Time
+                        type: object
+                    ip:
+                        type: string
+                    name:
+                        type: string
+                    proxy_rule:
+                        properties:
+                            created_at:
+                                format: date-time
+                                type: string
+                            enabled:
+                                type: boolean
+                            hostname:
+                                type: string
+                            protocol:
+                                type: string
+                            target_ip:
+                                type: string
+                            target_port:
+                                type: integer
+                        required:
+                            - enabled
+                            - target_ip
+                            - target_port
+                            - protocol
+                            - hostname
+                            - created_at
+                        type: object
+                    type:
+                        type: string
+                    updated_at:
+                        description: Circular reference to time.Time
+                        type: object
+                required:
+                    - name
+                    - type
+                    - ip
+                    - created_at
+                    - updated_at
+                type: object
+            type: array
+        map[string]interface {}:
+            additionalProperties: true
+            type: object

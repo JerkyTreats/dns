@@ -50,11 +50,28 @@ jobs:
         go test -coverprofile=coverage.out ./...
         go tool cover -func=coverage.out
 
+    - name: Generate OpenAPI Documentation
+      run: go run cmd/generate-openapi/main.go
+
+    - name: Commit Updated OpenAPI Spec
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "OpenAPI Generator"
+        if ! git diff --quiet docs/api/openapi.yaml; then
+          git add docs/api/openapi.yaml
+          git commit -m "Auto-update OpenAPI spec [skip ci]"
+          git push
+          echo "✅ OpenAPI specification updated and committed"
+        else
+          echo "✅ OpenAPI specification is up to date"
+        fi
+
     - name: Test summary
       run: |
         echo "✅ All unit tests passed"
         echo "✅ Race condition tests passed"
         echo "✅ Coverage analysis completed"
+        echo "✅ OpenAPI documentation generated"
         echo "✅ Ready to build Docker images"
 
   # Build and publish Docker image only if all tests pass

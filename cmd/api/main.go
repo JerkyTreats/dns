@@ -26,6 +26,9 @@ import (
 	"github.com/jerkytreats/dns/internal/proxy"
 	"github.com/jerkytreats/dns/internal/tailscale"
 	"github.com/jerkytreats/dns/internal/tailscale/sync"
+	
+	// Import to trigger route registration
+	_ "github.com/jerkytreats/dns/internal/docs"
 )
 
 const (
