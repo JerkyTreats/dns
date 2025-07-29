@@ -54,17 +54,20 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add domain to certificate SAN list if certificate manager is available
+	// Add domain to certificate SAN list asynchronously to avoid blocking the API response
 	if h.certificateManager != nil && req.Name != "" {
 		dnsDomain := config.GetString(coredns.DNSDomainKey)
 		if dnsDomain != "" {
 			domain := fmt.Sprintf("%s.%s", req.Name, dnsDomain)
-			if err := h.certificateManager.AddDomainToSAN(domain); err != nil {
-				logging.Warn("Failed to add domain to certificate SAN: %v", err)
-				// Don't fail the record creation - certificate management is secondary
-			} else {
-				logging.Info("Added domain to certificate SAN: %s", domain)
-			}
+			go func(domainToAdd string) {
+				logging.Info("Starting asynchronous certificate renewal for domain: %s", domainToAdd)
+				if err := h.certificateManager.AddDomainToSAN(domainToAdd); err != nil {
+					logging.Warn("Failed to add domain to certificate SAN: %v", err)
+				} else {
+					logging.Info("Successfully added domain to certificate SAN: %s", domainToAdd)
+				}
+			}(domain)
+			logging.Info("Initiated asynchronous certificate renewal for domain: %s", domain)
 		}
 	}
 
