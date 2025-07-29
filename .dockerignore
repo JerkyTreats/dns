@@ -4,9 +4,6 @@
 *.md
 README.md
 
-# Documentation
-docs/
-
 # Test files and test artifacts
 tests/ssl-test/
 tests/logs/
