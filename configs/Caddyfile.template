@@ -9,7 +9,7 @@
     admin off
 
     # Enable automatic HTTPS for internal domains
-    auto_https off
+    auto_https internal
 
     # Log configuration
     log {
@@ -21,36 +21,35 @@
 
 {{/* Dynamic proxy rules will be generated below */}}
 {{- if .ProxyRules}}
-# Reverse proxy rules on port {{.Port}} - listening on all interfaces
+# HTTP listener (redirects to HTTPS)
 :{{.Port}} {
+    redir https://{host}{uri} permanent
+}
+
+# HTTPS listeners for each hostname
 {{- range .ProxyRules}}
 {{- if .Enabled}}
-    # Route for {{.Hostname}}
-    @{{.Hostname}} host {{.Hostname}}
-    handle @{{.Hostname}} {
-        reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
-            # Headers to pass through
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-        }
+{{.Hostname}} {
+    reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
+        # Headers to pass through
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto https
     }
-
-{{- end}}
-{{- end}}
-
-    # Default response for unmatched hosts
-    handle {
-        respond "No route configured for this host" 404
-    }
-
-    # Logging for this port
+    
+    # Use Let's Encrypt certificates from existing setup
+    tls /etc/letsencrypt/live/{{.Domain}}/cert.pem /etc/letsencrypt/live/{{.Domain}}/privkey.pem
+    
+    # Logging for this host
     log {
         output stdout
         format console
     }
 }
+
+{{- end}}
+{{- end}}
 {{- else}}
 # No proxy rules configured
 {{- end}}

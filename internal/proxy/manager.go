@@ -118,6 +118,7 @@ type ProxyConfig struct {
 	GeneratedAt string
 	Version     int
 	Port        string
+	Domain      string
 }
 
 // ProxyManagerInterface defines the interface for proxy management
@@ -144,6 +145,7 @@ type Manager struct {
 	rules         map[string]*ProxyRule
 	configVersion int
 	lastGenerated time.Time
+	domain        string
 }
 
 // Ensure Manager implements ProxyManagerInterface
@@ -171,6 +173,11 @@ func NewManager(reloader Reloader) (*Manager, error) {
 		port = "80"
 	}
 
+	domain := config.GetString("dns.domain")
+	if domain == "" {
+		domain = "internal.example.com"
+	}
+
 	enabled := config.GetBool("proxy.enabled")
 	if !enabled {
 		logging.Info("Reverse proxy is disabled")
@@ -195,6 +202,9 @@ func NewManager(reloader Reloader) (*Manager, error) {
 		storage:      NewProxyRuleStorage(),
 		rules:        make(map[string]*ProxyRule),
 	}
+
+	// Store domain for template usage
+	manager.domain = domain
 
 	// Restore proxy rules from persistent storage
 	logging.Info("Loading proxy rules from persistent storage...")
@@ -340,6 +350,7 @@ func (m *Manager) generateConfig() error {
 		GeneratedAt: time.Now().Format(time.RFC3339),
 		Version:     m.configVersion + 1,
 		Port:        m.port,
+		Domain:      m.domain,
 	}
 
 	// Execute template
