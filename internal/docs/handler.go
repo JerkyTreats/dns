@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
 )
 
@@ -50,7 +49,7 @@ func (h *DocsHandler) ServeSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	logging.Debug("Serving Swagger UI for path: %s", r.URL.Path)
 
 	// Generate Swagger UI HTML
-	html := h.generateSwaggerHTML()
+	html := h.generateSwaggerHTML(r)
 	
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -91,16 +90,17 @@ func (h *DocsHandler) ServeOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 }
 
 // generateSwaggerHTML generates the Swagger UI HTML page
-func (h *DocsHandler) generateSwaggerHTML() string {
-	// Get server information for the spec URL
-	serverHost := config.GetString("server.host")
-	serverPort := config.GetInt("server.port")
-	
+func (h *DocsHandler) generateSwaggerHTML(r *http.Request) string {
+	// Determine the current protocol from the request
+	// This accounts for the dual HTTP/HTTPS setup where HTTPS starts later
 	var baseURL string
-	if serverHost == "0.0.0.0" || serverHost == "" {
-		baseURL = fmt.Sprintf("http://localhost:%d", serverPort)
+	
+	if r.TLS != nil {
+		// Request came via HTTPS, use HTTPS for spec URL
+		baseURL = fmt.Sprintf("https://%s", r.Host)
 	} else {
-		baseURL = fmt.Sprintf("http://%s:%d", serverHost, serverPort)
+		// Request came via HTTP, use HTTP for spec URL
+		baseURL = fmt.Sprintf("http://%s", r.Host)
 	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>

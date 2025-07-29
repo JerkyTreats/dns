@@ -1,6 +1,8 @@
 package docs
 
 import (
+	"crypto/tls"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -185,21 +187,277 @@ func TestGenerateSwaggerHTML_ContainsRequiredElements(t *testing.T) {
 		t.Fatalf("NewDocsHandler() error = %v", err)
 	}
 
-	html := handler.generateSwaggerHTML()
-
-	requiredElements := []string{
-		"<!DOCTYPE html>",
-		"DNS Manager API Documentation",
-		"swagger-ui-dist",
-		"SwaggerUIBundle",
-		"/docs/openapi.yaml",
-		"swagger-ui",
+	tests := []struct {
+		name        string
+		setupTLS    bool
+		host        string
+		expectedURL string
+	}{
+		{
+			name:        "HTTP request generates HTTP spec URL",
+			setupTLS:    false,
+			host:        "localhost:8080",
+			expectedURL: "http://localhost:8080/docs/openapi.yaml",
+		},
+		{
+			name:        "HTTPS request generates HTTPS spec URL",
+			setupTLS:    true,
+			host:        "dns.internal.jerkytreats.dev",
+			expectedURL: "https://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+		},
 	}
 
-	for _, element := range requiredElements {
-		if !strings.Contains(html, element) {
-			t.Errorf("Generated HTML should contain '%s'", element)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/swagger", nil)
+			req.Host = tt.host
+			
+			if tt.setupTLS {
+				// Simulate HTTPS request by setting TLS field
+				req.TLS = &tls.ConnectionState{}
+			}
+			
+			html := handler.generateSwaggerHTML(req)
+
+			requiredElements := []string{
+				"<!DOCTYPE html>",
+				"DNS Manager API Documentation",
+				"swagger-ui-dist",
+				"SwaggerUIBundle",
+				"swagger-ui",
+				tt.expectedURL,
+			}
+
+			for _, element := range requiredElements {
+				if !strings.Contains(html, element) {
+					t.Errorf("Generated HTML should contain '%s'", element)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateSwaggerHTML_ProtocolDetection(t *testing.T) {
+	handler, err := NewDocsHandler()
+	if err != nil {
+		t.Fatalf("NewDocsHandler() error = %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		host             string
+		setupTLS         bool
+		expectedProtocol string
+		expectedHost     string
+	}{
+		{
+			name:             "HTTP request with localhost",
+			host:             "localhost:8080",
+			setupTLS:         false,
+			expectedProtocol: "http",
+			expectedHost:     "localhost:8080",
+		},
+		{
+			name:             "HTTP request with custom domain",
+			host:             "dns.internal.jerkytreats.dev:8080",
+			setupTLS:         false,
+			expectedProtocol: "http",
+			expectedHost:     "dns.internal.jerkytreats.dev:8080",
+		},
+		{
+			name:             "HTTPS request with standard port",
+			host:             "dns.internal.jerkytreats.dev",
+			setupTLS:         true,
+			expectedProtocol: "https",
+			expectedHost:     "dns.internal.jerkytreats.dev",
+		},
+		{
+			name:             "HTTPS request with custom port",
+			host:             "dns.internal.jerkytreats.dev:8443",
+			setupTLS:         true,
+			expectedProtocol: "https",
+			expectedHost:     "dns.internal.jerkytreats.dev:8443",
+		},
+		{
+			name:             "HTTPS request with localhost",
+			host:             "localhost:8443",
+			setupTLS:         true,
+			expectedProtocol: "https",
+			expectedHost:     "localhost:8443",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/swagger", nil)
+			req.Host = tt.host
+			
+			if tt.setupTLS {
+				req.TLS = &tls.ConnectionState{}
+			}
+			
+			html := handler.generateSwaggerHTML(req)
+			
+			expectedBaseURL := fmt.Sprintf("%s://%s", tt.expectedProtocol, tt.expectedHost)
+			expectedSpecURL := expectedBaseURL + "/docs/openapi.yaml"
+			
+			if !strings.Contains(html, expectedSpecURL) {
+				t.Errorf("Expected HTML to contain spec URL '%s', but it didn't. HTML snippet: %s", 
+					expectedSpecURL, html[strings.Index(html, "SwaggerUIBundle"):strings.Index(html, "SwaggerUIBundle")+200])
+			}
+			
+			// Verify the URL is used in the SwaggerUIBundle configuration
+			swaggerConfigStart := strings.Index(html, "SwaggerUIBundle({")
+			swaggerConfigEnd := strings.Index(html[swaggerConfigStart:], "});") + swaggerConfigStart
+			swaggerConfig := html[swaggerConfigStart:swaggerConfigEnd]
+			
+			if !strings.Contains(swaggerConfig, fmt.Sprintf("url: '%s'", expectedSpecURL)) {
+				t.Errorf("Expected Swagger config to contain 'url: %s', but it didn't. Config: %s", 
+					expectedSpecURL, swaggerConfig)
+			}
+		})
+	}
+}
+
+func TestGenerateSwaggerHTML_EdgeCases(t *testing.T) {
+	handler, err := NewDocsHandler()
+	if err != nil {
+		t.Fatalf("NewDocsHandler() error = %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		setupReq    func() *http.Request
+		expectError bool
+		description string
+	}{
+		{
+			name: "Request with empty Host header",
+			setupReq: func() *http.Request {
+				req := httptest.NewRequest("GET", "/swagger", nil)
+				req.Host = ""
+				return req
+			},
+			expectError: false,
+			description: "Should handle empty host gracefully",
+		},
+		{
+			name: "Request with IPv6 host",
+			setupReq: func() *http.Request {
+				req := httptest.NewRequest("GET", "/swagger", nil)
+				req.Host = "[::1]:8080"
+				return req
+			},
+			expectError: false,
+			description: "Should handle IPv6 addresses",
+		},
+		{
+			name: "TLS connection state with HTTP protocol",
+			setupReq: func() *http.Request {
+				req := httptest.NewRequest("GET", "/swagger", nil)
+				req.Host = "example.com:8080"
+				// This simulates a request that went through TLS termination
+				req.TLS = &tls.ConnectionState{}
+				return req
+			},
+			expectError: false,
+			description: "Should use HTTPS when TLS connection state present",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := tt.setupReq()
+			
+			// Should not panic or error
+			html := handler.generateSwaggerHTML(req)
+			
+			// Basic validation that HTML was generated
+			if len(html) == 0 {
+				t.Error("Generated HTML should not be empty")
+			}
+			
+			if !strings.Contains(html, "SwaggerUIBundle") {
+				t.Error("Generated HTML should contain SwaggerUIBundle")
+			}
+			
+			if !strings.Contains(html, "/docs/openapi.yaml") {
+				t.Error("Generated HTML should contain openapi.yaml URL")
+			}
+			
+			// For IPv6 case, ensure brackets are preserved
+			if req.Host == "[::1]:8080" {
+				expectedURL := "http://[::1]:8080/docs/openapi.yaml"
+				if !strings.Contains(html, expectedURL) {
+					t.Errorf("Expected IPv6 URL %s to be present in HTML", expectedURL)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateSwaggerHTML_RequestBasedVsConfigBased(t *testing.T) {
+	handler, err := NewDocsHandler()
+	if err != nil {
+		t.Fatalf("NewDocsHandler() error = %v", err)
+	}
+
+	// Test that the new implementation uses request data instead of config
+	tests := []struct {
+		name         string
+		requestHost  string
+		requestTLS   bool
+		expectedURL  string
+		description  string
+	}{
+		{
+			name:        "Request-based HTTP URL generation",
+			requestHost: "actual-request-host.com:9000",
+			requestTLS:  false,
+			expectedURL: "http://actual-request-host.com:9000/docs/openapi.yaml",
+			description: "Should use actual request host and detect HTTP",
+		},
+		{
+			name:        "Request-based HTTPS URL generation",
+			requestHost: "secure-host.example.com:9443",
+			requestTLS:  true,
+			expectedURL: "https://secure-host.example.com:9443/docs/openapi.yaml",
+			description: "Should use actual request host and detect HTTPS",
+		},
+		{
+			name:        "Standard ports handled correctly",
+			requestHost: "standard.example.com",
+			requestTLS:  true,
+			expectedURL: "https://standard.example.com/docs/openapi.yaml",
+			description: "Should work with standard ports (no explicit port)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/swagger", nil)
+			req.Host = tt.requestHost
+			
+			if tt.requestTLS {
+				req.TLS = &tls.ConnectionState{}
+			}
+			
+			html := handler.generateSwaggerHTML(req)
+			
+			if !strings.Contains(html, tt.expectedURL) {
+				t.Errorf("Expected HTML to contain URL '%s', but it didn't", tt.expectedURL)
+				
+				// Find and display the actual URL for debugging
+				urlStart := strings.Index(html, "url: '") + 6
+				if urlStart > 5 {
+					urlEnd := strings.Index(html[urlStart:], "'")
+					if urlEnd > 0 {
+						actualURL := html[urlStart : urlStart+urlEnd]
+						t.Errorf("Actual URL found: '%s'", actualURL)
+					}
+				}
+			}
+		})
 	}
 }
 
