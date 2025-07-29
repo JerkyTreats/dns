@@ -10,8 +10,19 @@ import (
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/persistence"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// MockDNSRecordProvider implements the DNS record provider interface for testing
+type MockDNSRecordProvider struct {
+	mock.Mock
+}
+
+func (m *MockDNSRecordProvider) ListRecords() ([]DNSRecord, error) {
+	args := m.Called()
+	return args.Get(0).([]DNSRecord), args.Error(1)
+}
 
 func TestManager_GetDomainsForCertificate(t *testing.T) {
 	// Create temporary directory for test
@@ -299,6 +310,80 @@ func TestManager_RemoveDomainFromSAN_NoStorage(t *testing.T) {
 	err := manager.RemoveDomainFromSAN("test.example.com")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "domain storage not initialized")
+}
+
+func TestManager_SetDNSRecordProvider(t *testing.T) {
+	manager := &Manager{}
+	
+	mockProvider := &MockDNSRecordProvider{}
+	manager.SetDNSRecordProvider(mockProvider)
+	
+	assert.Equal(t, mockProvider, manager.dnsRecordProvider)
+}
+
+func TestManager_ValidateAndUpdateSANDomains_Integration(t *testing.T) {
+	// Create temporary directory for test
+	tempDir, err := os.MkdirTemp("", "san_validation_integration_")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// Setup test config
+	config.SetForTest(CertDomainKey, "internal.example.com")
+	defer config.ResetForTest()
+
+	// Setup storage with initial domains
+	storage := &CertificateDomainStorage{
+		storage: persistence.NewFileStorageWithPath(filepath.Join(tempDir, "integration_test.json"), 3),
+	}
+	initialDomains := &CertificateDomains{
+		BaseDomain: "internal.example.com",
+		SANDomains: []string{"api.internal.example.com"},
+		UpdatedAt:  time.Now(),
+	}
+	err = storage.SaveDomains(initialDomains)
+	require.NoError(t, err)
+
+	// Setup mock DNS record provider
+	mockProvider := &MockDNSRecordProvider{}
+	dnsRecords := []DNSRecord{
+		{Name: "api", Type: "A"},    // Already in SAN
+		{Name: "dns", Type: "A"},    // Missing from SAN
+		{Name: "web", Type: "CNAME"}, // Missing from SAN
+		{Name: "", Type: "A"},       // Should be skipped
+	}
+	mockProvider.On("ListRecords").Return(dnsRecords, nil)
+
+	// Create mock manager that doesn't trigger actual certificate operations
+	manager := &MockManagerForSANValidation{
+		domainStorage:     storage,
+		dnsRecordProvider: mockProvider,
+		addedDomains:      make([]string, 0),
+	}
+
+	// Run validation
+	err = manager.ValidateAndUpdateSANDomains()
+	require.NoError(t, err)
+
+	// Verify domains were added to storage
+	updatedDomains, err := storage.LoadDomains()
+	require.NoError(t, err)
+
+	expectedSANs := []string{
+		"api.internal.example.com",
+		"dns.internal.example.com", 
+		"web.internal.example.com",
+	}
+	assert.ElementsMatch(t, expectedSANs, updatedDomains.SANDomains)
+	assert.Equal(t, "internal.example.com", updatedDomains.BaseDomain)
+
+	// Verify the correct domains were added via the manager
+	expectedAddedDomains := []string{
+		"dns.internal.example.com",
+		"web.internal.example.com",
+	}
+	assert.ElementsMatch(t, expectedAddedDomains, manager.addedDomains)
+
+	mockProvider.AssertExpectations(t)
 }
 
 func TestManager_ObtainCertificateWithRetry(t *testing.T) {

@@ -77,6 +77,12 @@ func (u *User) GetEmail() string                        { return u.Email }
 func (u *User) GetRegistration() *registration.Resource { return u.Registration }
 func (u *User) GetPrivateKey() crypto.PrivateKey        { return u.key }
 
+// DNSRecord represents a DNS record for SAN validation
+type DNSRecord struct {
+	Name string `json:"name"` // e.g., "api", "dns"
+	Type string `json:"type"` // e.g., "A"
+}
+
 // Manager handles certificate issuance and renewal.
 type Manager struct {
 	legoClient   *lego.Client
@@ -92,6 +98,11 @@ type Manager struct {
 	// CoreDNS integration for TLS enablement
 	corednsConfigManager interface {
 		EnableTLS(domain, certPath, keyPath string) error
+	}
+
+	// DNS record provider for SAN validation
+	dnsRecordProvider interface {
+		ListRecords() ([]DNSRecord, error)
 	}
 }
 
@@ -296,6 +307,14 @@ func (m *Manager) SetCoreDNSManager(configManager interface {
 }) {
 	logging.Info("Integrating certificate manager with CoreDNS ConfigManager")
 	m.corednsConfigManager = configManager
+}
+
+// SetDNSRecordProvider integrates the certificate manager with a DNS record provider for SAN validation
+func (m *Manager) SetDNSRecordProvider(provider interface {
+	ListRecords() ([]DNSRecord, error)
+}) {
+	logging.Info("Integrating certificate manager with DNS record provider for SAN validation")
+	m.dnsRecordProvider = provider
 }
 
 // ObtainCertificate requests a certificate for the given domain.
@@ -1161,4 +1180,88 @@ func (pm *ProcessManager) runProcess() error {
 // GetManager returns the underlying certificate manager for advanced usage
 func (pm *ProcessManager) GetManager() *Manager {
 	return pm.manager
+}
+
+// ValidateAndUpdateSANDomains checks existing DNS records against the certificate SAN list
+// and adds any missing domains to ensure certificate coverage
+func (m *Manager) ValidateAndUpdateSANDomains() error {
+	if m.dnsRecordProvider == nil {
+		logging.Debug("DNS record provider not set, skipping SAN validation")
+		return nil
+	}
+
+	if m.domainStorage == nil {
+		logging.Warn("Domain storage not initialized, skipping SAN validation")
+		return nil
+	}
+
+	logging.Info("Starting SAN domain validation against existing DNS records")
+
+	// Get current DNS records
+	dnsRecords, err := m.dnsRecordProvider.ListRecords()
+	if err != nil {
+		return fmt.Errorf("failed to list DNS records for SAN validation: %w", err)
+	}
+
+	// Get base domain for building FQDNs
+	baseDomain := config.GetString(CertDomainKey)
+	if baseDomain == "" {
+		return fmt.Errorf("certificate domain not configured")
+	}
+
+	// Get current SAN domains
+	certDomains, err := m.domainStorage.LoadDomains()
+	if err != nil {
+		return fmt.Errorf("failed to load certificate domains: %w", err)
+	}
+
+	// Build set of existing SAN domains for quick lookup
+	existingSANs := make(map[string]bool)
+	existingSANs[certDomains.BaseDomain] = true
+	for _, domain := range certDomains.SANDomains {
+		existingSANs[domain] = true
+	}
+
+	// Check each DNS record and add missing domains to SAN
+	domainsToAdd := make([]string, 0)
+	for _, record := range dnsRecords {
+		if record.Name == "" {
+			continue
+		}
+
+		// Build FQDN from record name and base domain
+		fqdn := fmt.Sprintf("%s.%s", record.Name, baseDomain)
+
+		// Skip if domain already in SAN
+		if existingSANs[fqdn] {
+			logging.Debug("Domain %s already in SAN list", fqdn)
+			continue
+		}
+
+		domainsToAdd = append(domainsToAdd, fqdn)
+	}
+
+	if len(domainsToAdd) == 0 {
+		logging.Info("SAN validation complete: all DNS records already covered by certificate")
+		return nil
+	}
+
+	logging.Info("Found %d domains missing from SAN certificate: %v", len(domainsToAdd), domainsToAdd)
+
+	// Add missing domains to SAN
+	addedCount := 0
+	for _, domain := range domainsToAdd {
+		if err := m.AddDomainToSAN(domain); err != nil {
+			logging.Error("Failed to add domain %s to SAN during validation: %v", domain, err)
+		} else {
+			logging.Info("Added domain %s to SAN during validation", domain)
+			addedCount++
+		}
+	}
+
+	if addedCount > 0 {
+		logging.Info("SAN validation complete: added %d domains to certificate", addedCount)
+	}
+
+	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/jerkytreats/dns/internal/certificate"
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/dns/record"
 	"github.com/jerkytreats/dns/internal/firewall"
 	"github.com/jerkytreats/dns/internal/healthcheck"
 	"github.com/jerkytreats/dns/internal/logging"
@@ -168,6 +169,23 @@ func main() {
 
 		certificateManager = certProcess.GetManager()
 		certReadyCh = certProcess.StartWithRetry(30 * time.Second)
+		
+		// Setup SAN validation integration
+		logging.Info("Setting up SAN validation for certificate manager...")
+		recordService := record.NewService(dnsManager, proxyManager, tailscaleClient)
+		dnsRecordAdapter := certificate.NewDNSRecordAdapter(recordService)
+		certificateManager.SetDNSRecordProvider(dnsRecordAdapter)
+		
+		// Perform initial SAN validation in background after certificates are ready
+		go func() {
+			<-certReadyCh // Wait for certificates to be ready
+			logging.Info("Performing initial SAN validation against existing DNS records")
+			if err := certificateManager.ValidateAndUpdateSANDomains(); err != nil {
+				logging.Warn("Failed to perform initial SAN validation: %v", err)
+			} else {
+				logging.Info("Initial SAN validation completed successfully")
+			}
+		}()
 	}
 
 	logging.Info("Starting sync process in background...")
