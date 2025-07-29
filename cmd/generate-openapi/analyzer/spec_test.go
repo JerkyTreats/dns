@@ -457,7 +457,7 @@ func TestSpecGenerationHeader(t *testing.T) {
 		t.Error("Spec should contain manual edit warning")
 	}
 	
-	if !strings.Contains(spec, "# Generated at:") {
-		t.Error("Spec should contain generation timestamp")
+	if !strings.Contains(spec, "# Auto-generated OpenAPI specification") {
+		t.Error("Spec should contain auto-generated header")
 	}
 }

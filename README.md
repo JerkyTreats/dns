@@ -1,203 +1,206 @@
-# Tailscale Internal DNS Manager
+# DNS Manager
 
-A lightweight API for managing internal DNS records with dynamic zone synchronization using Tailscale device discovery. Provides automated DNS record management, CoreDNS integration, and Let's Encrypt SSL/TLS certification.
-
-<img width="1190" height="940" alt="June2025_Tailscale" src="https://github.com/user-attachments/assets/1a1e1669-b898-4ec2-ae24-dbfda51dfcc2" />
-
+A comprehensive DNS management solution for Tailscale networks, providing automated DNS record management, SSL certificates, and reverse proxy configuration in a single unified container.
 
 ## Features
 
-- **Dynamic Device Discovery**: Automatically discovers Tailscale devices and creates DNS records
-- **RESTful API**: Simple interface for DNS record management
-- **CoreDNS Integration**: Reliable DNS resolution with automatic zone file management
-- **Let's Encrypt Integration**: Automated SSL/TLS certificate management via DNS-01 challenge
-- **Firewall Management**: Automatic ipset/iptables configuration for Tailscale CIDR protection
-- **Device Persistence**: Persistent storage of device metadata with backup support
+### 🎯 Core DNS Management
+- **Dynamic DNS Records**: Create and manage DNS records with automatic zone updates
+- **CoreDNS Integration**: Robust DNS server with health monitoring
+- **Zone Management**: Template-based zone files with automatic serial updates
+- **DNS-over-TLS**: Secure DNS with SSL/TLS support
 
-## Prerequisites
+### 🔗 Tailscale Integration
+- **Device Discovery**: Automatic discovery and sync of Tailscale devices
+- **IP Resolution**: Maps device names to Tailscale IPs (100.64.x.x range)
+- **Device Annotations**: Custom metadata and descriptions for devices
+- **Polling Sync**: Configurable automatic device synchronization
 
-- **Docker and Docker Compose**
-- **Tailscale Account** with API access enabled
-- **Domain Control** for DNS-01 challenge validation
+### 🔄 Reverse Proxy Automation
+- **Caddy Integration**: Automatic proxy rules for services with ports
+- **SSL Termination**: Automatic HTTPS for proxied services
+- **Dynamic Configuration**: Real-time proxy updates via Caddy's admin API
+- **Service Discovery**: Auto-proxy setup for DNS records with ports
 
-## Quick Start
+### 🔐 Security & Certificates
+- **Let's Encrypt Integration**: Automatic SSL certificate provisioning and renewal
+- **DNS-01 Challenge**: Cloudflare DNS challenge support for wildcard certificates
+- **SAN Management**: Subject Alternative Names for multi-domain certificates
+- **Firewall Integration**: Automatic IPSet management for Tailscale CIDR ranges
+- **TLS Configuration**: Customizable TLS versions and cipher suites
 
-### 1. Setup
-
-```bash
-git clone https://github.com/jerkytreats/dns.git
-cd dns
-./scripts/setup.sh
-```
-
-The setup script will prompt for:
-- Tailscale API key and tailnet name
-- Internal domain and Let's Encrypt email
-- Creates personalized configuration
-
-### 2. Deploy
-
-```bash
-docker-compose up --build -d
-```
-
-### 3. Verify
-
-```bash
-# Check service health
-curl http://localhost:8080/health
-
-# Test DNS resolution
-dig @localhost your-device.internal.yourdomain.com
-```
-
-## Configuration
-
-The main configuration file `configs/config.yaml` contains:
-
-```yaml
-dns:
-  domain: "internal.yourdomain.com"    # Base domain for DNS records
-  internal:
-    enabled: true                      # Enable dynamic device sync
-    origin: "internal.yourdomain.com"  # Zone origin for device records
-    polling:
-      enabled: true                    # Enable periodic sync
-      interval: "1h"                   # Sync interval
-
-tailscale:
-  api_key: "your-api-key"             # Tailscale API key
-  tailnet: "your-tailnet"             # Tailscale tailnet name
-  device_name: "your-device-name"     # Optional: specific device name
-
-certificate:
-  email: "your-email@domain.com"      # Let's Encrypt email
-  domain: "internal.yourdomain.com"   # Domain for certificates
-  renewal:
-    enabled: true                     # Enable auto-renewal
-    renew_before: "720h"              # Renew 30 days before expiry
-```
-
-## API Reference
-
-### Health Check
-```bash
-curl http://localhost:8080/health
-```
-
-### DNS Record Management
-```bash
-# Add a DNS record
-curl -X POST http://localhost:8080/add-record \
-  -H "Content-Type: application/json" \
-  -d '{"service_name": "my-service", "name": "my-service", "ip": "192.168.1.100"}'
-
-# List DNS records
-curl http://localhost:8080/list-records?service_name=my-service
-```
-
-### Device Management
-```bash
-# List Tailscale devices
-curl http://localhost:8080/list-devices
-
-# Annotate a device
-curl -X POST http://localhost:8080/annotate-device \
-  -H "Content-Type: application/json" \
-  -d '{"hostname": "my-device", "annotations": {"description": "Main server"}}'
-
-# Get device storage info
-curl http://localhost:8080/device-storage-info
-```
+### 🌐 API & Documentation
+- **REST API**: Complete HTTP API for DNS and device management
+- **OpenAPI/Swagger**: Auto-generated interactive documentation
+- **Route Registry**: Centralized route management
+- **Input Validation**: Request validation and error handling
 
 ## Architecture
 
-### Core Components
+The DNS Manager runs as a unified container using supervisord to manage multiple services:
 
-- **API Service** (`cmd/api/main.go`): Go application managing DNS records, certificates, and device sync
-- **CoreDNS Manager** (`internal/dns/coredns/`): Manages CoreDNS configuration and zone files
-- **Tailscale Client** (`internal/tailscale/`): Integrates with Tailscale API for device discovery
-- **Sync Manager** (`internal/tailscale/sync/`): Handles dynamic zone synchronization
-- **Certificate Manager** (`internal/certificate/`): Manages Let's Encrypt certificates via DNS-01 challenge
-- **Firewall Manager** (`internal/firewall/`): Configures ipset/iptables for Tailscale CIDR protection
-- **Device Persistence** (`internal/persistence/`): Stores device metadata with backup support
+- **API Service**: Go-based REST API for DNS and device management
+- **CoreDNS**: DNS server with health monitoring and TLS support
+- **Caddy**: Reverse proxy with automatic SSL termination
+- **Certificate Manager**: Background SSL certificate provisioning and renewal
 
-### Data Flow
+## Quick Start
 
-1. **Startup**: API service initializes Tailscale client, CoreDNS manager, and firewall rules
-2. **Device Discovery**: Sync manager fetches devices from Tailscale API
-3. **DNS Record Creation**: CoreDNS manager creates zone files and DNS records
-4. **Certificate Management**: Certificate manager handles Let's Encrypt challenges via CoreDNS
-5. **Ongoing Sync**: Periodic polling keeps DNS records synchronized with Tailscale devices
+### Docker Compose
+
+```yaml
+version: '3.8'
+
+services:
+  dns-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.all
+    ports:
+      - "8080:8080"    # API HTTP
+      - "8443:8443"    # API HTTPS
+      - "53:53/udp"    # DNS
+      - "53:53/tcp"    # DNS
+      - "853:853/tcp"  # DNS-over-TLS
+      - "80:80"        # Caddy HTTP
+      - "2019:2019"    # Caddy Admin
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs
+      - ./ssl:/etc/letsencrypt
+    environment:
+      - TAILSCALE_API_KEY=your_api_key
+      - TAILSCALE_TAILNET=your_tailnet
+      - INTERNAL_DOMAIN=internal.yourdomain.com
+      - CLOUDFLARE_API_TOKEN=your_cloudflare_token
+    privileged: true  # Required for firewall management
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+```
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `TAILSCALE_API_KEY` | Tailscale API key for device discovery | Yes |
+| `TAILSCALE_TAILNET` | Your Tailscale tailnet name | Yes |
+| `INTERNAL_DOMAIN` | Internal domain for DNS records | Yes |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token for DNS challenges | Yes |
+| `LETSENCRYPT_EMAIL` | Email for Let's Encrypt registration | Yes |
+| `SERVER_PORT` | API server port (default: 8080) | No |
+| `USE_PRODUCTION_CERTS` | Use production Let's Encrypt (default: false) | No |
+
+## Configuration
+
+The application uses a YAML configuration file (`config.yaml`) with the following sections:
+
+- **Server**: HTTP/HTTPS server settings
+- **DNS**: CoreDNS and zone management configuration
+- **Tailscale**: API integration settings
+- **Proxy**: Caddy reverse proxy configuration
+- **Certificate**: SSL certificate management
+- **Logging**: Log level and format settings
+
+See `configs/config.yaml.template` for a complete configuration example.
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/add-record` | POST | Create DNS record with optional proxy |
+| `/list-records` | GET | List all DNS records |
+| `/list-devices` | GET | List Tailscale devices |
+| `/annotate-device` | POST | Update device metadata |
+| `/health` | GET | Service health status |
+| `/swagger` | GET | Interactive API documentation |
+
+## Usage Examples
+
+### Create a DNS Record
+
+```bash
+curl -X POST http://localhost:8080/add-record \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_name": "web-service",
+    "name": "webapp",
+    "port": 8080
+  }'
+```
+
+This creates:
+- DNS A record: `webapp.internal.yourdomain.com → 100.64.1.5`
+- Reverse proxy rule: `webapp.internal.yourdomain.com → service_ip:8080`
+- SSL certificate for the domain
+
+### List All Records
+
+```bash
+curl http://localhost:8080/list-records
+```
+
+### Check Health Status
+
+```bash
+curl http://localhost:8080/health
+```
+
+## Ports
+
+| Port | Service | Protocol | Purpose |
+|------|---------|----------|---------|
+| 8080 | API | HTTP | REST API |
+| 8443 | API | HTTPS | Secure REST API |
+| 53 | CoreDNS | UDP/TCP | DNS resolution |
+| 853 | CoreDNS | TCP | DNS-over-TLS |
+| 80 | Caddy | HTTP | Reverse proxy |
+| 2019 | Caddy | HTTP | Admin API |
+| 8082 | CoreDNS | HTTP | Health check |
 
 ## Security
 
-- **Network Security**: All services run behind Tailscale network isolation
-- **TLS Encryption**: Automatic Let's Encrypt certificates with modern cipher suites
-- **Firewall Protection**: Automatic ipset/iptables configuration for Tailscale CIDR (100.64.0.0/10)
-- **Private Keys**: Securely managed with proper file permissions
-- **API Authentication**: Protected by Tailscale network access
+- **Privileged Mode**: Required for firewall (IPSet/iptables) management
+- **Network Capabilities**: NET_ADMIN and NET_RAW for network configuration
+- **TLS**: End-to-end encryption for all HTTP and DNS traffic
+- **Firewall**: Automatic Tailscale CIDR range management
 
-## Troubleshooting
+## Monitoring & Health
 
-### Common Issues
+Comprehensive health monitoring for all services:
 
-**Tailscale API Connection Failed**:
-- Verify `tailscale.api_key` is correct
-- Check your `tailscale.tailnet` name
-- Ensure API access is enabled in Tailscale admin console
+- **Health Checks**: Individual service status via `/health` endpoint
+- **Component Status**: DNS, API, and certificate service monitoring
+- **Readiness Probes**: Service readiness validation during startup
+- **Container Health**: Docker health check on port 8080
+- **Certificate Health**: SSL certificate expiration monitoring
+- **Logging**: Structured JSON logging with configurable levels
 
-**Device Not Found**:
-- Check device name matches exactly in Tailscale admin console
-- Ensure device is online and connected to Tailscale
-- Verify device appears in `tailscale status` output
+## Development
 
-**Let's Encrypt Certificate Issues**:
-- Ensure your domain's DNS points to your server
-- Check firewall allows ports 80, 443, 53, and 853
-- Verify email address is valid in configuration
+### Building
 
-**DNS Resolution Issues**:
-- Test CoreDNS directly: `dig @localhost internal.yourdomain.com`
-- Check CoreDNS logs: `docker-compose logs coredns`
-- Verify zone files in `configs/coredns/zones/`
+```bash
+# Build API only
+docker build -f Dockerfile.api -t dns-manager-api .
 
-### Debug Mode
-
-Enable debug logging in `configs/config.yaml`:
-```yaml
-logging:
-  level: debug
+# Build unified container
+docker build -f Dockerfile.all -t dns-manager .
 ```
 
-### Log Analysis
-```bash
-# API service logs
-docker-compose logs -f api
+### Testing
 
-# CoreDNS logs
-docker-compose logs -f coredns
+```bash
+go test ./...
 ```
 
-## Maintenance
+### Generating Documentation
 
-### Certificate Renewal
-- Certificates auto-renew 30 days before expiration
-- Monitor certificate status via `/health` endpoint
-- Manual renewal: restart the API service
-
-### Device Updates
-- New devices are automatically discovered on service restart
-- Dynamic sync updates DNS records when device IPs change
-- Use the API to add temporary records without config changes
-
-### Updates
 ```bash
-git pull origin main
-docker-compose down
-docker-compose up --build -d
+go run cmd/generate-openapi/main.go
 ```
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT

@@ -3,7 +3,6 @@ package analyzer
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/jerkytreats/dns/internal/api/types"
 	"gopkg.in/yaml.v3"
@@ -106,8 +105,8 @@ func (g *Generator) buildOpenAPISpec() string {
 		return fmt.Sprintf("# Error generating YAML: %v\n", err)
 	}
 
-	// Add generation timestamp comment
-	header := fmt.Sprintf("# Auto-generated OpenAPI specification\n# Generated at: %s\n# DO NOT EDIT MANUALLY - Changes will be overwritten\n\n", time.Now().Format(time.RFC3339))
+	// Add header comment
+	header := "# Auto-generated OpenAPI specification\n# DO NOT EDIT MANUALLY - Changes will be overwritten\n\n"
 	
 	return header + string(yamlData)
 }
