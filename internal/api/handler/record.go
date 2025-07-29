@@ -60,14 +60,14 @@ func (h *RecordHandler) AddRecord(w http.ResponseWriter, r *http.Request) {
 		if dnsDomain != "" {
 			domain := fmt.Sprintf("%s.%s", req.Name, dnsDomain)
 			go func(domainToAdd string) {
-				logging.Info("Starting asynchronous certificate renewal for domain: %s", domainToAdd)
+				logging.Info("Starting asynchronous certificate SAN check for domain: %s", domainToAdd)
 				if err := h.certificateManager.AddDomainToSAN(domainToAdd); err != nil {
 					logging.Warn("Failed to add domain to certificate SAN: %v", err)
 				} else {
-					logging.Info("Successfully added domain to certificate SAN: %s", domainToAdd)
+					logging.Info("Successfully processed domain for certificate SAN: %s", domainToAdd)
 				}
 			}(domain)
-			logging.Info("Initiated asynchronous certificate renewal for domain: %s", domain)
+			logging.Info("Initiated asynchronous certificate SAN processing for domain: %s", domain)
 		}
 	}
 

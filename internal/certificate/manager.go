@@ -298,6 +298,11 @@ func NewManager() (*Manager, error) {
 		}
 	}
 
+	// Sync storage with actual certificate on startup
+	if err := manager.SyncStorageWithCertificate(); err != nil {
+		logging.Warn("Failed to sync certificate storage during initialization: %v", err)
+	}
+
 	return manager, nil
 }
 
@@ -383,6 +388,47 @@ func (m *Manager) GetDomainsForCertificate() ([]string, error) {
 	return allDomains, nil
 }
 
+// CheckDomainCoverage verifies if a domain is already covered by the current certificate
+func (m *Manager) CheckDomainCoverage(domain string) (bool, error) {
+	if m == nil {
+		return false, fmt.Errorf("certificate manager not initialized")
+	}
+
+	// Check if certificate file exists
+	if _, err := os.Stat(m.certPath); os.IsNotExist(err) {
+		logging.Debug("Certificate file does not exist: %s", m.certPath)
+		return false, nil
+	}
+
+	certInfo, err := GetCertificateInfo(m.certPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to read certificate info: %w", err)
+	}
+
+	// Check if certificate is expired
+	if time.Until(certInfo.NotAfter) <= 0 {
+		logging.Debug("Certificate is expired, considering domain %s as not covered", domain)
+		return false, nil
+	}
+
+	// Check if domain matches certificate subject (Common Name)
+	if certInfo.Subject.CommonName == domain {
+		logging.Debug("Domain %s matches certificate Common Name", domain)
+		return true, nil
+	}
+
+	// Check Subject Alternative Names (SAN)
+	for _, sanDomain := range certInfo.DNSNames {
+		if sanDomain == domain {
+			logging.Debug("Domain %s found in certificate SAN list", domain)
+			return true, nil
+		}
+	}
+
+	logging.Debug("Domain %s not found in current certificate coverage", domain)
+	return false, nil
+}
+
 // AddDomainToSAN adds a new domain to the certificate SAN list and triggers renewal
 func (m *Manager) AddDomainToSAN(domain string) error {
 	if m == nil {
@@ -391,6 +437,21 @@ func (m *Manager) AddDomainToSAN(domain string) error {
 	if m.domainStorage == nil {
 		return fmt.Errorf("domain storage not initialized")
 	}
+
+	// Check if domain is already covered by existing certificate
+	covered, err := m.CheckDomainCoverage(domain)
+	if err != nil {
+		logging.Warn("Could not check certificate coverage for %s: %v", domain, err)
+	} else if covered {
+		logging.Info("Domain %s already covered by existing certificate, skipping renewal", domain)
+		// Still add to storage for tracking, but don't trigger renewal
+		if err := m.domainStorage.AddDomain(domain); err != nil {
+			return fmt.Errorf("failed to add domain to storage: %w", err)
+		}
+		return nil
+	}
+
+	logging.Info("Domain %s not covered by current certificate, adding to SAN and triggering renewal", domain)
 
 	if err := m.domainStorage.AddDomain(domain); err != nil {
 		return fmt.Errorf("failed to add domain to storage: %w", err)
@@ -1269,5 +1330,64 @@ func (m *Manager) ValidateAndUpdateSANDomains() error {
 		logging.Info("SAN validation complete: added %d domains to certificate", addedCount)
 	}
 
+	return nil
+}
+
+// SyncStorageWithCertificate ensures storage matches actual certificate coverage
+// This should be called during startup to sync persistent storage with the actual certificate
+func (m *Manager) SyncStorageWithCertificate() error {
+	if m == nil {
+		return fmt.Errorf("certificate manager not initialized")
+	}
+	if m.domainStorage == nil {
+		return fmt.Errorf("domain storage not initialized")
+	}
+
+	logging.Info("Syncing certificate domain storage with actual certificate")
+
+	// Check if certificate file exists
+	if _, err := os.Stat(m.certPath); os.IsNotExist(err) {
+		logging.Debug("Certificate file does not exist, keeping current storage")
+		return nil
+	}
+
+	certInfo, err := GetCertificateInfo(m.certPath)
+	if err != nil {
+		logging.Warn("Failed to read certificate info during sync: %v", err)
+		return nil // Don't fail startup, just warn
+	}
+
+	// Check if certificate is expired
+	if time.Until(certInfo.NotAfter) <= 0 {
+		logging.Warn("Certificate is expired, keeping current storage for renewal")
+		return nil
+	}
+
+	// Extract domains from certificate
+	baseDomain := certInfo.Subject.CommonName
+	if baseDomain == "" && len(certInfo.DNSNames) > 0 {
+		baseDomain = certInfo.DNSNames[0]
+	}
+
+	// Build SAN domains list (exclude base domain from DNS names)
+	sanDomains := make([]string, 0)
+	for _, dnsName := range certInfo.DNSNames {
+		if dnsName != baseDomain {
+			sanDomains = append(sanDomains, dnsName)
+		}
+	}
+
+	// Create updated domain storage
+	actualDomains := &CertificateDomains{
+		BaseDomain: baseDomain,
+		SANDomains: sanDomains,
+		UpdatedAt:  time.Now(),
+	}
+
+	if err := m.domainStorage.SaveDomains(actualDomains); err != nil {
+		return fmt.Errorf("failed to sync domain storage with certificate: %w", err)
+	}
+
+	logging.Info("Successfully synced domain storage: base=%s, san_count=%d", baseDomain, len(sanDomains))
 	return nil
 }
