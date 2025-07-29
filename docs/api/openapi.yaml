@@ -230,6 +230,44 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
+    /remove-record:
+        delete:
+            tags:
+                - dns
+            summary: Remove a DNS record and associated proxy rule
+            operationId: deleteremoveRecord
+            requestBody:
+                description: Request body for Remove a DNS record and associated proxy rule
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/RemoveRecordRequest'
+            responses:
+                "200":
+                    description: Success
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/map[string]string'
+                "400":
+                    description: Bad Request
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "422":
+                    description: Unprocessable Entity
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
     /swagger:
         get:
             tags:
@@ -416,6 +454,19 @@ components:
                     - updated_at
                 type: object
             type: array
+        RemoveRecordRequest:
+            properties:
+                name:
+                    type: string
+                service_name:
+                    type: string
+            required:
+                - service_name
+                - name
+            type: object
         map[string]interface {}:
+            additionalProperties: true
+            type: object
+        map[string]string:
             additionalProperties: true
             type: object
