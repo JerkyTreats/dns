@@ -490,6 +490,94 @@ func TestGenerateConfig_InvalidTemplate(t *testing.T) {
 	config.ResetForTest()
 }
 
+func TestGenerateConfig_TemplateExecutionError(t *testing.T) {
+	manager, testDir := setupTestManager(t)
+
+	// Add a rule to trigger template execution
+	manager.mu.Lock()
+	rule := &ProxyRule{
+		Hostname:   "test.example.com",
+		TargetIP:   "192.168.1.100",
+		TargetPort: 8080,
+		Protocol:   "http",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	manager.rules["test.example.com"] = rule
+	manager.mu.Unlock()
+
+	// Create template with incorrect field access (simulating the bug we fixed)
+	buggyTemplate := `{{- if .ProxyRules}}
+{{- range .ProxyRules}}
+{{- if .Enabled}}
+{{.Hostname}} {
+    reverse_proxy {{.TargetIP}}:{{.TargetPort}}
+    tls /etc/letsencrypt/live/{{.Domain}}/cert.pem /etc/letsencrypt/live/{{.Domain}}/privkey.pem
+}
+{{- end}}
+{{- end}}
+{{- end}}`
+	err := os.WriteFile(manager.templatePath, []byte(buggyTemplate), 0644)
+	require.NoError(t, err)
+
+	err = manager.generateConfig()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to execute proxy template")
+	assert.Contains(t, err.Error(), "can't evaluate field Domain")
+
+	// Clean up
+	os.RemoveAll(testDir)
+	config.ResetForTest()
+}
+
+func TestGenerateConfig_CorrectDomainAccess(t *testing.T) {
+	manager, testDir := setupTestManager(t)
+
+	// Add a rule to trigger template execution
+	manager.mu.Lock()
+	rule := &ProxyRule{
+		Hostname:   "test.example.com",
+		TargetIP:   "192.168.1.100",
+		TargetPort: 8080,
+		Protocol:   "http",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+	}
+	manager.rules["test.example.com"] = rule
+	manager.domain = "internal.example.com" // Set domain for template
+	manager.mu.Unlock()
+
+	// Create template with correct domain field access (the fix)
+	correctTemplate := `{{- if .ProxyRules}}
+{{- range .ProxyRules}}
+{{- if .Enabled}}
+{{.Hostname}} {
+    reverse_proxy {{.TargetIP}}:{{.TargetPort}}
+    tls /etc/letsencrypt/live/{{$.Domain}}/cert.pem /etc/letsencrypt/live/{{$.Domain}}/privkey.pem
+}
+{{- end}}
+{{- end}}
+{{- end}}`
+	err := os.WriteFile(manager.templatePath, []byte(correctTemplate), 0644)
+	require.NoError(t, err)
+
+	err = manager.generateConfig()
+	assert.NoError(t, err)
+
+	// Verify the config was generated correctly with domain substitution
+	configContent, err := os.ReadFile(manager.configPath)
+	assert.NoError(t, err)
+	configStr := string(configContent)
+	assert.Contains(t, configStr, "test.example.com")
+	assert.Contains(t, configStr, "192.168.1.100:8080")
+	assert.Contains(t, configStr, "/etc/letsencrypt/live/internal.example.com/cert.pem")
+	assert.Contains(t, configStr, "/etc/letsencrypt/live/internal.example.com/privkey.pem")
+
+	// Clean up
+	os.RemoveAll(testDir)
+	config.ResetForTest()
+}
+
 func TestReloadProxy_Disabled(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	manager.enabled = false

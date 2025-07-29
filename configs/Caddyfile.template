@@ -39,7 +39,7 @@
     }
     
     # Use Let's Encrypt certificates from existing setup
-    tls /etc/letsencrypt/live/{{.Domain}}/cert.pem /etc/letsencrypt/live/{{.Domain}}/privkey.pem
+    tls /etc/letsencrypt/live/{{$.Domain}}/cert.pem /etc/letsencrypt/live/{{$.Domain}}/privkey.pem
     
     # Logging for this host
     log {
