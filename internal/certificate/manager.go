@@ -385,6 +385,9 @@ func (m *Manager) GetDomainsForCertificate() ([]string, error) {
 
 // AddDomainToSAN adds a new domain to the certificate SAN list and triggers renewal
 func (m *Manager) AddDomainToSAN(domain string) error {
+	if m == nil {
+		return fmt.Errorf("certificate manager not initialized")
+	}
 	if m.domainStorage == nil {
 		return fmt.Errorf("domain storage not initialized")
 	}
@@ -405,6 +408,9 @@ func (m *Manager) AddDomainToSAN(domain string) error {
 
 // RemoveDomainFromSAN removes a domain from SAN list and triggers renewal
 func (m *Manager) RemoveDomainFromSAN(domain string) error {
+	if m == nil {
+		return fmt.Errorf("certificate manager not initialized")
+	}
 	if m.domainStorage == nil {
 		return fmt.Errorf("domain storage not initialized")
 	}
