@@ -49,7 +49,21 @@ func (s *Service) CreateRecord(req CreateRecordRequest, httpRequest ...*http.Req
 		logging.Info("Creating record: %s.%s", req.Name, req.ServiceName)
 	}
 
-	// 1. Validate input
+	// 1. Normalize and validate input
+	normalizedReq, err := s.validator.NormalizeCreateRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("normalization failed: %w", err)
+	}
+	
+	// Log if normalization changed the input
+	if normalizedReq.ServiceName != req.ServiceName || normalizedReq.Name != req.Name {
+		logging.Info("Normalized record request: %s.%s -> %s.%s", 
+			req.Name, req.ServiceName, normalizedReq.Name, normalizedReq.ServiceName)
+	}
+	
+	// Use the normalized request for the rest of the operation
+	req = normalizedReq
+
 	if err := s.validator.ValidateCreateRequest(req); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}

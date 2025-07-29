@@ -10,6 +10,16 @@ import (
 // RecordValidator implements the Validator interface
 type RecordValidator struct{}
 
+// ValidationMode determines how validation should handle normalization
+type ValidationMode int
+
+const (
+	// StrictValidation rejects any input that requires normalization
+	StrictValidation ValidationMode = iota
+	// AutoNormalizeValidation accepts input and applies normalization
+	AutoNormalizeValidation
+)
+
 // NewValidator creates a new record validator
 func NewValidator() Validator {
 	return &RecordValidator{}
@@ -46,6 +56,34 @@ func (v *RecordValidator) ValidateCreateRequest(req CreateRecordRequest) error {
 	return nil
 }
 
+// NormalizeCreateRequest normalizes a CreateRecordRequest and returns the normalized version
+func (v *RecordValidator) NormalizeCreateRequest(req CreateRecordRequest) (CreateRecordRequest, error) {
+	normalizedReq := req
+
+	// Normalize service name
+	serviceResult := validation.ValidateServiceName(req.ServiceName)
+	if !serviceResult.IsValid {
+		return req, fmt.Errorf("invalid service name: %s", strings.Join(serviceResult.Errors, "; "))
+	}
+	normalizedReq.ServiceName = serviceResult.NormalizedName
+
+	// Normalize record name
+	nameResult := validation.ValidateDNSName(req.Name)
+	if !nameResult.IsValid {
+		return req, fmt.Errorf("invalid record name: %s", strings.Join(nameResult.Errors, "; "))
+	}
+	normalizedReq.Name = nameResult.NormalizedName
+
+	// Port validation remains the same
+	if req.Port != nil {
+		if err := v.validatePort(*req.Port); err != nil {
+			return req, fmt.Errorf("invalid port: %w", err)
+		}
+	}
+
+	return normalizedReq, nil
+}
+
 // ValidateRemoveRequest validates a RemoveRecordRequest
 func (v *RecordValidator) ValidateRemoveRequest(req RemoveRecordRequest) error {
 	// Validate required fields
@@ -72,18 +110,15 @@ func (v *RecordValidator) ValidateRemoveRequest(req RemoveRecordRequest) error {
 
 // validateServiceName validates the service name format
 func (v *RecordValidator) validateServiceName(serviceName string) error {
-	if serviceName == "" {
-		return fmt.Errorf("service name cannot be empty")
+	result := validation.ValidateServiceName(serviceName)
+	
+	if !result.IsValid {
+		return fmt.Errorf("invalid service name: %s", strings.Join(result.Errors, "; "))
 	}
 
-	// Service name should be alphanumeric with hyphens and dots allowed
-	if !isValidServiceName(serviceName) {
-		return fmt.Errorf("service name must contain only lowercase letters, numbers, hyphens, and dots")
-	}
-
-	// Check length constraints
-	if len(serviceName) > 63 {
-		return fmt.Errorf("service name cannot exceed 63 characters")
+	// For strict validation, require exact match (no normalization needed)
+	if result.NormalizedName != serviceName {
+		return fmt.Errorf("service name contains invalid characters or format - expected: %s", result.NormalizedName)
 	}
 
 	return nil
@@ -91,18 +126,15 @@ func (v *RecordValidator) validateServiceName(serviceName string) error {
 
 // validateRecordName validates the DNS record name format
 func (v *RecordValidator) validateRecordName(name string) error {
-	if name == "" {
-		return fmt.Errorf("record name cannot be empty")
+	result := validation.ValidateDNSName(name)
+	
+	if !result.IsValid {
+		return fmt.Errorf("invalid record name: %s", strings.Join(result.Errors, "; "))
 	}
 
-	// Record name should be a valid DNS label
-	if !isValidDNSLabel(name) {
-		return fmt.Errorf("record name must be a valid DNS label")
-	}
-
-	// Check length constraints
-	if len(name) > 63 {
-		return fmt.Errorf("record name cannot exceed 63 characters")
+	// For strict validation, require exact match (no normalization needed)
+	if result.NormalizedName != name {
+		return fmt.Errorf("record name contains invalid characters or format - expected: %s", result.NormalizedName)
 	}
 
 	return nil

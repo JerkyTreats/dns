@@ -129,7 +129,7 @@ func TestCreateRecord(t *testing.T) {
 		// Assert
 		assert.Error(t, err)
 		assert.Nil(t, record)
-		assert.Contains(t, err.Error(), "validation failed")
+		assert.Contains(t, err.Error(), "normalization failed")
 
 		mockTailscaleClient.AssertNotCalled(t, "GetCurrentDeviceIP")
 		mockDNSManager.AssertNotCalled(t, "AddRecord")

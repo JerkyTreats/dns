@@ -73,6 +73,7 @@ type TailscaleClientInterface interface {
 type Validator interface {
 	ValidateCreateRequest(req CreateRecordRequest) error
 	ValidateRemoveRequest(req RemoveRecordRequest) error
+	NormalizeCreateRequest(req CreateRecordRequest) (CreateRecordRequest, error)
 }
 
 // Generator defines the interface for runtime record generation
