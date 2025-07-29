@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
 )
 
@@ -95,13 +96,35 @@ func (h *DocsHandler) generateSwaggerHTML(r *http.Request) string {
 	// This accounts for the dual HTTP/HTTPS setup where HTTPS starts later
 	var baseURL string
 	
+	// Log for debugging to understand what's happening with the request
+	logging.Debug("Swagger HTML generation - Host: %s, TLS: %v, URL: %s", r.Host, r.TLS != nil, r.URL.String())
+	
+	// Use request host, but provide fallback if empty
+	host := r.Host
+	if host == "" {
+		// Fallback: construct from server config like main.go does
+		// This handles edge cases where Host header might be missing
+		logging.Warn("Request Host header is empty, falling back to server config")
+		serverHost := config.GetString("server.host")
+		serverPort := config.GetInt("server.port")
+		
+		if serverHost == "0.0.0.0" || serverHost == "" {
+			host = fmt.Sprintf("localhost:%d", serverPort)
+		} else {
+			host = fmt.Sprintf("%s:%d", serverHost, serverPort)
+		}
+		logging.Debug("Using fallback host: %s", host)
+	}
+	
 	if r.TLS != nil {
 		// Request came via HTTPS, use HTTPS for spec URL
-		baseURL = fmt.Sprintf("https://%s", r.Host)
+		baseURL = fmt.Sprintf("https://%s", host)
 	} else {
 		// Request came via HTTP, use HTTP for spec URL
-		baseURL = fmt.Sprintf("http://%s", r.Host)
+		baseURL = fmt.Sprintf("http://%s", host)
 	}
+	
+	logging.Debug("Swagger using base URL: %s", baseURL)
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">

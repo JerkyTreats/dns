@@ -339,7 +339,7 @@ func TestGenerateSwaggerHTML_EdgeCases(t *testing.T) {
 				return req
 			},
 			expectError: false,
-			description: "Should handle empty host gracefully",
+			description: "Should handle empty host gracefully with config fallback",
 		},
 		{
 			name: "Request with IPv6 host",
@@ -455,6 +455,91 @@ func TestGenerateSwaggerHTML_RequestBasedVsConfigBased(t *testing.T) {
 						actualURL := html[urlStart : urlStart+urlEnd]
 						t.Errorf("Actual URL found: '%s'", actualURL)
 					}
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateSwaggerHTML_DNSEndpoint(t *testing.T) {
+	handler, err := NewDocsHandler()
+	if err != nil {
+		t.Fatalf("NewDocsHandler() error = %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		requestHost string
+		requestTLS  bool
+		expectedURL string
+		description string
+	}{
+		{
+			name:        "DNS endpoint HTTP",
+			requestHost: "dns.internal.jerkytreats.dev",
+			requestTLS:  false,
+			expectedURL: "http://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+			description: "Should use DNS endpoint for HTTP requests",
+		},
+		{
+			name:        "DNS endpoint HTTPS",
+			requestHost: "dns.internal.jerkytreats.dev",
+			requestTLS:  true,
+			expectedURL: "https://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+			description: "Should use DNS endpoint for HTTPS requests",
+		},
+		{
+			name:        "DNS endpoint with custom port HTTP",
+			requestHost: "dns.internal.jerkytreats.dev:8080",
+			requestTLS:  false,
+			expectedURL: "http://dns.internal.jerkytreats.dev:8080/docs/openapi.yaml",
+			description: "Should preserve custom port in DNS endpoint HTTP",
+		},
+		{
+			name:        "DNS endpoint with custom port HTTPS",
+			requestHost: "dns.internal.jerkytreats.dev:8443",
+			requestTLS:  true,
+			expectedURL: "https://dns.internal.jerkytreats.dev:8443/docs/openapi.yaml",
+			description: "Should preserve custom port in DNS endpoint HTTPS",
+		},
+		{
+			name:        "Local development fallback",
+			requestHost: "localhost:8080",
+			requestTLS:  false,
+			expectedURL: "http://localhost:8080/docs/openapi.yaml",
+			description: "Should work with localhost for development",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/swagger", nil)
+			req.Host = tt.requestHost
+			
+			if tt.requestTLS {
+				req.TLS = &tls.ConnectionState{}
+			}
+			
+			html := handler.generateSwaggerHTML(req)
+			
+			if !strings.Contains(html, tt.expectedURL) {
+				t.Errorf("Expected HTML to contain URL '%s', but it didn't", tt.expectedURL)
+				
+				// Find and display the actual URL for debugging
+				urlStart := strings.Index(html, "url: '") + 6
+				if urlStart > 5 {
+					urlEnd := strings.Index(html[urlStart:], "'")
+					if urlEnd > 0 {
+						actualURL := html[urlStart : urlStart+urlEnd]
+						t.Errorf("Actual URL found: '%s'", actualURL)
+					}
+				}
+			}
+			
+			// Verify no localhost fallback when using DNS endpoint
+			if strings.Contains(tt.requestHost, "dns.internal.jerkytreats.dev") {
+				if strings.Contains(html, "localhost") {
+					t.Errorf("DNS endpoint should not contain localhost fallback in URL")
 				}
 			}
 		})
