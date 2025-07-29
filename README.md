@@ -2,6 +2,9 @@
 
 A lightweight API for managing internal DNS records with dynamic zone synchronization using Tailscale device discovery. Provides automated DNS record management, CoreDNS integration, and Let's Encrypt SSL/TLS certification.
 
+<img width="1190" height="940" alt="June2025_Tailscale" src="https://github.com/user-attachments/assets/1a1e1669-b898-4ec2-ae24-dbfda51dfcc2" />
+
+
 ## Features
 
 - **Dynamic Device Discovery**: Automatically discovers Tailscale devices and creates DNS records
