@@ -248,6 +248,11 @@ func main() {
 
 	// Register the DNS API service itself using the simplified add-record endpoint
 	go func() {
+		if tlsEnabled && certReadyCh != nil {
+			logging.Info("Waiting for certificate ready signal before registering DNS API service...")
+			<-certReadyCh
+			logging.Info("Certificate ready signal received, registering DNS API service...")
+		}
 		registerDNSAPIService()
 	}()
 
