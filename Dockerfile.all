@@ -48,7 +48,7 @@ WORKDIR /app
 COPY --from=builder /app/bin/api /app/api
 
 # Copy documentation files for Swagger UI
-COPY --from=builder /app/docs ./docs
+COPY --from=builder /app/docs /app/docs
 
 # Install CoreDNS
 RUN wget -q https://github.com/coredns/coredns/releases/download/v1.11.1/coredns_1.11.1_linux_amd64.tgz \
