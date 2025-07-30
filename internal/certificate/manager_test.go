@@ -27,6 +27,9 @@ const (
 )
 
 func setupTestManager(t *testing.T) (*Manager, string) {
+	// Clean up any leftover certificate data files from previous test runs
+	CleanupCertificateDataDir(t)
+	
 	tempDir, err := os.MkdirTemp("", "cert-manager-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(tempDir) })
@@ -41,6 +44,9 @@ func setupTestManager(t *testing.T) (*Manager, string) {
 	// Set required Cloudflare API token for tests
 	config.SetForTest(CertCloudflareTokenKey, "test-cloudflare-token")
 	config.SetForTest(CertDomainKey, "test.example.com")
+	
+	// Set certificate domain storage path to use a temporary directory
+	config.SetForTest(CertDomainStoragePathKey, filepath.Join(tempDir, "certificate_domains.json"))
 
 	// For tests, we'll skip the manager creation since it requires real Cloudflare API
 	// and focus on testing the individual components that don't require external APIs

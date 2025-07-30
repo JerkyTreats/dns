@@ -1,8 +1,0 @@
-{
-  "base_domain": "internal.jerkytreats.dev",
-  "san_domains": [
-    "dns.internal.jerkytreats.dev",
-    "api.internal.jerkytreats.dev"
-  ],
-  "updated_at": "2025-07-29T13:57:16.258921-07:00"
-}

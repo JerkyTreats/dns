@@ -47,6 +47,10 @@ Thumbs.db
 *.log
 logs/
 
+# Certificate data
+internal/certificate/data/*
+!internal/certificate/data/.gitkeep
+
 # Runtime data
 pids
 *.pid

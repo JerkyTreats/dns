@@ -8,8 +8,8 @@
     # Disable admin API on standard port to avoid conflicts
     admin off
 
-    # Enable automatic HTTPS for internal domains
-    auto_https internal
+    # Disable automatic HTTPS since we manage certificates manually
+    auto_https off
 
     # Log configuration
     log {
@@ -30,12 +30,15 @@
 {{- range .ProxyRules}}
 {{- if .Enabled}}
 {{.Hostname}} {
-    reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
-        # Headers to pass through
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto https
+    # Explicit route for all paths to ensure no overlap with other hosts
+    route /* {
+        reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
+            # Headers to pass through
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto https
+        }
     }
     
     # Use Let's Encrypt certificates from existing setup

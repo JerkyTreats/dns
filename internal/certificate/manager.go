@@ -47,6 +47,8 @@ const (
 	CertDNSCleanupWaitKey       = "certificate.dns_cleanup_wait"
 	CertDNSCreationWaitKey      = "certificate.dns_creation_wait"
 	CertUseProdCertsKey         = "certificate.use_production_certs"
+	CertDomainStoragePathKey    = "certificate.domain_storage_path"
+	CertDomainBackupCountKey    = "certificate.domain_backup_count"
 )
 
 func init() {

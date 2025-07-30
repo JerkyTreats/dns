@@ -9,6 +9,7 @@ import (
 	"github.com/jerkytreats/dns/internal/certificate"
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/logging"
+	"github.com/jerkytreats/dns/internal/proxy"
 	"github.com/jerkytreats/dns/internal/tailscale/sync"
 )
 
@@ -31,11 +32,12 @@ type HealthResponse struct {
 type Handler struct {
 	dnsChecker         Checker
 	syncManager        *sync.Manager
+	proxyManager       proxy.ProxyManagerInterface
 	getCertificateInfo func() map[string]interface{} // Injected function to avoid import cycles
 }
 
 // NewHandler creates a new health check handler with all necessary dependencies
-func NewHandler(dnsChecker Checker, syncManager *sync.Manager) (*Handler, error) {
+func NewHandler(dnsChecker Checker, syncManager *sync.Manager, proxyManager proxy.ProxyManagerInterface) (*Handler, error) {
 	logging.Info("Initializing health check handler")
 
 	// Create certificate info function internally
@@ -60,6 +62,7 @@ func NewHandler(dnsChecker Checker, syncManager *sync.Manager) (*Handler, error)
 	handler := &Handler{
 		dnsChecker:         dnsChecker,
 		syncManager:        syncManager,
+		proxyManager:       proxyManager,
 		getCertificateInfo: getCertificateInfo,
 	}
 
@@ -88,6 +91,32 @@ func (h *Handler) buildHealthResponse() HealthResponse {
 			Status:  "healthy",
 			Message: "API is running",
 		},
+	}
+
+	// Check Caddy status via proxy manager
+	if h.proxyManager != nil {
+		if h.proxyManager.IsEnabled() {
+			if ok, latency, err := h.proxyManager.CheckHealth(); ok {
+				components["caddy"] = HealthStatus{
+					Status:  "healthy",
+					Message: fmt.Sprintf("Caddy responded in %v", latency),
+				}
+			} else {
+				msg := "Caddy health check failed"
+				if err != nil {
+					msg = err.Error()
+				}
+				components["caddy"] = HealthStatus{
+					Status:  "error",
+					Message: msg,
+				}
+			}
+		} else {
+			components["caddy"] = HealthStatus{
+				Status:  "disabled",
+				Message: "Proxy/Caddy is disabled",
+			}
+		}
 	}
 
 	// Dynamic CoreDNS health status

@@ -25,7 +25,7 @@ type HandlerRegistry struct {
 }
 
 // NewHandlerRegistry creates a new handler registry with all handlers initialized
-func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Checker, syncManager *sync.Manager, proxyManager *proxy.Manager, tailscaleClient *tailscale.Client, certificateManager interface {
+func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Checker, syncManager *sync.Manager, proxyManager proxy.ProxyManagerInterface, tailscaleClient *tailscale.Client, certificateManager interface {
 	AddDomainToSAN(domain string) error
 	RemoveDomainFromSAN(domain string) error
 }) (*HandlerRegistry, error) {
@@ -40,7 +40,7 @@ func NewHandlerRegistry(dnsManager *coredns.Manager, dnsChecker healthcheck.Chec
 		return nil, err
 	}
 
-	healthHandler, err := healthcheck.NewHandler(dnsChecker, syncManager)
+	healthHandler, err := healthcheck.NewHandler(dnsChecker, syncManager, proxyManager)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/jerkytreats/dns/internal/api/handler"
 	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,9 +23,10 @@ func TestHealthCheckHandler(t *testing.T) {
 	// Create test components
 	dnsManager := coredns.NewManager("127.0.0.1")
 	mockDNSChecker := &mockDNSChecker{}
+	mockProxyManager := &mockProxyManager{}
 
 	// Create handler registry
-	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil, nil)
+	handlerRegistry, err := handler.NewHandlerRegistry(dnsManager, mockDNSChecker, nil, mockProxyManager, nil, nil)
 	require.NoError(t, err)
 
 	// Create a mux and register handlers
@@ -52,6 +54,10 @@ func TestHealthCheckHandler(t *testing.T) {
 					"coredns": map[string]interface{}{
 						"status":  "healthy",
 						"message": "CoreDNS responded in 10ms",
+					},
+					"caddy": map[string]interface{}{
+						"status":  "healthy",
+						"message": "Caddy responded in 5ms",
 					},
 					"sync": map[string]interface{}{
 						"status":  "disabled",
@@ -102,4 +108,35 @@ func (m *mockDNSChecker) CheckOnce() (bool, time.Duration, error) {
 
 func (m *mockDNSChecker) WaitHealthy() bool {
 	return true
+}
+
+// mockProxyManager implements the proxy.ProxyManagerInterface for testing
+type mockProxyManager struct{}
+
+func (m *mockProxyManager) AddRule(proxyRule *proxy.ProxyRule) error {
+	return nil
+}
+
+func (m *mockProxyManager) RemoveRule(hostname string) error {
+	return nil
+}
+
+func (m *mockProxyManager) ListRules() []*proxy.ProxyRule {
+	return []*proxy.ProxyRule{}
+}
+
+func (m *mockProxyManager) IsEnabled() bool {
+	return true
+}
+
+func (m *mockProxyManager) GetStats() map[string]interface{} {
+	return map[string]interface{}{}
+}
+
+func (m *mockProxyManager) RestoreFromStorage() error {
+	return nil
+}
+
+func (m *mockProxyManager) CheckHealth() (bool, time.Duration, error) {
+	return true, 5 * time.Millisecond, nil
 }

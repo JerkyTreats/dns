@@ -79,6 +79,9 @@ func createTestCertificate(baseDomain string, sanDomains []string, certPath, key
 }
 
 func TestCheckDomainCoverage(t *testing.T) {
+	// Clean up any leftover certificate data files from previous test runs
+	CleanupCertificateDataDir(t)
+	
 	// Setup test environment
 	tempDir := t.TempDir()
 	certPath := filepath.Join(tempDir, "test.crt")
@@ -175,10 +178,16 @@ func TestCheckDomainCoverage(t *testing.T) {
 }
 
 func TestCheckDomainCoverageNoCertificate(t *testing.T) {
+	// Clean up any leftover certificate data files from previous test runs
+	CleanupCertificateDataDir(t)
+	
 	// Test behavior when certificate doesn't exist
 	tempDir := t.TempDir()
 	certPath := filepath.Join(tempDir, "nonexistent.crt")
 	keyPath := filepath.Join(tempDir, "nonexistent.key")
+	
+	// Set certificate domain storage path to use a temporary directory
+	config.SetForTest(CertDomainStoragePathKey, filepath.Join(tempDir, "certificate_domains.json"))
 
 	manager := &Manager{
 		certPath:      certPath,

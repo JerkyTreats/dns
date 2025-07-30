@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jerkytreats/dns/internal/config"
 	"github.com/jerkytreats/dns/internal/persistence"
 )
 
@@ -22,7 +23,19 @@ type CertificateDomains struct {
 
 // NewCertificateDomainStorage creates a new certificate domain storage instance
 func NewCertificateDomainStorage() *CertificateDomainStorage {
-	storage := persistence.NewFileStorageWithPath("data/certificate_domains.json", 5)
+	// Use configured path or default to "data/certificate_domains.json"
+	path := "data/certificate_domains.json"
+	if config.HasKey(CertDomainStoragePathKey) {
+		path = config.GetString(CertDomainStoragePathKey)
+	}
+	
+	// Use configured backup count or default to 5
+	backupCount := 5
+	if config.HasKey(CertDomainBackupCountKey) {
+		backupCount = config.GetInt(CertDomainBackupCountKey)
+	}
+	
+	storage := persistence.NewFileStorageWithPath(path, backupCount)
 	return &CertificateDomainStorage{
 		storage: storage,
 	}

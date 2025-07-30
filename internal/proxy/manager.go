@@ -129,6 +129,7 @@ type ProxyManagerInterface interface {
 	IsEnabled() bool
 	GetStats() map[string]interface{}
 	RestoreFromStorage() error
+	CheckHealth() (bool, time.Duration, error)
 }
 
 // Manager manages reverse proxy rules and configuration
@@ -453,5 +454,31 @@ func (m *Manager) RestoreFromStorage() error {
 	m.rules = rules
 	logging.Info("Successfully loaded %d proxy rules from storage", len(rules))
 	return nil
+}
+
+// CheckHealth checks Caddy's health via its health endpoint
+func (m *Manager) CheckHealth() (bool, time.Duration, error) {
+	if !m.enabled {
+		return true, 0, nil // Proxy disabled is considered healthy
+	}
+
+	start := time.Now()
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+	
+	resp, err := client.Get("http://localhost:2019/health")
+	latency := time.Since(start)
+	
+	if err != nil {
+		return false, latency, fmt.Errorf("Caddy health check failed: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return false, latency, fmt.Errorf("Caddy returned status %d", resp.StatusCode)
+	}
+	
+	return true, latency, nil
 }
 

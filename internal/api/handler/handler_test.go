@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jerkytreats/dns/internal/dns/coredns"
+	"github.com/jerkytreats/dns/internal/proxy"
 )
 
 func TestNewHandlerRegistry(t *testing.T) {
@@ -15,9 +16,10 @@ func TestNewHandlerRegistry(t *testing.T) {
 
 	// Create a mock DNS checker
 	mockDNSChecker := &mockDNSChecker{}
+	mockProxyManager := &mockProxyManager{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, mockProxyManager, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -49,9 +51,10 @@ func TestHandlerRegistry_RegisterHandlers(t *testing.T) {
 
 	// Create a mock DNS checker
 	mockDNSChecker := &mockDNSChecker{}
+	mockProxyManager := &mockProxyManager{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, mockProxyManager, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -97,9 +100,10 @@ func TestHandlerRegistry_GetServeMux(t *testing.T) {
 
 	// Create a mock DNS checker
 	mockDNSChecker := &mockDNSChecker{}
+	mockProxyManager := &mockProxyManager{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, mockProxyManager, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -124,9 +128,10 @@ func TestHandlerRegistry_GetRecordHandler(t *testing.T) {
 
 	// Create a mock DNS checker
 	mockDNSChecker := &mockDNSChecker{}
+	mockProxyManager := &mockProxyManager{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, mockProxyManager, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -151,9 +156,10 @@ func TestHandlerRegistry_GetHealthHandler(t *testing.T) {
 
 	// Create a mock DNS checker
 	mockDNSChecker := &mockDNSChecker{}
+	mockProxyManager := &mockProxyManager{}
 
 	// Create handler registry
-	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, nil, nil, nil)
+	registry, err := NewHandlerRegistry(dnsManager, mockDNSChecker, nil, mockProxyManager, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create handler registry: %v", err)
 	}
@@ -185,4 +191,35 @@ func (m *mockDNSChecker) CheckOnce() (bool, time.Duration, error) {
 
 func (m *mockDNSChecker) WaitHealthy() bool {
 	return true
+}
+
+// mockProxyManager implements the proxy.ProxyManagerInterface for testing
+type mockProxyManager struct{}
+
+func (m *mockProxyManager) AddRule(proxyRule *proxy.ProxyRule) error {
+	return nil
+}
+
+func (m *mockProxyManager) RemoveRule(hostname string) error {
+	return nil
+}
+
+func (m *mockProxyManager) ListRules() []*proxy.ProxyRule {
+	return []*proxy.ProxyRule{}
+}
+
+func (m *mockProxyManager) IsEnabled() bool {
+	return true
+}
+
+func (m *mockProxyManager) GetStats() map[string]interface{} {
+	return map[string]interface{}{}
+}
+
+func (m *mockProxyManager) RestoreFromStorage() error {
+	return nil
+}
+
+func (m *mockProxyManager) CheckHealth() (bool, time.Duration, error) {
+	return true, 5 * time.Millisecond, nil
 }
