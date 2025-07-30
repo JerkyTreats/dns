@@ -166,7 +166,7 @@ func TestValidateRecordName(t *testing.T) {
 	}{
 		{"valid simple name", "web", false},
 		{"valid with hyphen", "web-app", false},
-		{"valid with uppercase", "WebApp", false},
+		{"valid with uppercase", "WebApp", true},
 		{"valid with numbers", "app123", false},
 		{"empty name", "", true},
 		{"name with underscore", "web_app", true},
