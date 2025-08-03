@@ -546,6 +546,117 @@ func TestGenerateSwaggerHTML_DNSEndpoint(t *testing.T) {
 	}
 }
 
+func TestGenerateSwaggerHTML_ProxyHeaders(t *testing.T) {
+	handler, err := NewDocsHandler()
+	if err != nil {
+		t.Fatalf("NewDocsHandler() error = %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		requestHost    string
+		requestTLS     bool
+		proxyHeaders   map[string]string
+		expectedURL    string
+		description    string
+	}{
+		{
+			name:        "X-Forwarded-Proto HTTPS header",
+			requestHost: "dns.internal.jerkytreats.dev",
+			requestTLS:  false, // Direct TLS is false, but proxy header indicates HTTPS
+			proxyHeaders: map[string]string{
+				"X-Forwarded-Proto": "https",
+			},
+			expectedURL: "https://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+			description: "Should detect HTTPS from X-Forwarded-Proto header",
+		},
+		{
+			name:        "X-Forwarded-Scheme HTTPS header",
+			requestHost: "dns.internal.jerkytreats.dev",
+			requestTLS:  false,
+			proxyHeaders: map[string]string{
+				"X-Forwarded-Scheme": "https",
+			},
+			expectedURL: "https://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+			description: "Should detect HTTPS from X-Forwarded-Scheme header",
+		},
+		{
+			name:        "X-Forwarded-Ssl ON header",
+			requestHost: "dns.internal.jerkytreats.dev",
+			requestTLS:  false,
+			proxyHeaders: map[string]string{
+				"X-Forwarded-Ssl": "on",
+			},
+			expectedURL: "https://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+			description: "Should detect HTTPS from X-Forwarded-Ssl: on header",
+		},
+		{
+			name:        "X-Forwarded-Ssl ON header case insensitive",
+			requestHost: "dns.internal.jerkytreats.dev",
+			requestTLS:  false,
+			proxyHeaders: map[string]string{
+				"X-Forwarded-Ssl": "ON",
+			},
+			expectedURL: "https://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+			description: "Should detect HTTPS from X-Forwarded-Ssl: ON header (case insensitive)",
+		},
+		{
+			name:        "Multiple proxy headers with HTTPS",
+			requestHost: "dns.internal.jerkytreats.dev:8443",
+			requestTLS:  false,
+			proxyHeaders: map[string]string{
+				"X-Forwarded-Proto":  "https",
+				"X-Forwarded-Scheme": "https",
+				"X-Forwarded-Ssl":    "on",
+			},
+			expectedURL: "https://dns.internal.jerkytreats.dev:8443/docs/openapi.yaml",
+			description: "Should work with multiple proxy headers indicating HTTPS",
+		},
+		{
+			name:        "HTTP proxy headers",
+			requestHost: "dns.internal.jerkytreats.dev",
+			requestTLS:  false,
+			proxyHeaders: map[string]string{
+				"X-Forwarded-Proto": "http",
+			},
+			expectedURL: "http://dns.internal.jerkytreats.dev/docs/openapi.yaml",
+			description: "Should use HTTP when proxy headers indicate HTTP",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/swagger", nil)
+			req.Host = tt.requestHost
+			
+			if tt.requestTLS {
+				req.TLS = &tls.ConnectionState{}
+			}
+			
+			// Set proxy headers
+			for header, value := range tt.proxyHeaders {
+				req.Header.Set(header, value)
+			}
+			
+			html := handler.generateSwaggerHTML(req)
+			
+			if !strings.Contains(html, tt.expectedURL) {
+				t.Errorf("Expected HTML to contain URL '%s', but it didn't", tt.expectedURL)
+				
+				// Find and display the actual URL for debugging
+				urlStart := strings.Index(html, "url: '") + 6
+				if urlStart > 5 {
+					urlEnd := strings.Index(html[urlStart:], "'")
+					if urlEnd > 0 {
+						actualURL := html[urlStart : urlStart+urlEnd]
+						t.Errorf("Actual URL found: '%s'", actualURL)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestGetThemeCSS(t *testing.T) {
 	handler, err := NewDocsHandler()
 	if err != nil {

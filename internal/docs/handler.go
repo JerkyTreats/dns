@@ -97,7 +97,8 @@ func (h *DocsHandler) generateSwaggerHTML(r *http.Request) string {
 	var baseURL string
 	
 	// Log for debugging to understand what's happening with the request
-	logging.Debug("Swagger HTML generation - Host: %s, TLS: %v, URL: %s", r.Host, r.TLS != nil, r.URL.String())
+	logging.Debug("Swagger HTML generation - Host: %s, TLS: %v, URL: %s, X-Forwarded-Proto: %s", 
+		r.Host, r.TLS != nil, r.URL.String(), r.Header.Get("X-Forwarded-Proto"))
 	
 	// Use request host, but provide fallback if empty
 	host := r.Host
@@ -116,7 +117,18 @@ func (h *DocsHandler) generateSwaggerHTML(r *http.Request) string {
 		logging.Debug("Using fallback host: %s", host)
 	}
 	
-	if r.TLS != nil {
+	// Determine if request was made over HTTPS
+	// Check both direct TLS and common proxy headers
+	isHTTPS := r.TLS != nil ||
+		r.Header.Get("X-Forwarded-Proto") == "https" ||
+		r.Header.Get("X-Forwarded-Scheme") == "https" ||
+		strings.ToLower(r.Header.Get("X-Forwarded-Ssl")) == "on"
+	
+	logging.Debug("HTTPS detection - TLS: %v, X-Forwarded-Proto: %s, X-Forwarded-Scheme: %s, X-Forwarded-Ssl: %s, Final isHTTPS: %v",
+		r.TLS != nil, r.Header.Get("X-Forwarded-Proto"), r.Header.Get("X-Forwarded-Scheme"), 
+		r.Header.Get("X-Forwarded-Ssl"), isHTTPS)
+	
+	if isHTTPS {
 		// Request came via HTTPS, use HTTPS for spec URL
 		baseURL = fmt.Sprintf("https://%s", host)
 	} else {
