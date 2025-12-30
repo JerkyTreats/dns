@@ -312,6 +312,8 @@ components:
                     type: integer
                 service_name:
                     type: string
+                target_device:
+                    type: string
             required:
                 - service_name
                 - name
