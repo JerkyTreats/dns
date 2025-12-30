@@ -10,9 +10,10 @@ import (
 
 // CreateRecordRequest represents the request to create a new record
 type CreateRecordRequest struct {
-	ServiceName string `json:"service_name"`
-	Name        string `json:"name"`
-	Port        *int   `json:"port,omitempty"` // Optional: triggers automatic proxy setup
+	ServiceName  string  `json:"service_name"`
+	Name         string  `json:"name"`
+	Port         *int    `json:"port,omitempty"`          // Optional: triggers automatic proxy setup
+	TargetDevice *string `json:"target_device,omitempty"` // Optional: Tailscale device name for proxy target (defaults to DNS manager device)
 }
 
 // RemoveRecordRequest represents the request to remove a record

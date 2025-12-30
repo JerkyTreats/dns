@@ -214,15 +214,21 @@ func (s *Service) createProxyRuleWithDeviceDetection(req CreateRecordRequest) (*
 		return nil, fmt.Errorf("tailscale client not available")
 	}
 
-	// Get device name from config or use the one from the request header if available
-	deviceName := config.GetString("tailscale.device_name")
+	// Priority: 1) target_device from request, 2) config, 3) hostname detection
+	var deviceName string
+	if req.TargetDevice != nil && *req.TargetDevice != "" {
+		deviceName = *req.TargetDevice
+		logging.Info("Using target_device from request for proxy target: %s", deviceName)
+	} else {
+		deviceName = config.GetString("tailscale.device_name")
+	}
 
 	// Try to get device IP directly using the device name
 	var deviceIP string
 	var err error
 
 	if deviceName != "" {
-		logging.Debug("Using configured device name for proxy target: %s", deviceName)
+		logging.Debug("Using device name for proxy target: %s", deviceName)
 		deviceIP, err = s.tailscaleClient.GetCurrentDeviceIPByName(deviceName)
 		if err != nil || deviceIP == "" {
 			return nil, fmt.Errorf("failed to get Tailscale IP for device '%s': %w", deviceName, err)

@@ -557,3 +557,111 @@ func TestRemoveRecord(t *testing.T) {
 		mockProxyManager.AssertExpectations(t)
 	})
 }
+
+// Test for CreateRecord with explicit target_device
+func TestCreateRecordWithTargetDevice(t *testing.T) {
+	setupTestConfig()
+
+	t.Run("successful creation with explicit target_device", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		port := 8000
+		targetDevice := "leviathan"
+		req := CreateRecordRequest{
+			ServiceName:  "internal",
+			Name:         "chat",
+			Port:         &port,
+			TargetDevice: &targetDevice,
+		}
+
+		// Create test HTTP request to trigger device detection path
+		httpReq := httptest.NewRequest(http.MethodPost, "/add-record", nil)
+
+		// DNS Manager IP lookup for DNS record (points to Anton)
+		mockTailscaleClient.On("GetCurrentDeviceIP").Return("100.72.130.7", nil)
+		mockDNSManager.On("AddRecord", "internal", "chat", "100.72.130.7").Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+
+		// Target device IP lookup for proxy rule (should resolve leviathan's IP)
+		mockTailscaleClient.On("GetCurrentDeviceIPByName", "leviathan").Return("100.70.110.111", nil)
+
+		// Proxy rule should use leviathan's IP, not Anton's
+		mockProxyManager.On("AddRule", mock.MatchedBy(func(rule *proxy.ProxyRule) bool {
+			return rule != nil &&
+				rule.Hostname == "chat.internal" &&
+				rule.TargetIP == "100.70.110.111" && // leviathan's IP
+				rule.TargetPort == 8000
+		})).Return(nil)
+
+		// Act
+		record, err := service.CreateRecord(req, httpReq)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, record)
+		assert.Equal(t, "chat", record.Name)
+		assert.Equal(t, "A", record.Type)
+		assert.Equal(t, "100.72.130.7", record.IP) // DNS record points to Anton (DNS Manager)
+		assert.NotNil(t, record.ProxyRule)
+		assert.Equal(t, "100.70.110.111", record.ProxyRule.TargetIP) // Proxy targets leviathan
+		assert.Equal(t, 8000, record.ProxyRule.TargetPort)
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+
+	t.Run("target_device takes priority over config device_name", func(t *testing.T) {
+		// Arrange
+		mockDNSManager := new(MockDNSManager)
+		mockProxyManager := new(MockProxyManager)
+		mockTailscaleClient := new(MockTailscaleClient)
+
+		// Set a configured device name (e.g., "anton")
+		config.SetForTest("tailscale.device_name", "anton")
+		defer config.SetForTest("tailscale.device_name", "")
+
+		service := NewService(mockDNSManager, mockProxyManager, mockTailscaleClient)
+
+		port := 8000
+		targetDevice := "leviathan" // This should override "anton" from config
+		req := CreateRecordRequest{
+			ServiceName:  "internal",
+			Name:         "chat",
+			Port:         &port,
+			TargetDevice: &targetDevice,
+		}
+
+		httpReq := httptest.NewRequest(http.MethodPost, "/add-record", nil)
+
+		// For DNS Manager IP, it uses configured device name "anton"
+		mockTailscaleClient.On("GetCurrentDeviceIPByName", "anton").Return("100.72.130.7", nil)
+		mockDNSManager.On("AddRecord", "internal", "chat", "100.72.130.7").Return(nil)
+		mockProxyManager.On("IsEnabled").Return(true)
+
+		// For proxy target, target_device "leviathan" should take priority over config
+		mockTailscaleClient.On("GetCurrentDeviceIPByName", "leviathan").Return("100.70.110.111", nil)
+
+		mockProxyManager.On("AddRule", mock.MatchedBy(func(rule *proxy.ProxyRule) bool {
+			return rule != nil && rule.TargetIP == "100.70.110.111" // leviathan's IP, not anton's
+		})).Return(nil)
+
+		// Act
+		record, err := service.CreateRecord(req, httpReq)
+
+		// Assert
+		assert.NoError(t, err)
+		assert.NotNil(t, record)
+		assert.NotNil(t, record.ProxyRule)
+		assert.Equal(t, "100.70.110.111", record.ProxyRule.TargetIP)
+
+		mockTailscaleClient.AssertExpectations(t)
+		mockDNSManager.AssertExpectations(t)
+		mockProxyManager.AssertExpectations(t)
+	})
+}
