@@ -310,6 +310,8 @@ components:
                     type: string
                 port:
                     type: integer
+                protocol:
+                    type: string
                 service_name:
                     type: string
                 target_device:
