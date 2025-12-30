@@ -14,6 +14,7 @@ type CreateRecordRequest struct {
 	Name         string  `json:"name"`
 	Port         *int    `json:"port,omitempty"`          // Optional: triggers automatic proxy setup
 	TargetDevice *string `json:"target_device,omitempty"` // Optional: Tailscale device name for proxy target (defaults to DNS manager device)
+	Protocol     *string `json:"protocol,omitempty"`      // Optional: http or https (defaults to http)
 }
 
 // RemoveRecordRequest represents the request to remove a record

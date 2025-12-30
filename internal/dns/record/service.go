@@ -190,8 +190,14 @@ func (s *Service) createProxyRule(req CreateRecordRequest, dnsManagerIP string) 
 	domain := config.GetString(coredns.DNSDomainKey)
 	fqdn := fmt.Sprintf("%s.%s", req.Name, domain)
 
+	// Determine protocol (default to http)
+	protocol := "http"
+	if req.Protocol != nil && *req.Protocol != "" {
+		protocol = *req.Protocol
+	}
+
 	// Create proxy rule
-	proxyRule, err := proxy.NewProxyRule(fqdn, targetIP, *req.Port, "http")
+	proxyRule, err := proxy.NewProxyRule(fqdn, targetIP, *req.Port, protocol)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create proxy rule: %w", err)
 	}
@@ -248,8 +254,14 @@ func (s *Service) createProxyRuleWithDeviceDetection(req CreateRecordRequest) (*
 	domain := config.GetString(coredns.DNSDomainKey)
 	fqdn := fmt.Sprintf("%s.%s", req.Name, domain)
 
+	// Determine protocol (default to http)
+	protocol := "http"
+	if req.Protocol != nil && *req.Protocol != "" {
+		protocol = *req.Protocol
+	}
+
 	// Create proxy rule
-	proxyRule, err := proxy.NewProxyRule(fqdn, deviceIP, *req.Port, "http")
+	proxyRule, err := proxy.NewProxyRule(fqdn, deviceIP, *req.Port, protocol)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create proxy rule: %w", err)
 	}

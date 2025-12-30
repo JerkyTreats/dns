@@ -32,12 +32,19 @@
 {{.Hostname}} {
     # Explicit route for all paths to ensure no overlap with other hosts
     route /* {
-        reverse_proxy {{.TargetIP}}:{{.TargetPort}} {
+        reverse_proxy {{.Protocol}}://{{.TargetIP}}:{{.TargetPort}} {
             # Headers to pass through
             header_up Host {host}
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto https
+            {{- if eq .Protocol "https"}}
+
+            # Skip certificate verification for HTTPS backends (e.g., self-signed certs)
+            transport http {
+                tls_insecure_skip_verify
+            }
+            {{- end}}
         }
     }
     

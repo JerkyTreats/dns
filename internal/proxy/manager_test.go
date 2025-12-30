@@ -1345,3 +1345,87 @@ func TestStorageValidation_LoadInvalidRules(t *testing.T) {
 	assert.True(t, exists)
 	assert.Equal(t, "192.168.1.100", validRule.TargetIP)
 }
+func TestCaddyfileTemplate_HTTPSProtocol(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// Use the actual Caddyfile.template from the project
+	templatePath := filepath.Join("..", "..", "configs", "Caddyfile.template")
+	configPath := filepath.Join(tempDir, "Caddyfile")
+	
+	// Setup config
+	config.SetForTest("proxy.caddy.config_path", configPath)
+	config.SetForTest("proxy.caddy.template_path", templatePath)
+	config.SetForTest("proxy.caddy.port", "80")
+	config.SetForTest("proxy.enabled", "true")
+	config.SetForTest("dns.domain", "internal.jerkytreats.dev")
+	config.SetForTest("proxy.storage.path", filepath.Join(tempDir, "proxy_rules.json"))
+	config.SetForTest("proxy.storage.backup_count", "3")
+	defer config.ResetForTest()
+	
+	// Create manager with mock reloader
+	manager, err := NewManager(&MockReloader{})
+	require.NoError(t, err)
+	
+	t.Run("HTTP upstream generates correct config", func(t *testing.T) {
+		// Add HTTP rule
+		httpRule, err := NewProxyRule("test-http.internal.jerkytreats.dev", "100.70.110.111", 8080, "http")
+		require.NoError(t, err)
+		
+		err = manager.AddRule(httpRule)
+		require.NoError(t, err)
+		
+		// Read generated Caddyfile
+		content, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		
+		config := string(content)
+		
+		// Should have http:// prefix
+		assert.Contains(t, config, "http://100.70.110.111:8080")
+		
+		// Should NOT have tls_insecure_skip_verify for HTTP
+		assert.NotContains(t, config, "tls_insecure_skip_verify")
+	})
+	
+	t.Run("HTTPS upstream generates config with tls_insecure_skip_verify", func(t *testing.T) {
+		// Add HTTPS rule
+		httpsRule, err := NewProxyRule("sunshine.internal.jerkytreats.dev", "100.70.110.111", 47990, "https")
+		require.NoError(t, err)
+		
+		err = manager.AddRule(httpsRule)
+		require.NoError(t, err)
+		
+		// Read generated Caddyfile
+		content, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		
+		config := string(content)
+		
+		// Should have https:// prefix
+		assert.Contains(t, config, "https://100.70.110.111:47990")
+		
+		// Should have tls_insecure_skip_verify for HTTPS
+		assert.Contains(t, config, "tls_insecure_skip_verify")
+		
+		// Should be inside transport http block
+		assert.Contains(t, config, "transport http")
+	})
+	
+	t.Run("Multiple protocols in same config", func(t *testing.T) {
+		// Read final Caddyfile with both rules
+		content, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+		
+		config := string(content)
+		
+		// Should have both rules
+		assert.Contains(t, config, "test-http.internal.jerkytreats.dev")
+		assert.Contains(t, config, "sunshine.internal.jerkytreats.dev")
+		
+		// HTTP rule should not have tls_insecure_skip_verify in its section
+		// HTTPS rule should have it
+		assert.Contains(t, config, "http://100.70.110.111:8080")
+		assert.Contains(t, config, "https://100.70.110.111:47990")
+		assert.Contains(t, config, "tls_insecure_skip_verify")
+	})
+}
